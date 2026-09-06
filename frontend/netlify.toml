@@ -1,3 +1,6 @@
+[images]
+remote_images = ["https://ajmauddonufaryjbiavh.supabase.co/storage/v1/object/public/.*"]
+
 [build]
   publish = "."
   command = "echo 'No build required for static PWA'"
