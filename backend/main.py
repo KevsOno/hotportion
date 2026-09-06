@@ -514,8 +514,8 @@ class MonnifyIntegration:
             "contractCode": self.contract_code,
             "currencyCode": "NGN",
             "paymentMethods": ["CARD", "ACCOUNT_TRANSFER"],  # or just CARD, etc.
-            "redirectUrl": "https://your-frontend.com/order-confirmation",  # UPDATE THIS!
-            "webhookUrl": "https://your-backend.com/api/v1/webhooks/monnify",  # Must match webhook endpoint
+            "redirectUrl": "https://hotportion.netlify.app/?status=success",  # UPDATE THIS!
+            "webhookUrl": "https://hotportion.onrender.com/api/v1/webhooks/monnify",  # Must match webhook endpoint
         }
 
         sess = await self._get_session()
