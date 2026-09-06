@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "app.netlify.hotportion.twa",
+        "sha256_cert_fingerprints": ["AF:E8:C3:47:64:A7:CF:D0:05:81:C9:79:45:E7:8B:B1:97:10:79:9D:64:B1:E4:9F:9E:83:F1:FA:62:33:E1:6A"]
+      }
+    }]
