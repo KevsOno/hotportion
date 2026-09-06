@@ -152,7 +152,7 @@ jobs:
           name: android-apk
           path: ./out/android/*.apk
 
-  # ─── 6. BUILD IOS APP (UNSIGNED via Capacitor) ───
+    # ─── 6. BUILD IOS APP (UNSIGNED via Capacitor) ───
   build-ios:
     runs-on: macos-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -178,22 +178,40 @@ jobs:
           npm install -g @capacitor/cli
           npm install
 
-      # ─── STEP 1: Copy frontend assets to mobile/www ───
-      - name: Copy frontend assets to mobile/www
+      # ─── FIX: Use the correct webDir (pointing to root frontend folder) ───
+      - name: Fix Capacitor config webDir
         run: |
           cd mobile
-          rm -rf www
-          mkdir -p www
-          cp -r ../frontend/* www/
-          ls -la www/
+          # Create a corrected config file at the root
+          cat > capacitor.config.json << 'EOF'
+          {
+            "appId": "com.hotportion.grill",
+            "appName": "Hot Portion Grill",
+            "webDir": "frontend",
+            "bundledWebRuntime": false,
+            "server": {
+              "androidScheme": "https",
+              "iosScheme": "https",
+              "allowNavigation": ["hotportion.netlify.app"]
+            },
+            "ios": {
+              "scheme": "HotPortion",
+              "contentInset": "automatic",
+              "backgroundColor": "#E53935",
+              "allowsLinkPreview": false,
+              "preferredContentMode": "mobile",
+              "limitsNavigationsToAppBoundDomains": true
+            },
+            "plugins": {
+              "SplashScreen": {
+                "launchShowDuration": 1500,
+                "backgroundColor": "#E53935"
+              }
+            }
+          }
+          EOF
 
-      # ─── STEP 2: Copy Capacitor config to project root ───
-      - name: Copy Capacitor config to project root
-        run: |
-          cd mobile
-          cp ios/capacitor.config.json capacitor.config.json
-
-      # ─── STEP 3: Add iOS platform (clean install) ───
+      # ─── Add iOS platform (clean install) ───
       - name: Add iOS platform (clean)
         run: |
           cd mobile
