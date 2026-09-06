@@ -1,10 +1,11 @@
 // ─── HOT PORTION GRILL SERVICE WORKER ───
-// Version: 2.0.0
+// Version: 2.1.0
 const CACHE_NAME = 'hotportion-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
   '/admin.html',
+  '/offline.html',
   '/fastfood/manifest.json',
   '/fastfood/icons/icon-192.png',
   '/fastfood/icons/icon-512.png',
@@ -46,13 +47,12 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Skip non-GET requests, cross-origin fonts, and analytics
+  // Skip non-GET requests, API calls, and analytics
   if (event.request.method !== 'GET') return;
-  if (url.pathname.includes('/api/')) return; // Don't cache API calls
-  if (url.pathname.includes('/supabase')) return;
+  if (url.pathname.startsWith('/api/')) return;
   if (url.pathname.includes('google-analytics')) return;
 
-  // HTML pages: Network-first strategy (always check for updates)
+  // ─── HTML pages: Network-first with offline fallback ───
   if (url.pathname === '/' || url.pathname.endsWith('.html')) {
     event.respondWith(
       fetch(event.request)
@@ -62,18 +62,18 @@ self.addEventListener('fetch', (event) => {
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clonedResponse));
           return response;
         })
-        .catch(() => {
-          // Fallback to cache if network fails
-          return caches.match(event.request).then((cached) => {
-            return cached || caches.match('/index.html');
-          });
+        .catch(async () => {
+          // Network failed – try cache, then fallback to offline.html
+          const cached = await caches.match(event.request);
+          if (cached) return cached;
+          return caches.match('/offline.html');
         })
     );
     return;
   }
 
-  // Static assets (images, CSS, JS): Cache-first for speed
-  if (url.pathname.match(/\.(webp|png|jpg|jpeg|gif|svg|css|js|woff2|woff|ttf)$/)) {
+  // ─── Static assets: Cache-first ───
+  if (url.pathname.match(/\.(webp|png|jpg|jpeg|gif|svg|css|js|woff2|woff|ttf|json)$/)) {
     event.respondWith(
       caches.match(event.request)
         .then((cached) => {
@@ -84,11 +84,16 @@ self.addEventListener('fetch', (event) => {
             return response;
           });
         })
+        .catch(() => {
+          // If even the cache fails, return a fallback image or empty
+          // For icons, we could return a simple default
+          return new Response('', { status: 404 });
+        })
     );
     return;
   }
 
-  // Default: Network only (for API and dynamic content)
+  // ─── Default: Network only ───
   event.respondWith(fetch(event.request));
 });
 
@@ -107,7 +112,6 @@ async function syncOrders() {
       const response = await cache.match(request);
       if (response) {
         const data = await response.json();
-        // Replay the order to the server
         const replay = await fetch('/api/orders', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -149,12 +153,10 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   if (event.action === 'view-order' && event.notification.data.url) {
-    event.waitUntil(
-      clients.openWindow(event.notification.data.url)
-    );
+    event.waitUntil(clients.openWindow(event.notification.data.url));
   } else {
     event.waitUntil(clients.openWindow('/'));
   }
 });
 
-console.log('✅ Hot Portion Service Worker active');
+console.log('✅ Hot Portion Service Worker active (v2.1.0)');
