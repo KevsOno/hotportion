@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  api:
+    image: hotportion/grill-api:latest
+    container_name: hotportion-api
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - BREVO_API_KEY=${BREVO_API_KEY}
+      - BREVO_SENDER_EMAIL=${BREVO_SENDER_EMAIL}
+      - MONNIFY_API_KEY=${MONNIFY_API_KEY}
+      - MONNIFY_SECRET_KEY=${MONNIFY_SECRET_KEY}
+      - MONNIFY_CONTRACT_CODE=${MONNIFY_CONTRACT_CODE}
+      - MONNIFY_BASE_URL=${MONNIFY_BASE_URL}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AI_PRIMARY=${AI_PRIMARY:-groq}
+      - AI_FALLBACK=${AI_FALLBACK:-gemini}
+      - DEBUG=${DEBUG:-false}
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - hotportion-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  nginx:
+    image: nginx:alpine
+    container_name: hotportion-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./dist:/var/www/html:ro
+    depends_on:
+      - api
+    networks:
+      - hotportion-network
+
+  prerender-service:
+    image: node:20-alpine
+    container_name: hotportion-prerender
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - ./prerender.js:/app/prerender.js:ro
+      - ./dist:/app/dist
+    environment:
+      - BASE_URL=http://api:8000
+    command: ["node", "prerender.js"]
+    depends_on:
+      - api
+    networks:
+      - hotportion-network
+
+networks:
+  hotportion-network:
+    driver: bridge
