@@ -178,7 +178,7 @@ jobs:
           npm install -g @capacitor/cli
           npm install
 
-      # ─── STEP 1: Create symlink ───
+      # ─── STEP 1: Create symlink to frontend assets ───
       - name: Create symlink to frontend assets
         run: |
           cd mobile
@@ -186,7 +186,13 @@ jobs:
           ln -s ../frontend www
           ls -la
 
-      # ─── STEP 2: Add iOS platform (clean install) ───
+      # ─── STEP 2: Copy Capacitor config to project root ───
+      - name: Copy Capacitor config to project root
+        run: |
+          cd mobile
+          cp ios/capacitor.config.json capacitor.config.json
+
+      # ─── STEP 3: Add iOS platform (clean install) ───
       - name: Add iOS platform (clean)
         run: |
           cd mobile
