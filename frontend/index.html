@@ -3123,6 +3123,75 @@
             receiptClose.addEventListener('click', closeReceipt);
             receiptOverlay.addEventListener('click', function(e) { if (e.target === this) closeReceipt(); });
 
+            // ─── FETCH ORDER BY REFERENCE ───
+            async function fetchOrderByReference(ref) {
+                try {
+                    const response = await fetch(`/api/orders?paymentReference=${ref}`);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const data = await response.json();
+                    return data;
+                } catch (err) {
+                    console.warn('Failed to fetch order:', err);
+                    return null;
+                }
+            }
+
+            // ─── HANDLE MONNIFY REDIRECT ───
+            function handlePaymentRedirect() {
+                const urlParams = new URLSearchParams(window.location.search);
+                const transactionRef = urlParams.get('transactionReference') || urlParams.get('paymentReference');
+                const status = urlParams.get('status') || urlParams.get('paymentStatus');
+
+                // If we have a transaction reference, process the redirect
+                if (transactionRef) {
+                    // Remove the query params from URL after handling
+                    window.history.replaceState({}, document.title, window.location.pathname);
+
+                    // Retrieve stored order data
+                    let orderData = null;
+                    const stored = sessionStorage.getItem('pending_order');
+                    if (stored) {
+                        try {
+                            orderData = JSON.parse(stored);
+                        } catch (e) { /* ignore */ }
+                    }
+
+                    // If no stored order, try to fetch from backend
+                    if (!orderData) {
+                        fetchOrderByReference(transactionRef).then(data => {
+                            if (data) {
+                                // Check payment status from URL or data
+                                const paymentOk = status === 'PAID' || status === 'SUCCESS' || data.status === 'paid';
+                                if (paymentOk) {
+                                    showReceipt(data);
+                                } else {
+                                    showToast('Payment failed or was cancelled. Please try again.', 'fa-solid fa-exclamation-circle');
+                                }
+                            } else {
+                                showToast('Unable to retrieve order details. Please contact support.', 'fa-solid fa-exclamation-circle');
+                            }
+                            sessionStorage.removeItem('pending_order');
+                        }).catch(() => {
+                            showToast('Error processing payment. Please contact support.', 'fa-solid fa-exclamation-circle');
+                            sessionStorage.removeItem('pending_order');
+                        });
+                        return;
+                    }
+
+                    // We have stored order data
+                    const paymentOk = status === 'PAID' || status === 'SUCCESS';
+                    if (paymentOk) {
+                        showReceipt(orderData);
+                    } else {
+                        showToast('Payment failed or was cancelled. Please try again.', 'fa-solid fa-exclamation-circle');
+                    }
+                    sessionStorage.removeItem('pending_order');
+                } else {
+                    // No redirect params – check if we have a pending order but no redirect (e.g., user closed tab)
+                    // We can ignore, as it's not a return from Monnify.
+                }
+            }
+
             // ─── CHECKOUT (Backend API + Monnify Redirect) ───
             async function checkout() {
                 const items = Object.values(cart);
@@ -3179,10 +3248,11 @@
                     const result = await response.json();
                     console.log('✅ Order created, redirecting to Monnify:', result);
 
+                    // Store order data in sessionStorage before redirect
+                    sessionStorage.setItem('pending_order', JSON.stringify(result));
+
                     // ─── REDIRECT TO MONNIFY PAYMENT PAGE ───
                     if (result.checkout_url) {
-                        // Store order data temporarily so we can show receipt after redirect
-                        sessionStorage.setItem('pending_order', JSON.stringify(result));
                         window.location.href = result.checkout_url;
                     } else {
                         // Fallback: if no checkout_url, show toast
@@ -3196,42 +3266,6 @@
                     showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
                     btn.innerHTML = originalText;
                     btn.disabled = false;
-                }
-            }
-
-            // ─── HANDLE MONNIFY REDIRECT ───
-            function handlePaymentRedirect() {
-                const urlParams = new URLSearchParams(window.location.search);
-                const transactionRef = urlParams.get('transactionReference');
-                const status = urlParams.get('status');
-
-                // If we have a transaction reference, it means Monnify redirected back
-                if (transactionRef) {
-                    // Retrieve the stored order from sessionStorage
-                    const storedOrder = sessionStorage.getItem('pending_order');
-                    if (storedOrder) {
-                        try {
-                            const orderData = JSON.parse(storedOrder);
-                            // Show receipt using the stored order data
-                            showReceipt(orderData);
-                            // Clear the cart
-                            cart = {};
-                            updateCartUI();
-                            // Clear sessionStorage
-                            sessionStorage.removeItem('pending_order');
-                            // Remove the query params from URL for cleaner UX
-                            window.history.replaceState({}, document.title, '/');
-                            showToast('Payment successful!', 'fa-solid fa-check-circle');
-                            return;
-                        } catch (e) {
-                            console.warn('Failed to parse stored order:', e);
-                        }
-                    }
-
-                    // If no stored order, show a generic success message
-                    showToast('Payment verified! Check your email for confirmation.', 'fa-solid fa-check-circle');
-                    // Remove query params
-                    window.history.replaceState({}, document.title, '/');
                 }
             }
 
