@@ -152,7 +152,7 @@ jobs:
           name: android-apk
           path: ./out/android/*.apk
 
-    # ─── 6. BUILD IOS APP (UNSIGNED via Capacitor) ───
+      # ─── 6. BUILD IOS APP (UNSIGNED via Capacitor) ───
   build-ios:
     runs-on: macos-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -178,17 +178,23 @@ jobs:
           npm install -g @capacitor/cli
           npm install
 
-      # ─── FIX: Use the correct webDir (pointing to root frontend folder) ───
-      - name: Fix Capacitor config webDir
+      # ─── STEP 1: Copy frontend assets to mobile/frontend ───
+      - name: Copy frontend assets to mobile/frontend
         run: |
           cd mobile
-          # Create a corrected config file at the root
+          rm -rf frontend
+          cp -r ../frontend frontend/
+          ls -la frontend/
+
+      # ─── STEP 2: Create Capacitor config with correct webDir ───
+      - name: Create Capacitor config
+        run: |
+          cd mobile
           cat > capacitor.config.json << 'EOF'
           {
             "appId": "com.hotportion.grill",
             "appName": "Hot Portion Grill",
             "webDir": "frontend",
-            "bundledWebRuntime": false,
             "server": {
               "androidScheme": "https",
               "iosScheme": "https",
@@ -211,7 +217,7 @@ jobs:
           }
           EOF
 
-      # ─── Add iOS platform (clean install) ───
+      # ─── STEP 3: Add iOS platform (clean install) ───
       - name: Add iOS platform (clean)
         run: |
           cd mobile
