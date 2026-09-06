@@ -98,7 +98,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 \
-            libgbm1 libasound2
+            libgbm1 libasound2t64   # ← FIXED: libasound2t64
 
       - name: Install Node dependencies
         run: |
@@ -164,10 +164,14 @@ jobs:
           npm install -g @capacitor/cli
           npm install
 
-      - name: Add iOS platform
+      - name: Add iOS platform (if not exists)   # ← FIXED: conditional
         run: |
           cd mobile
-          npx cap add ios
+          if [ ! -d "ios" ]; then
+            npx cap add ios
+          else
+            echo "iOS platform already exists, skipping."
+          fi
 
       - name: Sync iOS project
         run: |
