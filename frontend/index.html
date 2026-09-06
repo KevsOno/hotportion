@@ -2023,7 +2023,8 @@
         }
     </style>
     <!-- ─── SEO: JSON‑LD Schema Injection ─── -->
-<script src="/js/seo.js" defer></script>
+    <script src="/js/seo.js" defer>
+    </script>
 </head>
 <body>
 
@@ -2372,7 +2373,7 @@
             }
             window.addEventListener('load', setHeaderHeight);
             window.addEventListener('resize', setHeaderHeight);
-            
+
 
             // ─── STATE ───
             let products = [];
@@ -2478,11 +2479,6 @@
                     return false;
                 }
             }
-            // Inside your existing product load logic:
-if (window.__injectProductSchemas) {
-    window.__injectProductSchemas(products);
-    window.__updateFeaturedItems(products);
-}
 
             // ─── FALLBACK: hardcoded products (used if API fails) ───
             function getFallbackProducts() {
@@ -2663,6 +2659,14 @@ if (window.__injectProductSchemas) {
                     products = getFallbackProducts();
                     categories = [...new Set(products.map(p => p.tag))].sort();
                     isDataLoaded = true;
+                }
+
+                // ─── INJECT SEO SCHEMAS AFTER PRODUCTS ARE LOADED ───
+                if (window.__injectProductSchemas && products.length) {
+                    window.__injectProductSchemas(products);
+                    if (typeof window.__updateFeaturedItems === 'function') {
+                        window.__updateFeaturedItems(products);
+                    }
                 }
 
                 await loadBannersFromAPI();
@@ -3477,6 +3481,9 @@ if (window.__injectProductSchemas) {
             console.log('🔐 Monnify payment integration ready (simulated)');
             console.log('🤖 Context-aware AI assistant active');
             console.log('🎠 Hero slider dynamic – loaded from backend');
+
+            // ─── The SEO injection block has been moved inside initData() ───
+            // (The old block that ran before products were loaded has been removed)
 
         })();
     </script>
