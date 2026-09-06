@@ -1,30 +1,39 @@
 {
   "appId": "com.hotportion.grill",
   "appName": "Hot Portion Grill",
-  "webDir": "./",
+  "webDir": "../../frontend",
   "bundledWebRuntime": false,
   "server": {
     "androidScheme": "https",
     "iosScheme": "https",
-    "allowNavigation": ["hotportiongrill.com"]
+    "allowNavigation": ["hotportion.netlify.app"]
+  },
+  "ios": {
+    "scheme": "HotPortion",
+    "contentInset": "automatic",
+    "backgroundColor": "#E53935",
+    "allowsLinkPreview": false,
+    "preferredContentMode": "mobile",
+    "limitsNavigationsToAppBoundDomains": true,
+    "localizedStrings": {
+      "NSLocationWhenInUseUsageDescription": "Hot Portion needs your location to suggest nearby pickup options.",
+      "NSPhotoLibraryUsageDescription": "Hot Portion uses your photo library for profile pictures.",
+      "NSMicrophoneUsageDescription": "Hot Portion uses your microphone for voice search."
+    }
   },
   "plugins": {
     "SplashScreen": {
-      "launchShowDuration": 2000,
+      "launchShowDuration": 1500,
       "backgroundColor": "#E53935",
       "androidScaleType": "CENTER_CROP",
-      "showSpinner": false
+      "iosSplash": {
+        "show": true,
+        "backgroundColor": "#E53935",
+        "launchStoryboard": "SplashScreen"
+      }
     },
     "CapacitorCookies": {
       "enabled": true
     }
-  },
-  "ios": {
-    "contentInset": "automatic",
-    "backgroundColor": "#E53935"
-  },
-  "android": {
-    "backgroundColor": "#E53935",
-    "allowMixedContent": true
   }
 }
