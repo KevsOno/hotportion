@@ -178,13 +178,14 @@ jobs:
           npm install -g @capacitor/cli
           npm install
 
-      # ─── STEP 1: Create symlink to frontend assets ───
-      - name: Create symlink to frontend assets
+      # ─── STEP 1: Copy frontend assets to mobile/www ───
+      - name: Copy frontend assets to mobile/www
         run: |
           cd mobile
           rm -rf www
-          ln -s ../frontend www
-          ls -la
+          mkdir -p www
+          cp -r ../frontend/* www/
+          ls -la www/
 
       # ─── STEP 2: Copy Capacitor config to project root ───
       - name: Copy Capacitor config to project root
