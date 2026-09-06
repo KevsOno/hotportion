@@ -236,6 +236,7 @@
             display: flex;
             gap: 8px;
             align-items: center;
+            flex-wrap: wrap;
         }
         .panel-header .search-box input {
             padding: 8px 16px;
@@ -248,6 +249,9 @@
         }
         .panel-header .search-box input:focus {
             border-color: var(--primary);
+        }
+        .panel-header .search-box input[type="date"] {
+            width: 160px;
         }
 
         /* Table */
@@ -927,12 +931,15 @@
             </div>
         </div>
 
-        <!-- ─── ORDERS PANEL ─── -->
+        <!-- ─── ORDERS PANEL (UPDATED) ─── -->
         <div class="panel" id="panel-orders">
             <div class="panel-header">
                 <h2><i class="fa-solid fa-receipt" style="color:var(--primary);"></i> Orders</h2>
                 <div class="search-box">
-                    <input type="text" id="order-search" placeholder="Search by name or ID..." />
+                    <input type="text" id="order-search" placeholder="Search name or ID..." />
+                    <input type="date" id="order-date-filter" />
+                    <button class="btn btn-primary btn-sm" id="order-filter-btn"><i class="fa-solid fa-filter"></i> Filter</button>
+                    <button class="btn btn-outline btn-sm" id="order-clear-filter">Clear</button>
                 </div>
             </div>
             <div class="table-wrap">
@@ -941,6 +948,7 @@
                         <tr>
                             <th>Order ID</th>
                             <th>Customer</th>
+                            <th>Phone</th>
                             <th>Items</th>
                             <th>Total</th>
                             <th>Status</th>
@@ -949,7 +957,7 @@
                         </tr>
                     </thead>
                     <tbody id="orders-table-body">
-                        <tr><td colspan="7" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
+                        <tr><td colspan="8" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1336,6 +1344,9 @@
 
             const productSearch = document.getElementById('product-search');
             const orderSearch = document.getElementById('order-search');
+            const orderDateFilter = document.getElementById('order-date-filter');
+            const orderFilterBtn = document.getElementById('order-filter-btn');
+            const orderClearFilter = document.getElementById('order-clear-filter');
 
             const productModal = document.getElementById('product-modal');
             const productForm = document.getElementById('product-form');
@@ -1898,35 +1909,56 @@
                 });
             }
 
-            // ─── RENDER ORDERS ───
+            // ─── RENDER ORDERS (UPDATED) ───
             function renderOrders() {
                 const search = orderSearch.value.toLowerCase().trim();
+                const dateFilter = orderDateFilter.value;
+
                 let filtered = orders;
+
+                // Search filter
                 if (search) {
                     filtered = filtered.filter(o =>
-                        (o.customerName || '').toLowerCase().includes(search) ||
-                        (o.paymentReference || '').toLowerCase().includes(search)
+                        (o.customer_name || '').toLowerCase().includes(search) ||
+                        (o.payment_reference || '').toLowerCase().includes(search)
                     );
                 }
+
+                // Date filter (only if a date is selected)
+                if (dateFilter) {
+                    const selectedDate = new Date(dateFilter + 'T00:00:00');
+                    filtered = filtered.filter(o => {
+                        if (!o.created_at) return false;
+                        const orderDate = new Date(o.created_at);
+                        return orderDate.toDateString() === selectedDate.toDateString();
+                    });
+                }
+
                 if (filtered.length === 0) {
                     ordersBody.innerHTML =
-                        `<tr><td colspan="7" class="empty-state"><i class="fa-regular fa-receipt"></i> No orders found</td></tr>`;
+                        `<tr><td colspan="8" class="empty-state"><i class="fa-regular fa-receipt"></i> No orders found</td></tr>`;
                     return;
                 }
-                ordersBody.innerHTML = filtered.map(o => `
-                    <tr>
-                        <td><code style="background:#f0f0f0;padding:2px 8px;border-radius:4px;font-size:0.75rem;">${o.paymentReference || o.id}</code></td>
-                        <td><strong>${o.customerName || 'N/A'}</strong><br><span style="font-size:0.7rem;color:var(--text-muted);">${o.customerPhone || ''}</span></td>
-                        <td>${o.itemCount || 0} items</td>
-                        <td>₦${Number(o.total || 0).toLocaleString()}</td>
-                        <td><span class="status-badge ${o.status || 'pending'}">${o.status || 'pending'}</span></td>
-                        <td style="font-size:0.75rem;color:var(--text-muted);">${o.createdAt ? new Date(o.createdAt).toLocaleDateString() : '-'}</td>
-                        <td style="text-align:right;">
-                            <button class="btn btn-primary btn-sm view-order" data-id="${o.id}"><i class="fa-regular fa-eye"></i></button>
-                            <button class="btn btn-sm ${o.status === 'completed' ? 'btn-success' : 'btn-outline'} update-order-status" data-id="${o.id}" data-status="${o.status || 'pending'}"><i class="fa-solid fa-rotate"></i></button>
-                        </td>
-                    </tr>
-                `).join('');
+
+                ordersBody.innerHTML = filtered.map(o => {
+                    const itemCount = Array.isArray(o.items) ? o.items.reduce((sum, i) => sum + (i.qty || 0), 0) : 0;
+                    const createdAt = o.created_at ? new Date(o.created_at).toLocaleString() : '-';
+                    return `
+                        <tr>
+                            <td><code style="background:#f0f0f0;padding:2px 8px;border-radius:4px;font-size:0.75rem;">${o.payment_reference || o.id}</code></td>
+                            <td><strong>${o.customer_name || 'N/A'}</strong></td>
+                            <td>${o.customer_phone || 'N/A'}</td>
+                            <td>${itemCount} items</td>
+                            <td>₦${Number(o.total || 0).toLocaleString()}</td>
+                            <td><span class="status-badge ${o.status || 'pending'}">${o.status || 'pending'}</span></td>
+                            <td style="font-size:0.75rem;color:var(--text-muted);">${createdAt}</td>
+                            <td style="text-align:right;">
+                                <button class="btn btn-primary btn-sm view-order" data-id="${o.id}"><i class="fa-regular fa-eye"></i></button>
+                                <button class="btn btn-sm ${o.status === 'completed' ? 'btn-success' : 'btn-outline'} update-order-status" data-id="${o.id}" data-status="${o.status || 'pending'}"><i class="fa-solid fa-rotate"></i></button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
 
                 document.querySelectorAll('.view-order').forEach(btn => {
                     btn.addEventListener('click', () => viewOrder(btn.dataset.id));
@@ -2135,27 +2167,32 @@
             async function viewOrder(id) {
                 try {
                     const data = await fetchJSON(`${API.orders}/${id}`);
+                    const createdAt = data.created_at ? new Date(data.created_at).toLocaleString() : '-';
+                    const itemsHtml = (data.items || []).map(item => `
+                        <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed #f0f0f0;">
+                            <span>${item.name} × ${item.qty}</span>
+                            <span>₦${Number(item.price * item.qty).toLocaleString()}</span>
+                        </div>
+                    `).join('') || '<p style="color:var(--text-muted);">No items</p>';
+
                     orderDetailBody.innerHTML = `
                         <div style="margin-bottom:16px;">
-                            <p><strong>Order ID:</strong> <code>${data.paymentReference || data.id}</code></p>
-                            <p><strong>Customer:</strong> ${data.customerName || 'N/A'}</p>
-                            <p><strong>Phone:</strong> ${data.customerPhone || 'N/A'}</p>
+                            <p><strong>Order ID:</strong> <code>${data.payment_reference || data.id}</code></p>
+                            <p><strong>Customer:</strong> ${data.customer_name || 'N/A'}</p>
+                            <p><strong>Email:</strong> ${data.customer_email || 'N/A'}</p>
+                            <p><strong>Phone:</strong> ${data.customer_phone || 'N/A'}</p>
                             <p><strong>Status:</strong> <span class="status-badge ${data.status || 'pending'}">${data.status || 'pending'}</span></p>
-                            <p><strong>Date:</strong> ${data.createdAt ? new Date(data.createdAt).toLocaleString() : '-'}</p>
-                            ${data.deliveryMethod ? `<p><strong>Delivery:</strong> ${data.deliveryMethod}</p>` : ''}
-                            ${data.deliveryAddress ? `<p><strong>Address:</strong> ${data.deliveryAddress}</p>` : ''}
-                            ${data.preferredTime ? `<p><strong>Preferred Time:</strong> ${data.preferredTime}</p>` : ''}
-                            ${data.orderNotes ? `<p><strong>Notes:</strong> ${data.orderNotes}</p>` : ''}
+                            <p><strong>Date:</strong> ${createdAt}</p>
+                            ${data.delivery_method ? `<p><strong>Delivery Method:</strong> ${data.delivery_method}</p>` : ''}
+                            ${data.delivery_address ? `<p><strong>Address:</strong> ${data.delivery_address}</p>` : ''}
+                            ${data.preferred_time ? `<p><strong>Preferred Time:</strong> ${data.preferred_time}</p>` : ''}
+                            ${data.order_notes ? `<p><strong>Notes:</strong> ${data.order_notes}</p>` : ''}
+                            ${data.monnify_transaction_ref ? `<p><strong>Monnify Ref:</strong> ${data.monnify_transaction_ref}</p>` : ''}
                         </div>
                         <hr style="border-color:#f0f0f0;margin:12px 0;">
                         <div style="margin:12px 0;">
                             <strong>Items:</strong>
-                            ${(data.items || []).map(item => `
-                                <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed #f0f0f0;">
-                                    <span>${item.name} × ${item.qty}</span>
-                                    <span>₦${Number(item.price * item.qty).toLocaleString()}</span>
-                                </div>
-                            `).join('') || '<p style="color:var(--text-muted);">No items</p>'}
+                            ${itemsHtml}
                         </div>
                         <hr style="border-color:#f0f0f0;margin:12px 0;">
                         <div style="display:flex;justify-content:space-between;font-size:1.1rem;font-weight:800;padding-top:8px;">
@@ -2214,6 +2251,15 @@
 
             productSearch.addEventListener('input', renderProducts);
             orderSearch.addEventListener('input', renderOrders);
+
+            // Date filter events
+            orderFilterBtn.addEventListener('click', renderOrders);
+            orderClearFilter.addEventListener('click', function() {
+                orderDateFilter.value = '';
+                renderOrders();
+            });
+            // Also re-filter when date changes
+            orderDateFilter.addEventListener('change', renderOrders);
 
             document.getElementById('add-product-btn').addEventListener('click', () => openProductModal(null));
             document.getElementById('product-modal-close').addEventListener('click', closeProductModal);
