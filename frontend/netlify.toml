@@ -3,10 +3,10 @@
   command = "echo 'No build required for static PWA'"
 
 # ─── PROXY CONFIGURATION ───
-# Any request to /api/* on Netlify gets proxied to your fly.io backend
+# Any request to /api/* on Netlify gets proxied to your Render backend
 [[redirects]]
   from = "/api/*"
-  to = "https://hotportion.fly.dev/api/:splat"
+  to = "https://hotportion.onrender.com/api/:splat"
   status = 200
   force = true
 
