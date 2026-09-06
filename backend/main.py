@@ -74,7 +74,7 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# ---------- LOGGING (ContextVars for Correlation ID) ----------
+# ---------- LOGGING ----------
 _correlation_id_var = contextvars.ContextVar("correlation_id", default="unknown")
 
 class CorrelationFilter(logging.Filter):
@@ -101,9 +101,8 @@ handler.setFormatter(JSONFormatter())
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logger.addHandler(handler)
-logger.addFilter(CorrelationFilter())  # ✅ Fix: Thread-safe correlation ID
+logger.addFilter(CorrelationFilter())
 
-# Also apply to Uvicorn access logs
 uvicorn_logger = logging.getLogger("uvicorn.access")
 uvicorn_logger.handlers = [handler]
 uvicorn_logger.addFilter(CorrelationFilter())
@@ -122,7 +121,7 @@ async def execute_db(query):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_executor, query.execute)
 
-# ---------- PYDANTIC MODELS (FULL) ----------
+# ---------- PYDANTIC MODELS ----------
 class ProductBase(BaseModel):
     name: str
     description: Optional[str] = None
@@ -149,7 +148,6 @@ class OrderItem(BaseModel):
     price: int
 
 class OrderCreate(BaseModel):
-    # ✅ Fix: Added customer_email (required for Brevo)
     payment_reference: str
     customer_name: str
     customer_email: str
@@ -161,6 +159,8 @@ class OrderCreate(BaseModel):
     preferred_time: Optional[str] = None
     order_notes: Optional[str] = None
     items: List[OrderItem]
+    # ✅ NEW: optional field to store Monnify transaction ref (updated after payment init)
+    monnify_transaction_ref: Optional[str] = None
 
 class OrderStatusUpdate(BaseModel):
     status: str
@@ -220,7 +220,7 @@ class AIChatResponse(BaseModel):
     provider: str
     model: str
 
-# ---------- AI SERVICE (Guardrails + Fallback) ----------
+# ---------- AI SERVICE ----------
 class AIService:
     def __init__(self):
         self.groq_client = None
@@ -258,7 +258,6 @@ class AIService:
         else:
             logger.warning("OpenAI client not available")
 
-    # ✅ Fix: Normalize leetspeak to catch bypass attempts
     def _normalize(self, text: str) -> str:
         text = text.lower()
         replacements = {
@@ -282,7 +281,6 @@ class AIService:
                 logger.warning(f"Prompt injection attempt blocked: {text[:50]}...")
                 return False
 
-        # Normalize and check for banned words
         norm_text = self._normalize(text)
         words = set(re.findall(r'\b\w+\b', norm_text))
         if words.intersection(self.banned_words):
@@ -435,7 +433,7 @@ class BrevoIntegration:
             logger.error(f"Email error: {e}")
             return False
 
-# ---------- MONNIFY ----------
+# ---------- MONNIFY (Extended) ----------
 class MonnifyIntegration:
     def __init__(self):
         self.api_key = settings.MONNIFY_API_KEY
@@ -471,6 +469,77 @@ class MonnifyIntegration:
                 self._token_expiry = datetime.now() + timedelta(hours=1)
                 return self._token
             raise RuntimeError(f"Monnify auth failed: {data}")
+
+    # ✅ NEW: Initialize a transaction and return checkout URL
+    async def initialize_transaction(
+        self,
+        amount: int,
+        customer_name: str,
+        customer_email: str,
+        customer_phone: str,
+        payment_reference: str,
+        payment_description: str = "Hot Portion Grill Order"
+    ) -> Dict[str, Any]:
+        """
+        Calls Monnify's Initialize Transaction endpoint.
+        Returns:
+            {
+                "success": bool,
+                "transaction_reference": str,
+                "checkout_url": str,
+                "error": str (if failed)
+            }
+        """
+        if not self.healthy:
+            # Try to refresh health
+            try:
+                await self.initialize()
+            except Exception as e:
+                return {"success": False, "error": f"Monnify not healthy: {e}"}
+
+        token = await self._get_access_token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+
+        # Build payload according to Monnify API spec
+        payload = {
+            "amount": amount,
+            "customerName": customer_name,
+            "customerEmail": customer_email,
+            "customerPhone": customer_phone,
+            "paymentReference": payment_reference,
+            "paymentDescription": payment_description,
+            "contractCode": self.contract_code,
+            "currencyCode": "NGN",
+            "paymentMethods": ["CARD", "ACCOUNT_TRANSFER"],  # or just CARD, etc.
+            "redirectUrl": "https://your-frontend.com/order-confirmation",  # UPDATE THIS!
+            "webhookUrl": "https://your-backend.com/api/v1/webhooks/monnify",  # Must match webhook endpoint
+        }
+
+        sess = await self._get_session()
+        try:
+            async with sess.post(
+                f"{self.base_url}/api/v1/merchant/transactions/init-transaction",
+                json=payload,
+                headers=headers
+            ) as resp:
+                data = await resp.json()
+                if resp.status == 200 and data.get("requestSuccessful"):
+                    body = data.get("responseBody", {})
+                    return {
+                        "success": True,
+                        "transaction_reference": body.get("transactionReference"),
+                        "checkout_url": body.get("checkoutUrl"),
+                    }
+                else:
+                    error_msg = data.get("responseMessage", "Unknown Monnify error")
+                    logger.error(f"Monnify init failed: {data}")
+                    return {"success": False, "error": error_msg}
+        except Exception as e:
+            logger.exception("Monnify init exception")
+            return {"success": False, "error": str(e)}
 
     async def handle_webhook(self, payload: dict, signature: str) -> Dict:
         if not self.healthy:
@@ -528,12 +597,10 @@ async def get_cached_stats():
     return result
 
 def invalidate_stats_cache():
-    """✅ Fix: Force cache refresh on new orders."""
     _stats_cache["timestamp"] = 0
 
-# ---------- DATABASE SETUP (Indexes) ----------
+# ---------- DATABASE SETUP ----------
 async def setup_database():
-    """✅ Fix: Ensure critical indexes exist for performance."""
     db = get_supabase()
     try:
         queries = [
@@ -542,7 +609,6 @@ async def setup_database():
             "CREATE INDEX IF NOT EXISTS idx_banners_dates ON banners(start_date, end_date);"
         ]
         for q in queries:
-            # Note: Supabase RPC 'exec_sql' must be enabled. If not, this gracefully fails.
             await execute_db(db.rpc("exec_sql", {"query": q}))
         logger.info("Database indexes ensured.")
     except Exception as e:
@@ -552,8 +618,6 @@ async def setup_database():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Hot Portion Grill - Full Monolith + AI")
-
-    # ✅ Fix: Fault-tolerant initialization (don't crash if third-party is down)
     init_results = await asyncio.gather(
         get_brevo().initialize(),
         get_monnify().initialize(),
@@ -563,9 +627,7 @@ async def lifespan(app: FastAPI):
         if isinstance(result, Exception):
             logger.error(f"Init service {i} failed: {result}")
 
-    # Setup DB indexes asynchronously (non-blocking)
     asyncio.create_task(setup_database())
-
     logger.info("All services ready (degraded mode allowed for external APIs)")
     yield
     logger.info("Shutting down...")
@@ -578,7 +640,6 @@ async def lifespan(app: FastAPI):
 # ---------- FASTAPI APP ----------
 app = FastAPI(title="Hot Portion Grill", version="1.0.0", lifespan=lifespan, docs_url="/docs")
 
-# ✅ Fix: Correlation ID via ContextVars (Thread-safe)
 @app.middleware("http")
 async def add_correlation_id(request: Request, call_next):
     cid = request.headers.get("X-Correlation-ID", f"{int(time.time() * 1000)}-{id(request)}")
@@ -613,7 +674,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------- BANNER SERVICE (FULL CRUD) ----------
+# ---------- BANNER SERVICE ----------
 class BannerService:
     def __init__(self):
         self.db = get_supabase()
@@ -774,7 +835,7 @@ async def delete_category(cid: int):
     r = await execute_db(get_supabase().table("categories").delete().eq("id", cid))
     if not r.data: raise HTTPException(404, "Not found")
 
-# Orders
+# ---------- ORDERS (UPDATED) ----------
 @app.get("/api/orders", response_model=List[Dict])
 async def get_orders():
     r = await execute_db(get_supabase().table("orders").select("*").order("created_at", desc=True))
@@ -788,17 +849,56 @@ async def get_order(oid: int):
     if not r.data: raise HTTPException(404, "Not found")
     return r.data[0]
 
+# ✅ REPLACED create_order with Monnify integration
 @app.post("/api/orders", status_code=201)
 async def create_order(order: OrderCreate, bg: BackgroundTasks):
-    r = await execute_db(get_supabase().table("orders").insert(order.dict()))
-    if not r.data: raise HTTPException(400, "Failed")
+    # 1. Insert the order into Supabase (status = "pending")
+    data = order.dict(exclude={'monnify_transaction_ref'})  # we'll update later
+    result = await execute_db(get_supabase().table("orders").insert(data))
+    if not result.data:
+        raise HTTPException(400, "Failed to create order")
     
-    # ✅ Fix: Invalidate stats cache so dashboard updates instantly
-    invalidate_stats_cache()
+    order_data = result.data[0]
     
-    # Send email asynchronously
-    bg.add_task(get_brevo().send_order_confirmation, r.data[0])
-    return r.data[0]
+    # 2. Initialize Monnify transaction
+    monnify = get_monnify()
+    customer_email = order.customer_email
+    customer_name = order.customer_name
+    customer_phone = order.customer_phone
+    total_amount = order.total
+    payment_ref = order.payment_reference
+    
+    monnify_result = await monnify.initialize_transaction(
+        amount=total_amount,
+        customer_name=customer_name,
+        customer_email=customer_email,
+        customer_phone=customer_phone,
+        payment_reference=payment_ref,
+        payment_description="Hot Portion Grill Order"
+    )
+    
+    if not monnify_result["success"]:
+        # If Monnify fails, delete the order (or mark as failed)
+        await execute_db(get_supabase().table("orders").delete().eq("id", order_data["id"]))
+        raise HTTPException(400, f"Payment initialization failed: {monnify_result.get('error', 'Unknown error')}")
+    
+    # 3. Update the order with the Monnify transaction reference
+    await execute_db(
+        get_supabase().table("orders")
+        .update({"monnify_transaction_ref": monnify_result["transaction_reference"]})
+        .eq("id", order_data["id"])
+    )
+    
+    # 4. Send email in the background (optional)
+    bg.add_task(get_brevo().send_order_confirmation, order_data)
+    
+    # 5. Return the checkout URL to the frontend
+    return {
+        "status": "pending_payment",
+        "order_id": order_data["id"],
+        "payment_reference": payment_ref,
+        "checkout_url": monnify_result["checkout_url"]   # ← This is the key!
+    }
 
 @app.patch("/api/orders/{oid}/status")
 async def update_order_status(oid: int, upd: OrderStatusUpdate):
@@ -853,7 +953,7 @@ async def duplicate_banner(banner_id: int):
 async def reorder_banners(banner_ids: List[int]):
     return await BannerService().reorder_banners(banner_ids)
 
-# ✅ FIXED Webhook (Header is now correctly read)
+# Webhook
 @app.post("/api/v1/webhooks/monnify")
 async def monnify_webhook(
     payload: dict,
