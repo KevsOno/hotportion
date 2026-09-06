@@ -3,6 +3,10 @@
   publish = "."          # Publish the current directory (frontend/)
   command = "echo 'No build required for static PWA'"
 
+[build]
+  publish = "."
+  command = "cd ../seo && npm install && npm run prerender && cp -r dist/* ../frontend/"
+
 # ─── PROXY CONFIGURATION ───
 # Any request to /api/* on Netlify gets proxied to your fly.io backend
 [[redirects]]
