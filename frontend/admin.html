@@ -1,0 +1,2327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hot Portion Grill – Admin Panel</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+    <style>
+        /* ─── ADMIN STYLES ─── */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #f1f4f9;
+            color: #1e1e1e;
+            min-height: 100vh;
+        }
+        :root {
+            --primary: #FF5722;
+            --primary-dark: #E64A19;
+            --primary-light: #FF7043;
+            --accent: #FFC107;
+            --gray-light: #f7f3ee;
+            --gray-mid: #bdc3c7;
+            --text-dark: #1e1e1e;
+            --text-muted: #4a4a4a;
+            --white: #ffffff;
+            --shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+            --radius: 16px;
+            --radius-sm: 10px;
+        }
+        .admin-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* Header */
+        .admin-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 24px;
+            background: var(--white);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .admin-header .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 1.3rem;
+            font-weight: 800;
+        }
+        .admin-header .brand span {
+            color: var(--primary);
+        }
+        .admin-header .brand small {
+            font-weight: 400;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            display: block;
+        }
+        .admin-header .actions {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .admin-header .actions .badge {
+            background: var(--gray-light);
+            padding: 6px 16px;
+            border-radius: 50px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        .btn {
+            padding: 8px 20px;
+            border: none;
+            border-radius: 50px;
+            font-weight: 700;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn-primary {
+            background: var(--primary);
+            color: #fff;
+        }
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255, 87, 34, 0.30);
+        }
+        .btn-success {
+            background: #22c55e;
+            color: #fff;
+        }
+        .btn-success:hover {
+            background: #16a34a;
+            transform: translateY(-2px);
+        }
+        .btn-danger {
+            background: #ef4444;
+            color: #fff;
+        }
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+        .btn-outline {
+            background: transparent;
+            border: 2px solid var(--primary);
+            color: var(--primary);
+        }
+        .btn-outline:hover {
+            background: var(--primary);
+            color: #fff;
+        }
+        .btn-sm {
+            padding: 4px 12px;
+            font-size: 0.75rem;
+        }
+
+        /* Stats */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: var(--white);
+            padding: 20px 24px;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            border-left: 4px solid var(--primary);
+        }
+        .stat-card .number {
+            font-size: 2rem;
+            font-weight: 900;
+            color: var(--text-dark);
+        }
+        .stat-card .label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .stat-card.green {
+            border-left-color: #22c55e;
+        }
+        .stat-card.blue {
+            border-left-color: #3b82f6;
+        }
+        .stat-card.orange {
+            border-left-color: var(--accent);
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 4px;
+            background: var(--white);
+            padding: 4px;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+        }
+        .tabs button {
+            padding: 10px 24px;
+            border: none;
+            background: transparent;
+            border-radius: var(--radius-sm);
+            font-weight: 700;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--text-muted);
+        }
+        .tabs button:hover {
+            background: var(--gray-light);
+            color: var(--text-dark);
+        }
+        .tabs button.active {
+            background: var(--primary);
+            color: #fff;
+        }
+
+        /* Panel */
+        .panel {
+            background: var(--white);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: 24px;
+            display: none;
+        }
+        .panel.active {
+            display: block;
+            animation: fadeUp 0.3s ease-out;
+        }
+        @keyframes fadeUp {
+            from {
+                opacity: 0;
+                transform: translateY(12px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .panel-header h2 {
+            font-size: 1.3rem;
+            font-weight: 800;
+        }
+        .panel-header .search-box {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .panel-header .search-box input {
+            padding: 8px 16px;
+            border: 1px solid #e2e8e6;
+            border-radius: 50px;
+            font-size: 0.85rem;
+            outline: none;
+            width: 220px;
+            transition: border-color 0.2s;
+        }
+        .panel-header .search-box input:focus {
+            border-color: var(--primary);
+        }
+
+        /* Table */
+        .table-wrap {
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+        table th {
+            text-align: left;
+            padding: 12px 12px;
+            background: var(--gray-light);
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            font-size: 0.7rem;
+            letter-spacing: 0.05em;
+            border-bottom: 2px solid #e2e8e6;
+        }
+        table td {
+            padding: 12px 12px;
+            border-bottom: 1px solid #f0f0f0;
+            vertical-align: middle;
+        }
+        table tr:hover td {
+            background: #fafafa;
+        }
+        table .product-cell {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        table .product-cell .emoji {
+            font-size: 1.5rem;
+        }
+        table .product-cell .info .name {
+            font-weight: 700;
+        }
+        table .product-cell .info .tag {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            background: var(--gray-light);
+            padding: 1px 8px;
+            border-radius: 20px;
+        }
+        table .stock-badge {
+            display: inline-block;
+            padding: 2px 12px;
+            border-radius: 50px;
+            font-weight: 700;
+            font-size: 0.7rem;
+        }
+        table .stock-badge.in-stock {
+            background: #dcfce7;
+            color: #166534;
+        }
+        table .stock-badge.low-stock {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        table .stock-badge.out-of-stock {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        .actions-cell {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.50);
+            backdrop-filter: blur(4px);
+            z-index: 1000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .modal-overlay.open {
+            display: flex;
+            animation: fadeIn 0.2s ease-out;
+        }
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: scale(0.96);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+        .modal {
+            background: var(--white);
+            border-radius: var(--radius);
+            max-width: 560px;
+            width: 100%;
+            max-height: 90vh;
+            overflow-y: auto;
+            padding: 28px 32px;
+            box-shadow: 0 30px 70px rgba(0, 0, 0, 0.30);
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .modal-header h3 {
+            font-size: 1.2rem;
+            font-weight: 800;
+        }
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: var(--text-muted);
+            padding: 0 8px;
+        }
+        .modal-close:hover {
+            color: var(--text-dark);
+        }
+        .form-group {
+            margin-bottom: 16px;
+        }
+        .form-group label {
+            display: block;
+            font-weight: 700;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid #e2e8e6;
+            border-radius: var(--radius-sm);
+            font-size: 0.9rem;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            background: #fafbfa;
+        }
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(255, 87, 34, 0.08);
+            background: #fff;
+        }
+        .form-group textarea {
+            resize: vertical;
+            min-height: 60px;
+        }
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        .form-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+            justify-content: flex-end;
+        }
+
+        /* Toast */
+        .toast-admin {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: var(--text-dark);
+            color: #fff;
+            padding: 14px 28px;
+            border-radius: 60px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            z-index: 2000;
+            opacity: 0;
+            transform: translateY(-20px);
+            transition: opacity 0.3s, transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+            pointer-events: none;
+            max-width: 90%;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.20);
+        }
+        .toast-admin.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .toast-admin i {
+            margin-right: 10px;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .admin-container {
+                padding: 12px;
+            }
+            .admin-header {
+                padding: 12px 16px;
+            }
+            .admin-header .brand {
+                font-size: 1rem;
+            }
+            .stats-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+            .stat-card .number {
+                font-size: 1.4rem;
+            }
+            .panel {
+                padding: 16px;
+            }
+            .panel-header {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .panel-header .search-box input {
+                width: 100%;
+            }
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+            .modal {
+                padding: 20px;
+                margin: 10px;
+            }
+            .tabs button {
+                padding: 8px 14px;
+                font-size: 0.75rem;
+            }
+            table {
+                font-size: 0.75rem;
+            }
+            table th,
+            table td {
+                padding: 8px 8px;
+            }
+            .actions-cell .btn {
+                font-size: 0.65rem;
+                padding: 3px 8px;
+            }
+        }
+        @media (max-width: 480px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            .admin-header .actions .badge {
+                font-size: 0.65rem;
+                padding: 4px 10px;
+            }
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+        .empty-state {
+            text-align: center;
+            padding: 40px 0;
+            color: var(--text-muted);
+        }
+        .empty-state i {
+            font-size: 3rem;
+            opacity: 0.3;
+            display: block;
+            margin-bottom: 12px;
+        }
+        .tag-preview {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            background: var(--gray-light);
+        }
+        .tag-preview.primary {
+            background: var(--primary);
+            color: #fff;
+        }
+        .tag-preview.orange {
+            background: var(--accent);
+            color: #1e1e1e;
+        }
+
+        /* Order status badges */
+        .status-badge {
+            display: inline-block;
+            padding: 2px 12px;
+            border-radius: 50px;
+            font-weight: 700;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+        }
+        .status-badge.pending {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        .status-badge.confirmed {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+        .status-badge.preparing {
+            background: #e0f2fe;
+            color: #0369a1;
+        }
+        .status-badge.ready {
+            background: #dcfce7;
+            color: #166534;
+        }
+        .status-badge.completed {
+            background: #e5e7eb;
+            color: #374151;
+        }
+        .status-badge.cancelled {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .view-toggle {
+            display: flex;
+            gap: 4px;
+            background: var(--gray-light);
+            border-radius: 50px;
+            padding: 3px;
+        }
+        .view-toggle button {
+            padding: 4px 12px;
+            border: none;
+            background: transparent;
+            border-radius: 50px;
+            font-weight: 600;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--text-muted);
+        }
+        .view-toggle button.active {
+            background: var(--white);
+            color: var(--text-dark);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+        .view-toggle button:hover:not(.active) {
+            color: var(--text-dark);
+        }
+
+        /* Banner Grid (for Banner Management) */
+        .banner-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            padding: 20px 0;
+        }
+
+        .banner-card {
+            background: white;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            overflow: hidden;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(0,0,0,0.04);
+            position: relative;
+        }
+
+        .banner-card:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-hover);
+        }
+
+        .banner-card .banner-image {
+            height: 180px;
+            background-size: cover;
+            background-position: center;
+            position: relative;
+        }
+
+        .banner-card .banner-image .badge {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            padding: 4px 14px;
+            border-radius: 50px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: white;
+        }
+
+        .banner-card .banner-image .status-badge {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            padding: 4px 12px;
+            border-radius: 50px;
+            font-size: 0.65rem;
+            font-weight: 700;
+        }
+
+        .banner-card .banner-image .status-badge.active {
+            background: #22c55e;
+            color: white;
+        }
+
+        .banner-card .banner-image .status-badge.inactive {
+            background: #ef4444;
+            color: white;
+        }
+
+        .banner-card .banner-content {
+            padding: 16px 20px;
+        }
+
+        .banner-card .banner-content .title {
+            font-size: 1.1rem;
+            font-weight: 800;
+            margin-bottom: 4px;
+        }
+
+        .banner-card .banner-content .subtitle {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+
+        .banner-card .banner-content .meta {
+            display: flex;
+            gap: 16px;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 8px;
+            flex-wrap: wrap;
+        }
+
+        .banner-card .banner-content .meta .tag {
+            background: var(--gray-light);
+            padding: 2px 10px;
+            border-radius: 20px;
+        }
+
+        .banner-card .banner-actions {
+            display: flex;
+            gap: 4px;
+            padding: 12px 20px;
+            border-top: 1px solid #f0f0f0;
+            flex-wrap: wrap;
+        }
+
+        .banner-card .banner-actions .btn {
+            font-size: 0.75rem;
+            padding: 4px 12px;
+        }
+
+        /* Banner Preview */
+        .banner-preview-container {
+            padding: 20px;
+            background: #f8faf9;
+            border-radius: var(--radius-sm);
+        }
+
+        .banner-preview-container .banner-preview {
+            border-radius: var(--radius);
+            padding: 40px 36px;
+            position: relative;
+            overflow: hidden;
+            min-height: 300px;
+        }
+
+        .banner-preview-container .banner-preview .preview-badge {
+            display: inline-block;
+            padding: 6px 16px;
+            border-radius: 50px;
+            font-size: 0.7rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 14px;
+        }
+
+        .banner-preview-container .banner-preview h1 {
+            font-size: 2.8rem;
+            font-weight: 900;
+            letter-spacing: -0.03em;
+            line-height: 1.05;
+        }
+
+        .banner-preview-container .banner-preview p {
+            font-size: 1.1rem;
+            max-width: 480px;
+            margin-top: 12px;
+            line-height: 1.6;
+        }
+
+        .banner-preview-container .banner-preview .preview-cta {
+            margin-top: 20px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 28px;
+            border-radius: 50px;
+            font-weight: 700;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+        }
+
+        .banner-preview-container .banner-preview .preview-cta:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+        }
+
+        /* Drag and Drop for Reordering */
+        .banner-card.dragging {
+            opacity: 0.5;
+            transform: scale(0.95);
+        }
+
+        .banner-card.drag-over {
+            border: 2px dashed var(--primary);
+            transform: scale(1.02);
+        }
+
+        .banner-card .drag-handle {
+            cursor: grab;
+            padding: 4px 8px;
+            color: var(--text-muted);
+        }
+
+        .banner-card .drag-handle:active {
+            cursor: grabbing;
+        }
+
+        /* Pagination */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 16px;
+            padding: 20px 0 0;
+        }
+
+        .pagination button:disabled {
+            opacity: 0.4;
+            pointer-events: none;
+        }
+
+        /* Responsive for Banner Grid */
+        @media (max-width: 768px) {
+            .banner-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .banner-preview-container .banner-preview {
+                padding: 20px 16px;
+                min-height: 200px;
+            }
+            
+            .banner-preview-container .banner-preview h1 {
+                font-size: 1.8rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ─── TOAST ─── -->
+    <div id="toast-admin" class="toast-admin"><i class="fa-solid fa-check-circle"></i> <span id="toast-admin-msg">Done</span></div>
+
+    <!-- ─── ADMIN LAYOUT ─── -->
+    <div class="admin-container">
+
+        <!-- Header -->
+        <header class="admin-header">
+            <div class="brand">
+                <i class="fa-solid fa-utensils" style="color:var(--primary);font-size:1.6rem;"></i>
+                <div>
+                    Hot<span>Portion</span> <small>Inventory Admin</small>
+                </div>
+            </div>
+            <div class="actions">
+                <span class="badge"><i class="fa-regular fa-circle-check" style="color:#22c55e;"></i> Database Live</span>
+                <a href="/" target="_blank" class="btn btn-outline btn-sm"><i class="fa-solid fa-eye"></i> View Site</a>
+                <button class="btn btn-primary btn-sm" id="refresh-data"><i class="fa-solid fa-rotate"></i> Refresh</button>
+            </div>
+        </header>
+
+        <!-- Stats -->
+        <div class="stats-grid" id="stats-grid">
+            <div class="stat-card"><div class="number" id="stat-products">0</div><div class="label">Total Products</div></div>
+            <div class="stat-card green"><div class="number" id="stat-categories">0</div><div class="label">Categories</div></div>
+            <div class="stat-card blue"><div class="number" id="stat-orders">0</div><div class="label">Total Orders</div></div>
+            <div class="stat-card orange"><div class="number" id="stat-revenue">₦0</div><div class="label">Revenue</div></div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs" id="admin-tabs">
+            <button class="active" data-tab="products"><i class="fa-solid fa-burger"></i> Products</button>
+            <button data-tab="inventory"><i class="fa-solid fa-boxes-stacked"></i> Inventory</button>
+            <button data-tab="orders"><i class="fa-solid fa-receipt"></i> Orders</button>
+            <button data-tab="categories"><i class="fa-solid fa-tags"></i> Categories</button>
+            <button data-tab="banners"><i class="fa-solid fa-images"></i> Banners</button>
+        </div>
+
+        <!-- ─── PRODUCTS PANEL ─── -->
+        <div class="panel active" id="panel-products">
+            <div class="panel-header">
+                <h2><i class="fa-solid fa-burger" style="color:var(--primary);"></i> Products</h2>
+                <div class="search-box">
+                    <input type="text" id="product-search" placeholder="Search products..." />
+                    <button class="btn btn-primary btn-sm" id="add-product-btn"><i class="fa-solid fa-plus"></i> Add</button>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Product</th>
+                            <th>Category</th>
+                            <th>Price</th>
+                            <th>Stock</th>
+                            <th style="text-align:right;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="products-table-body">
+                        <tr><td colspan="5" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- ─── INVENTORY PANEL ─── -->
+        <div class="panel" id="panel-inventory">
+            <div class="panel-header">
+                <h2><i class="fa-solid fa-boxes-stacked" style="color:var(--primary);"></i> Inventory Management</h2>
+                <div class="view-toggle" id="inventory-view-toggle">
+                    <button class="active" data-view="all">All</button>
+                    <button data-view="low">Low Stock</button>
+                    <button data-view="out">Out of Stock</button>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Product</th>
+                            <th>Category</th>
+                            <th>Stock</th>
+                            <th>Status</th>
+                            <th style="text-align:right;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="inventory-table-body">
+                        <tr><td colspan="5" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- ─── ORDERS PANEL ─── -->
+        <div class="panel" id="panel-orders">
+            <div class="panel-header">
+                <h2><i class="fa-solid fa-receipt" style="color:var(--primary);"></i> Orders</h2>
+                <div class="search-box">
+                    <input type="text" id="order-search" placeholder="Search by name or ID..." />
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Order ID</th>
+                            <th>Customer</th>
+                            <th>Items</th>
+                            <th>Total</th>
+                            <th>Status</th>
+                            <th>Date</th>
+                            <th style="text-align:right;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="orders-table-body">
+                        <tr><td colspan="7" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- ─── CATEGORIES PANEL ─── -->
+        <div class="panel" id="panel-categories">
+            <div class="panel-header">
+                <h2><i class="fa-solid fa-tags" style="color:var(--primary);"></i> Categories</h2>
+                <button class="btn btn-primary btn-sm" id="add-category-btn"><i class="fa-solid fa-plus"></i> Add Category</button>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Category</th>
+                            <th>Products</th>
+                            <th style="text-align:right;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="categories-table-body">
+                        <tr><td colspan="3" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- ─── BANNERS PANEL ─── -->
+        <div class="panel" id="panel-banners">
+            <div class="panel-header">
+                <h2><i class="fa-solid fa-images" style="color:var(--primary);"></i> Banner Management</h2>
+                <div class="actions-header">
+                    <button class="btn btn-primary btn-sm" id="add-banner-btn">
+                        <i class="fa-solid fa-plus"></i> New Banner
+                    </button>
+                    <div class="view-toggle" id="banner-view-toggle">
+                        <button class="active" data-view="all">All</button>
+                        <button data-view="active">Active</button>
+                        <button data-view="hero">Hero</button>
+                        <button data-view="featured">Featured</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Banner Grid -->
+            <div class="banner-grid" id="banner-grid">
+                <!-- Banners will be rendered here -->
+            </div>
+
+            <!-- Pagination -->
+            <div class="pagination" id="banner-pagination">
+                <button class="btn btn-outline btn-sm" id="prev-page"><i class="fa-solid fa-chevron-left"></i> Previous</button>
+                <span id="page-info">Page 1 of 1</span>
+                <button class="btn btn-outline btn-sm" id="next-page">Next <i class="fa-solid fa-chevron-right"></i></button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ─── PRODUCT MODAL ─── -->
+    <div class="modal-overlay" id="product-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="product-modal-title">Add Product</h3>
+                <button class="modal-close" id="product-modal-close">&times;</button>
+            </div>
+            <form id="product-form">
+                <input type="hidden" id="product-id" />
+                <div class="form-group">
+                    <label>Product Name *</label>
+                    <input type="text" id="p-name" required placeholder="e.g. Jollof Rice + Chicken" />
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea id="p-description" placeholder="Describe the product..."></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Price (₦) *</label>
+                        <input type="number" id="p-price" required placeholder="4500" min="0" step="100" />
+                    </div>
+                    <div class="form-group">
+                        <label>Stock Quantity *</label>
+                        <input type="number" id="p-stock" required placeholder="50" min="0" step="1" />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Category *</label>
+                        <select id="p-category" required>
+                            <option value="">Select category...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Emoji</label>
+                        <input type="text" id="p-emoji" placeholder="🍔" maxlength="2" />
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Image URL</label>
+                    <input type="text" id="p-image" placeholder="/fastfood/images/burger.webp" />
+                </div>
+                <div class="form-group">
+                    <label>Tag Color</label>
+                    <select id="p-tagcolor">
+                        <option value="primary">Primary (Orange)</option>
+                        <option value="orange">Orange (Yellow)</option>
+                    </select>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-outline" id="product-modal-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="product-modal-save"><i class="fa-solid fa-check"></i> Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ─── CATEGORY MODAL ─── -->
+    <div class="modal-overlay" id="category-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="category-modal-title">Add Category</h3>
+                <button class="modal-close" id="category-modal-close">&times;</button>
+            </div>
+            <form id="category-form">
+                <input type="hidden" id="category-id" />
+                <div class="form-group">
+                    <label>Category Name *</label>
+                    <input type="text" id="c-name" required placeholder="e.g. Rice Dishes" />
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-outline" id="category-modal-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="fa-solid fa-check"></i> Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ─── ORDER DETAIL MODAL ─── -->
+    <div class="modal-overlay" id="order-modal">
+        <div class="modal" style="max-width:680px;">
+            <div class="modal-header">
+                <h3 id="order-modal-title">Order Details</h3>
+                <button class="modal-close" id="order-modal-close">&times;</button>
+            </div>
+            <div id="order-detail-body"></div>
+        </div>
+    </div>
+
+    <!-- ─── BANNER MODAL ─── -->
+    <div class="modal-overlay" id="banner-modal">
+        <div class="modal" style="max-width: 800px;">
+            <div class="modal-header">
+                <h3 id="banner-modal-title">Add Banner</h3>
+                <button class="modal-close" id="banner-modal-close">&times;</button>
+            </div>
+            <form id="banner-form" enctype="multipart/form-data">
+                <input type="hidden" id="banner-id" />
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Title *</label>
+                        <input type="text" id="b-title" required placeholder="e.g. Weekend Special" />
+                    </div>
+                    <div class="form-group">
+                        <label>Subtitle</label>
+                        <input type="text" id="b-subtitle" placeholder="e.g. 10% OFF All Items" />
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea id="b-description" placeholder="Describe your promotion..."></textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Badge Text</label>
+                        <input type="text" id="b-badge" placeholder="e.g. 🎉 NEW" />
+                    </div>
+                    <div class="form-group">
+                        <label>Badge Color</label>
+                        <input type="color" id="b-badge-color" value="#FF5722" />
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Background Color</label>
+                        <input type="color" id="b-bg-color" value="#fff3ed" />
+                    </div>
+                    <div class="form-group">
+                        <label>Text Color</label>
+                        <input type="color" id="b-text-color" value="#1e1e1e" />
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Image URL</label>
+                        <input type="text" id="b-image" placeholder="/images/banner.webp" />
+                    </div>
+                    <div class="form-group">
+                        <label>OR Upload Image</label>
+                        <input type="file" id="b-image-upload" accept="image/*" />
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>CTA Text</label>
+                        <input type="text" id="b-cta-text" placeholder="e.g. Order Now" />
+                    </div>
+                    <div class="form-group">
+                        <label>CTA Link</label>
+                        <input type="text" id="b-cta-link" placeholder="/menu or https://..." />
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>CTA Type</label>
+                        <select id="b-cta-type">
+                            <option value="button">Button</option>
+                            <option value="link">Link</option>
+                            <option value="product">Product</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="b-product-group" style="display:none;">
+                        <label>Related Product</label>
+                        <select id="b-product-id">
+                            <option value="">Select product...</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Discount Type</label>
+                        <select id="b-discount-type">
+                            <option value="">None</option>
+                            <option value="percentage">Percentage</option>
+                            <option value="fixed">Fixed Amount</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Discount Value</label>
+                        <input type="number" id="b-discount-value" placeholder="10" min="0" />
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Start Date</label>
+                        <input type="datetime-local" id="b-start-date" />
+                    </div>
+                    <div class="form-group">
+                        <label>End Date</label>
+                        <input type="datetime-local" id="b-end-date" />
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Display Position</label>
+                        <input type="number" id="b-position" value="0" min="0" />
+                    </div>
+                    <div class="form-group">
+                        <label>Display Order</label>
+                        <input type="number" id="b-display-order" value="0" min="0" />
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="b-is-active" checked />
+                            Active
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="b-is-hero" />
+                            Show in Hero Slider
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="b-is-featured" />
+                            Show as Featured
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Categories (optional)</label>
+                    <select id="b-categories" multiple style="height:100px;">
+                        <!-- Populated from API -->
+                    </select>
+                    <small>Hold Ctrl/Cmd to select multiple</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Meta Data (JSON)</label>
+                    <textarea id="b-meta" placeholder='{"custom_field": "value"}' style="height:60px;"></textarea>
+                </div>
+
+                <div class="form-actions">
+                    <button type="button" class="btn btn-outline" id="banner-modal-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="banner-modal-save">
+                        <i class="fa-solid fa-check"></i> Save Banner
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ─── BANNER PREVIEW MODAL ─── -->
+    <div class="modal-overlay" id="banner-preview-modal">
+        <div class="modal" style="max-width: 900px;">
+            <div class="modal-header">
+                <h3>Banner Preview</h3>
+                <button class="modal-close" id="banner-preview-close">&times;</button>
+            </div>
+            <div id="banner-preview-content" class="banner-preview-container">
+                <!-- Preview will be rendered here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- ─── SCRIPTS ─── -->
+    <script>
+        (function() {
+            'use strict';
+
+            // ─── API BASE ───
+            const API = {
+                products: '/api/products',
+                categories: '/api/categories',
+                orders: '/api/orders',
+                stats: '/api/stats',
+                banners: '/api/v1/banners',
+            };
+
+            // ─── TOAST ───
+            const toastEl = document.getElementById('toast-admin');
+            const toastMsg = document.getElementById('toast-admin-msg');
+            let toastTimer = null;
+
+            function showToast(msg, icon = 'fa-solid fa-check-circle') {
+                toastMsg.textContent = msg;
+                toastEl.querySelector('i').className = icon;
+                toastEl.classList.add('show');
+                clearTimeout(toastTimer);
+                toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2500);
+            }
+
+            // ─── STATE ───
+            let products = [];
+            let categories = [];
+            let orders = [];
+            let banners = [];
+            let currentTab = 'products';
+            let currentPage = 1;
+            let pageSize = 12;
+            let totalPages = 1;
+            let currentView = 'all';
+
+            // ─── DOM REFS ───
+            const tabs = document.querySelectorAll('#admin-tabs button');
+            const panels = {
+                products: document.getElementById('panel-products'),
+                inventory: document.getElementById('panel-inventory'),
+                orders: document.getElementById('panel-orders'),
+                categories: document.getElementById('panel-categories'),
+                banners: document.getElementById('panel-banners'),
+            };
+            const productsBody = document.getElementById('products-table-body');
+            const inventoryBody = document.getElementById('inventory-table-body');
+            const ordersBody = document.getElementById('orders-table-body');
+            const categoriesBody = document.getElementById('categories-table-body');
+            const bannerGrid = document.getElementById('banner-grid');
+            const pageInfo = document.getElementById('page-info');
+
+            const productSearch = document.getElementById('product-search');
+            const orderSearch = document.getElementById('order-search');
+
+            const productModal = document.getElementById('product-modal');
+            const productForm = document.getElementById('product-form');
+            const productId = document.getElementById('product-id');
+            const pName = document.getElementById('p-name');
+            const pDescription = document.getElementById('p-description');
+            const pPrice = document.getElementById('p-price');
+            const pStock = document.getElementById('p-stock');
+            const pCategory = document.getElementById('p-category');
+            const pEmoji = document.getElementById('p-emoji');
+            const pImage = document.getElementById('p-image');
+            const pTagcolor = document.getElementById('p-tagcolor');
+            const productModalTitle = document.getElementById('product-modal-title');
+            const productModalSave = document.getElementById('product-modal-save');
+
+            const categoryModal = document.getElementById('category-modal');
+            const categoryForm = document.getElementById('category-form');
+            const categoryId = document.getElementById('category-id');
+            const cName = document.getElementById('c-name');
+            const categoryModalTitle = document.getElementById('category-modal-title');
+
+            const orderModal = document.getElementById('order-modal');
+            const orderDetailBody = document.getElementById('order-detail-body');
+
+            const refreshBtn = document.getElementById('refresh-data');
+
+            const bannerModal = document.getElementById('banner-modal');
+            const bannerForm = document.getElementById('banner-form');
+            const bannerIdEl = document.getElementById('banner-id');
+            const bannerModalTitle = document.getElementById('banner-modal-title');
+            const bannerModalSave = document.getElementById('banner-modal-save');
+            const bannerPreviewModal = document.getElementById('banner-preview-modal');
+            const previewContent = document.getElementById('banner-preview-content');
+
+            // ─── FETCH HELPERS ───
+            async function fetchJSON(url, options = {}) {
+                const res = await fetch(url, {
+                    ...options,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(options.headers || {}),
+                    },
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+                return res.json();
+            }
+
+            // ─── LOAD DATA ───
+            async function loadAllData() {
+                try {
+                    await Promise.all([loadProducts(), loadCategories(), loadOrders(), loadStats(), loadBanners()]);
+                } catch (err) {
+                    console.error('Load error:', err);
+                    showToast('Error loading data: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            async function loadProducts() {
+                const data = await fetchJSON(API.products);
+                products = data;
+                renderProducts();
+                renderInventory();
+                return data;
+            }
+
+            async function loadCategories() {
+                const data = await fetchJSON(API.categories);
+                categories = data;
+                renderCategories();
+                populateCategorySelect();
+                populateBannerCategorySelect();
+                return data;
+            }
+
+            async function loadOrders() {
+                const data = await fetchJSON(API.orders);
+                orders = data;
+                renderOrders();
+                return data;
+            }
+
+            async function loadStats() {
+                const data = await fetchJSON(API.stats);
+                document.getElementById('stat-products').textContent = data.totalProducts || 0;
+                document.getElementById('stat-categories').textContent = data.totalCategories || 0;
+                document.getElementById('stat-orders').textContent = data.totalOrders || 0;
+                document.getElementById('stat-revenue').textContent = '₦' + (data.totalRevenue || 0).toLocaleString();
+                return data;
+            }
+
+            // ─── BANNER LOAD ───
+            async function loadBanners() {
+                try {
+                    const params = new URLSearchParams({
+                        limit: pageSize,
+                        offset: (currentPage - 1) * pageSize
+                    });
+                    if (currentView === 'active') params.append('is_active', 'true');
+                    else if (currentView === 'hero') params.append('is_hero', 'true');
+                    else if (currentView === 'featured') params.append('is_featured', 'true');
+
+                    const response = await fetch(`${API.banners}?${params}`);
+                    const data = await response.json();
+                    banners = data.banners || [];
+                    totalPages = Math.ceil((data.total || 0) / pageSize);
+                    renderBanners();
+                    updatePagination();
+                    updateBannerStats(data);
+                } catch (error) {
+                    console.error('Error loading banners:', error);
+                    showToast('Failed to load banners', 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            function renderBanners() {
+                if (!bannerGrid) return;
+                if (banners.length === 0) {
+                    bannerGrid.innerHTML = `
+                        <div class="empty-state" style="grid-column:1/-1;">
+                            <i class="fa-regular fa-images"></i>
+                            <p>No banners found. Create your first banner!</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                bannerGrid.innerHTML = banners.map((banner, index) => `
+                    <div class="banner-card" draggable="true" data-index="${index}" data-id="${banner.id}">
+                        <div class="banner-image" style="background-image: url('${banner.image_url || '/images/default-banner.jpg'}');">
+                            ${banner.badge_text ? `
+                                <span class="badge" style="background:${banner.badge_color || '#FF5722'};">
+                                    ${banner.badge_text}
+                                </span>
+                            ` : ''}
+                            <span class="status-badge ${banner.is_active ? 'active' : 'inactive'}">
+                                ${banner.is_active ? 'Active' : 'Inactive'}
+                            </span>
+                            ${banner.is_hero ? '<span class="tag" style="position:absolute;bottom:12px;left:12px;background:#FFC107;padding:2px10px;border-radius:20px;font-size:0.6rem;font-weight:700;">⭐ Hero</span>' : ''}
+                            ${banner.is_featured ? '<span class="tag" style="position:absolute;bottom:12px;left:80px;background:#FF5722;padding:2px10px;border-radius:20px;font-size:0.6rem;font-weight:700;color:white;">🔥 Featured</span>' : ''}
+                        </div>
+                        <div class="banner-content">
+                            <div class="title">${banner.title}</div>
+                            ${banner.subtitle ? `<div class="subtitle">${banner.subtitle}</div>` : ''}
+                            ${banner.description ? `<p style="font-size:0.85rem;color:var(--text-muted);margin:8px 0;">${banner.description}</p>` : ''}
+                            <div class="meta">
+                                <span class="tag">Position: ${banner.position || 0}</span>
+                                <span class="tag">Order: ${banner.display_order || 0}</span>
+                                ${banner.discount_value ? `<span class="tag" style="background:#dcfce7;color:#166534;">${banner.discount_value}% OFF</span>` : ''}
+                                ${banner.start_date ? `<span>From: ${new Date(banner.start_date).toLocaleDateString()}</span>` : ''}
+                                ${banner.end_date ? `<span>To: ${new Date(banner.end_date).toLocaleDateString()}</span>` : ''}
+                            </div>
+                        </div>
+                        <div class="banner-actions">
+                            <button class="btn btn-primary btn-sm edit-banner" data-id="${banner.id}">
+                                <i class="fa-regular fa-pen-to-square"></i>
+                            </button>
+                            <button class="btn btn-outline btn-sm preview-banner" data-id="${banner.id}">
+                                <i class="fa-regular fa-eye"></i>
+                            </button>
+                            <button class="btn btn-success btn-sm toggle-banner" data-id="${banner.id}">
+                                <i class="fa-solid ${banner.is_active ? 'fa-pause' : 'fa-play'}"></i>
+                            </button>
+                            <button class="btn btn-outline btn-sm duplicate-banner" data-id="${banner.id}">
+                                <i class="fa-regular fa-copy"></i>
+                            </button>
+                            <button class="btn btn-danger btn-sm delete-banner" data-id="${banner.id}">
+                                <i class="fa-regular fa-trash-can"></i>
+                            </button>
+                            <span class="drag-handle" style="margin-left:auto;">
+                                <i class="fa-solid fa-grip-vertical"></i>
+                            </span>
+                        </div>
+                    </div>
+                `).join('');
+
+                // Drag & Drop
+                setupBannerDragDrop();
+
+                // Action buttons
+                document.querySelectorAll('.edit-banner').forEach(btn => {
+                    btn.addEventListener('click', () => openBannerModal(btn.dataset.id));
+                });
+                document.querySelectorAll('.preview-banner').forEach(btn => {
+                    btn.addEventListener('click', () => previewBanner(btn.dataset.id));
+                });
+                document.querySelectorAll('.toggle-banner').forEach(btn => {
+                    btn.addEventListener('click', () => toggleBanner(btn.dataset.id));
+                });
+                document.querySelectorAll('.duplicate-banner').forEach(btn => {
+                    btn.addEventListener('click', () => duplicateBanner(btn.dataset.id));
+                });
+                document.querySelectorAll('.delete-banner').forEach(btn => {
+                    btn.addEventListener('click', () => deleteBanner(btn.dataset.id));
+                });
+            }
+
+            function setupBannerDragDrop() {
+                let dragStartIndex = null;
+                let dragEndIndex = null;
+                const grid = bannerGrid;
+
+                grid.querySelectorAll('.banner-card').forEach(card => {
+                    card.addEventListener('dragstart', (e) => {
+                        dragStartIndex = parseInt(card.dataset.index);
+                        card.classList.add('dragging');
+                        e.dataTransfer.effectAllowed = 'move';
+                    });
+
+                    card.addEventListener('dragend', () => {
+                        card.classList.remove('dragging');
+                        if (dragStartIndex !== null && dragEndIndex !== null && dragStartIndex !== dragEndIndex) {
+                            reorderBanners(dragStartIndex, dragEndIndex);
+                        }
+                        dragStartIndex = null;
+                        dragEndIndex = null;
+                        grid.querySelectorAll('.banner-card').forEach(c => c.classList.remove('drag-over'));
+                    });
+
+                    card.addEventListener('dragover', (e) => {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'move';
+                        card.classList.add('drag-over');
+                        dragEndIndex = parseInt(card.dataset.index);
+                    });
+
+                    card.addEventListener('dragleave', () => {
+                        card.classList.remove('drag-over');
+                    });
+                });
+            }
+
+            async function reorderBanners(fromIndex, toIndex) {
+                const bannerIds = banners.map(b => b.id);
+                const [removed] = bannerIds.splice(fromIndex, 1);
+                bannerIds.splice(toIndex, 0, removed);
+
+                try {
+                    await fetch(`${API.banners}/reorder`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(bannerIds)
+                    });
+                    showToast('Banners reordered successfully!');
+                    loadBanners();
+                } catch (error) {
+                    console.error('Error reordering banners:', error);
+                    showToast('Failed to reorder banners', 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            function updatePagination() {
+                pageInfo.textContent = `Page ${currentPage} of ${totalPages || 1}`;
+                document.getElementById('prev-page').disabled = currentPage <= 1;
+                document.getElementById('next-page').disabled = currentPage >= totalPages;
+            }
+
+            function updateBannerStats(data) {
+                // If you have stat elements for banners, you can update them here
+                // Not required for functionality, but you could add them.
+            }
+
+            // ─── BANNER CRUD ───
+            function openBannerModal(bannerId = null) {
+                const modal = document.getElementById('banner-modal');
+                const form = document.getElementById('banner-form');
+                form.reset();
+
+                if (bannerId) {
+                    const banner = banners.find(b => b.id == bannerId);
+                    if (banner) {
+                        bannerModalTitle.textContent = 'Edit Banner';
+                        bannerIdEl.value = banner.id;
+                        document.getElementById('b-title').value = banner.title || '';
+                        document.getElementById('b-subtitle').value = banner.subtitle || '';
+                        document.getElementById('b-description').value = banner.description || '';
+                        document.getElementById('b-badge').value = banner.badge_text || '';
+                        document.getElementById('b-badge-color').value = banner.badge_color || '#FF5722';
+                        document.getElementById('b-bg-color').value = banner.background_color || '#fff3ed';
+                        document.getElementById('b-text-color').value = banner.text_color || '#1e1e1e';
+                        document.getElementById('b-image').value = banner.image_url || '';
+                        document.getElementById('b-cta-text').value = banner.cta_text || '';
+                        document.getElementById('b-cta-link').value = banner.cta_link || '';
+                        document.getElementById('b-cta-type').value = banner.cta_type || 'button';
+                        document.getElementById('b-product-id').value = banner.product_id || '';
+                        document.getElementById('b-discount-type').value = banner.discount_type || '';
+                        document.getElementById('b-discount-value').value = banner.discount_value || '';
+                        document.getElementById('b-position').value = banner.position || 0;
+                        document.getElementById('b-display-order').value = banner.display_order || 0;
+                        document.getElementById('b-is-active').checked = banner.is_active;
+                        document.getElementById('b-is-hero').checked = banner.is_hero;
+                        document.getElementById('b-is-featured').checked = banner.is_featured;
+                        document.getElementById('b-meta').value = JSON.stringify(banner.meta_data || {}, null, 2);
+
+                        if (banner.start_date) {
+                            document.getElementById('b-start-date').value = banner.start_date.slice(0, 16);
+                        }
+                        if (banner.end_date) {
+                            document.getElementById('b-end-date').value = banner.end_date.slice(0, 16);
+                        }
+
+                        // Select categories
+                        const categorySelect = document.getElementById('b-categories');
+                        if (banner.categories) {
+                            Array.from(categorySelect.options).forEach(opt => {
+                                opt.selected = banner.categories.includes(parseInt(opt.value));
+                            });
+                        }
+
+                        // Select product
+                        const productSelect = document.getElementById('b-product-id');
+                        if (banner.product_id) {
+                            productSelect.value = banner.product_id;
+                        }
+
+                        bannerModalSave.textContent = 'Update Banner';
+                    }
+                } else {
+                    bannerModalTitle.textContent = 'Add Banner';
+                    bannerIdEl.value = '';
+                    document.getElementById('b-is-active').checked = true;
+                    bannerModalSave.textContent = 'Create Banner';
+                }
+
+                modal.classList.add('open');
+            }
+
+            function closeBannerModal() {
+                document.getElementById('banner-modal').classList.remove('open');
+                document.getElementById('banner-form').reset();
+            }
+
+            async function saveBanner(e) {
+                e.preventDefault();
+                const id = bannerIdEl.value;
+                const categories = Array.from(document.getElementById('b-categories').selectedOptions)
+                    .map(opt => parseInt(opt.value));
+
+                const data = {
+                    title: document.getElementById('b-title').value,
+                    subtitle: document.getElementById('b-subtitle').value,
+                    description: document.getElementById('b-description').value,
+                    image_url: document.getElementById('b-image').value,
+                    badge_text: document.getElementById('b-badge').value,
+                    badge_color: document.getElementById('b-badge-color').value,
+                    background_color: document.getElementById('b-bg-color').value,
+                    text_color: document.getElementById('b-text-color').value,
+                    cta_text: document.getElementById('b-cta-text').value,
+                    cta_link: document.getElementById('b-cta-link').value,
+                    cta_type: document.getElementById('b-cta-type').value,
+                    product_id: parseInt(document.getElementById('b-product-id').value) || null,
+                    discount_type: document.getElementById('b-discount-type').value || null,
+                    discount_value: parseInt(document.getElementById('b-discount-value').value) || null,
+                    position: parseInt(document.getElementById('b-position').value) || 0,
+                    display_order: parseInt(document.getElementById('b-display-order').value) || 0,
+                    is_active: document.getElementById('b-is-active').checked,
+                    is_hero: document.getElementById('b-is-hero').checked,
+                    is_featured: document.getElementById('b-is-featured').checked,
+                    start_date: document.getElementById('b-start-date').value || null,
+                    end_date: document.getElementById('b-end-date').value || null,
+                    meta_data: JSON.parse(document.getElementById('b-meta').value || '{}'),
+                    categories: categories
+                };
+
+                try {
+                    const url = id ? `${API.banners}/${id}` : API.banners;
+                    const method = id ? 'PUT' : 'POST';
+
+                    const response = await fetch(url, {
+                        method: method,
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(data)
+                    });
+
+                    if (response.ok) {
+                        showToast(id ? 'Banner updated successfully!' : 'Banner created successfully!');
+                        closeBannerModal();
+                        loadBanners();
+                    } else {
+                        const error = await response.json();
+                        showToast('Error: ' + (error.message || 'Failed to save banner'), 'fa-solid fa-exclamation-circle');
+                    }
+                } catch (error) {
+                    console.error('Error saving banner:', error);
+                    showToast('Failed to save banner', 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            async function toggleBanner(id) {
+                try {
+                    const response = await fetch(`${API.banners}/${id}/toggle`, { method: 'PATCH' });
+                    if (response.ok) {
+                        showToast('Banner toggled successfully!');
+                        loadBanners();
+                    }
+                } catch (error) {
+                    console.error('Error toggling banner:', error);
+                    showToast('Failed to toggle banner', 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            async function duplicateBanner(id) {
+                try {
+                    const response = await fetch(`${API.banners}/${id}/duplicate`, { method: 'POST' });
+                    if (response.ok) {
+                        showToast('Banner duplicated successfully!');
+                        loadBanners();
+                    }
+                } catch (error) {
+                    console.error('Error duplicating banner:', error);
+                    showToast('Failed to duplicate banner', 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            async function deleteBanner(id) {
+                if (!confirm('Are you sure you want to delete this banner?')) return;
+                try {
+                    const response = await fetch(`${API.banners}/${id}`, { method: 'DELETE' });
+                    if (response.ok) {
+                        showToast('Banner deleted successfully!');
+                        loadBanners();
+                    }
+                } catch (error) {
+                    console.error('Error deleting banner:', error);
+                    showToast('Failed to delete banner', 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            async function previewBanner(id) {
+                const banner = banners.find(b => b.id == id);
+                if (!banner) return;
+
+                previewContent.innerHTML = `
+                    <div class="banner-preview" style="background:${banner.background_color || '#fff3ed'};color:${banner.text_color || '#1e1e1e'};">
+                        ${banner.badge_text ? `
+                            <span class="preview-badge" style="background:${banner.badge_color || '#FF5722'};color:white;">
+                                ${banner.badge_text}
+                            </span>
+                        ` : ''}
+                        <h1>${banner.title}</h1>
+                        ${banner.subtitle ? `<p style="font-weight:700;font-size:1.2rem;">${banner.subtitle}</p>` : ''}
+                        ${banner.description ? `<p>${banner.description}</p>` : ''}
+                        ${banner.cta_text ? `
+                            <div class="preview-cta" style="background:${banner.badge_color || '#FF5722'};color:white;">
+                                ${banner.cta_text}
+                                ${banner.discount_value ? ` ${banner.discount_type === 'percentage' ? `(${banner.discount_value}% OFF)` : `(₦${banner.discount_value} OFF)`}` : ''}
+                            </div>
+                        ` : ''}
+                        ${banner.image_url ? `<div style="margin-top:20px;opacity:0.1;font-size:6rem;text-align:right;">🖼️</div>` : ''}
+                    </div>
+                `;
+                bannerPreviewModal.classList.add('open');
+            }
+
+            function populateBannerCategorySelect() {
+                const select = document.getElementById('b-categories');
+                select.innerHTML = categories.map(c => `
+                    <option value="${c.id}">${c.name}</option>
+                `).join('');
+            }
+
+            async function loadBannerProductOptions() {
+                try {
+                    const response = await fetch(API.products);
+                    const products = await response.json();
+                    const select = document.getElementById('b-product-id');
+                    select.innerHTML = `
+                        <option value="">Select product...</option>
+                        ${products.map(p => `
+                            <option value="${p.id}">${p.name} (₦${p.price})</option>
+                        `).join('')}
+                    `;
+                } catch (error) {
+                    console.error('Error loading products for banner:', error);
+                }
+            }
+
+            // ─── RENDER PRODUCTS ───
+            function renderProducts() {
+                const search = productSearch.value.toLowerCase().trim();
+                let filtered = products;
+                if (search) {
+                    filtered = filtered.filter(p =>
+                        p.name.toLowerCase().includes(search) ||
+                        p.tag.toLowerCase().includes(search)
+                    );
+                }
+                if (filtered.length === 0) {
+                    productsBody.innerHTML =
+                        `<tr><td colspan="5" class="empty-state"><i class="fa-regular fa-box"></i> No products found</td></tr>`;
+                    return;
+                }
+                productsBody.innerHTML = filtered.map(p => `
+                    <tr>
+                        <td>
+                            <div class="product-cell">
+                                <span class="emoji">${p.emoji || '🍽️'}</span>
+                                <div class="info">
+                                    <div class="name">${p.name}</div>
+                                    <div class="tag">${p.tag}</div>
+                                </div>
+                            </div>
+                        </td>
+                        <td><span class="tag-preview ${p.tagColor || 'primary'}">${p.tag}</span></td>
+                        <td>₦${Number(p.price).toLocaleString()}</td>
+                        <td><span class="stock-badge ${p.stock > 10 ? 'in-stock' : p.stock > 0 ? 'low-stock' : 'out-of-stock'}">${p.stock}</span></td>
+                        <td style="text-align:right;">
+                            <div class="actions-cell" style="justify-content:flex-end;">
+                                <button class="btn btn-primary btn-sm edit-product" data-id="${p.id}"><i class="fa-regular fa-pen-to-square"></i></button>
+                                <button class="btn btn-danger btn-sm delete-product" data-id="${p.id}"><i class="fa-regular fa-trash-can"></i></button>
+                            </div>
+                        </td>
+                    </tr>
+                `).join('');
+
+                document.querySelectorAll('.edit-product').forEach(btn => {
+                    btn.addEventListener('click', () => editProduct(btn.dataset.id));
+                });
+                document.querySelectorAll('.delete-product').forEach(btn => {
+                    btn.addEventListener('click', () => deleteProduct(btn.dataset.id));
+                });
+            }
+
+            // ─── RENDER INVENTORY ───
+            function renderInventory() {
+                const view = document.querySelector('#inventory-view-toggle .active')?.dataset.view || 'all';
+                let filtered = [...products];
+                if (view === 'low') filtered = filtered.filter(p => p.stock > 0 && p.stock <= 10);
+                if (view === 'out') filtered = filtered.filter(p => p.stock === 0);
+
+                if (filtered.length === 0) {
+                    inventoryBody.innerHTML =
+                        `<tr><td colspan="5" class="empty-state"><i class="fa-regular fa-box"></i> No items in this view</td></tr>`;
+                    return;
+                }
+                inventoryBody.innerHTML = filtered.map(p => {
+                    const status = p.stock > 10 ? 'In Stock' : p.stock > 0 ? 'Low Stock' : 'Out of Stock';
+                    const badge = p.stock > 10 ? 'in-stock' : p.stock > 0 ? 'low-stock' : 'out-of-stock';
+                    return `
+                        <tr>
+                            <td>
+                                <div class="product-cell">
+                                    <span class="emoji">${p.emoji || '🍽️'}</span>
+                                    <div class="info">
+                                        <div class="name">${p.name}</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td>${p.tag}</td>
+                            <td><strong>${p.stock}</strong></td>
+                            <td><span class="stock-badge ${badge}">${status}</span></td>
+                            <td style="text-align:right;">
+                                <button class="btn btn-primary btn-sm adjust-stock" data-id="${p.id}" data-current="${p.stock}"><i class="fa-solid fa-pen"></i> Adjust</button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+
+                document.querySelectorAll('.adjust-stock').forEach(btn => {
+                    btn.addEventListener('click', () => adjustStock(btn.dataset.id, parseInt(btn.dataset.current)));
+                });
+            }
+
+            // ─── RENDER ORDERS ───
+            function renderOrders() {
+                const search = orderSearch.value.toLowerCase().trim();
+                let filtered = orders;
+                if (search) {
+                    filtered = filtered.filter(o =>
+                        (o.customerName || '').toLowerCase().includes(search) ||
+                        (o.paymentReference || '').toLowerCase().includes(search)
+                    );
+                }
+                if (filtered.length === 0) {
+                    ordersBody.innerHTML =
+                        `<tr><td colspan="7" class="empty-state"><i class="fa-regular fa-receipt"></i> No orders found</td></tr>`;
+                    return;
+                }
+                ordersBody.innerHTML = filtered.map(o => `
+                    <tr>
+                        <td><code style="background:#f0f0f0;padding:2px 8px;border-radius:4px;font-size:0.75rem;">${o.paymentReference || o.id}</code></td>
+                        <td><strong>${o.customerName || 'N/A'}</strong><br><span style="font-size:0.7rem;color:var(--text-muted);">${o.customerPhone || ''}</span></td>
+                        <td>${o.itemCount || 0} items</td>
+                        <td>₦${Number(o.total || 0).toLocaleString()}</td>
+                        <td><span class="status-badge ${o.status || 'pending'}">${o.status || 'pending'}</span></td>
+                        <td style="font-size:0.75rem;color:var(--text-muted);">${o.createdAt ? new Date(o.createdAt).toLocaleDateString() : '-'}</td>
+                        <td style="text-align:right;">
+                            <button class="btn btn-primary btn-sm view-order" data-id="${o.id}"><i class="fa-regular fa-eye"></i></button>
+                            <button class="btn btn-sm ${o.status === 'completed' ? 'btn-success' : 'btn-outline'} update-order-status" data-id="${o.id}" data-status="${o.status || 'pending'}"><i class="fa-solid fa-rotate"></i></button>
+                        </td>
+                    </tr>
+                `).join('');
+
+                document.querySelectorAll('.view-order').forEach(btn => {
+                    btn.addEventListener('click', () => viewOrder(btn.dataset.id));
+                });
+                document.querySelectorAll('.update-order-status').forEach(btn => {
+                    btn.addEventListener('click', () => updateOrderStatus(btn.dataset.id, btn.dataset.status));
+                });
+            }
+
+            // ─── RENDER CATEGORIES ───
+            function renderCategories() {
+                if (categories.length === 0) {
+                    categoriesBody.innerHTML =
+                        `<tr><td colspan="3" class="empty-state"><i class="fa-regular fa-tags"></i> No categories</td></tr>`;
+                    return;
+                }
+                categoriesBody.innerHTML = categories.map(c => {
+                    const count = products.filter(p => p.tag === c.name).length;
+                    return `
+                        <tr>
+                            <td><strong>${c.name}</strong></td>
+                            <td>${count} products</td>
+                            <td style="text-align:right;">
+                                <button class="btn btn-primary btn-sm edit-category" data-id="${c.id}"><i class="fa-regular fa-pen-to-square"></i></button>
+                                <button class="btn btn-danger btn-sm delete-category" data-id="${c.id}"><i class="fa-regular fa-trash-can"></i></button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+
+                document.querySelectorAll('.edit-category').forEach(btn => {
+                    btn.addEventListener('click', () => editCategory(btn.dataset.id));
+                });
+                document.querySelectorAll('.delete-category').forEach(btn => {
+                    btn.addEventListener('click', () => deleteCategory(btn.dataset.id));
+                });
+            }
+
+            function populateCategorySelect() {
+                const current = pCategory.value;
+                pCategory.innerHTML = '<option value="">Select category...</option>' +
+                    categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+                if (current) pCategory.value = current;
+            }
+
+            // ─── PRODUCT CRUD ───
+            function openProductModal(product = null) {
+                productModal.classList.add('open');
+                if (product) {
+                    productModalTitle.textContent = 'Edit Product';
+                    productModalSave.textContent = 'Update';
+                    productId.value = product.id;
+                    pName.value = product.name;
+                    pDescription.value = product.description || '';
+                    pPrice.value = product.price;
+                    pStock.value = product.stock || 0;
+                    pCategory.value = product.tag || '';
+                    pEmoji.value = product.emoji || '';
+                    pImage.value = product.image || '';
+                    pTagcolor.value = product.tagColor || 'primary';
+                } else {
+                    productModalTitle.textContent = 'Add Product';
+                    productModalSave.textContent = 'Save';
+                    productId.value = '';
+                    pName.value = '';
+                    pDescription.value = '';
+                    pPrice.value = '';
+                    pStock.value = '';
+                    pCategory.value = '';
+                    pEmoji.value = '';
+                    pImage.value = '';
+                    pTagcolor.value = 'primary';
+                }
+            }
+
+            function closeProductModal() {
+                productModal.classList.remove('open');
+            }
+
+            async function saveProduct(e) {
+                e.preventDefault();
+                const data = {
+                    name: pName.value.trim(),
+                    description: pDescription.value.trim(),
+                    price: parseFloat(pPrice.value),
+                    stock: parseInt(pStock.value) || 0,
+                    tag: pCategory.value,
+                    emoji: pEmoji.value.trim() || '🍽️',
+                    image: pImage.value.trim() || '',
+                    tagColor: pTagcolor.value,
+                };
+                const id = productId.value;
+                try {
+                    let result;
+                    if (id) {
+                        result = await fetchJSON(`${API.products}/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+                        showToast('Product updated successfully!');
+                    } else {
+                        result = await fetchJSON(API.products, { method: 'POST', body: JSON.stringify(data) });
+                        showToast('Product added successfully!');
+                    }
+                    closeProductModal();
+                    await loadAllData();
+                } catch (err) {
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            async function editProduct(id) {
+                const product = products.find(p => p.id == id);
+                if (product) openProductModal(product);
+            }
+
+            async function deleteProduct(id) {
+                if (!confirm('Delete this product permanently?')) return;
+                try {
+                    await fetchJSON(`${API.products}/${id}`, { method: 'DELETE' });
+                    showToast('Product deleted.');
+                    await loadAllData();
+                } catch (err) {
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            // ─── ADJUST STOCK ───
+            async function adjustStock(id, current) {
+                const newStock = prompt(`Current stock: ${current}\nEnter new stock quantity:`, current);
+                if (newStock === null) return;
+                const val = parseInt(newStock);
+                if (isNaN(val) || val < 0) {
+                    showToast('Please enter a valid number.', 'fa-solid fa-exclamation-circle');
+                    return;
+                }
+                try {
+                    await fetchJSON(`${API.products}/${id}`, {
+                        method: 'PUT',
+                        body: JSON.stringify({ stock: val })
+                    });
+                    showToast(`Stock updated to ${val}`);
+                    await loadAllData();
+                } catch (err) {
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            // ─── CATEGORY CRUD ───
+            function openCategoryModal(category = null) {
+                categoryModal.classList.add('open');
+                if (category) {
+                    categoryModalTitle.textContent = 'Edit Category';
+                    categoryId.value = category.id;
+                    cName.value = category.name;
+                } else {
+                    categoryModalTitle.textContent = 'Add Category';
+                    categoryId.value = '';
+                    cName.value = '';
+                }
+            }
+
+            function closeCategoryModal() {
+                categoryModal.classList.remove('open');
+            }
+
+            async function saveCategory(e) {
+                e.preventDefault();
+                const data = { name: cName.value.trim() };
+                const id = categoryId.value;
+                try {
+                    if (id) {
+                        await fetchJSON(`${API.categories}/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+                        showToast('Category updated!');
+                    } else {
+                        await fetchJSON(API.categories, { method: 'POST', body: JSON.stringify(data) });
+                        showToast('Category added!');
+                    }
+                    closeCategoryModal();
+                    await loadAllData();
+                } catch (err) {
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            async function editCategory(id) {
+                const cat = categories.find(c => c.id == id);
+                if (cat) openCategoryModal(cat);
+            }
+
+            async function deleteCategory(id) {
+                const cat = categories.find(c => c.id == id);
+                const count = products.filter(p => p.tag === cat?.name).length;
+                if (count > 0) {
+                    if (!confirm(`Category "${cat?.name}" has ${count} products. Delete anyway?`)) return;
+                } else {
+                    if (!confirm(`Delete category "${cat?.name}"?`)) return;
+                }
+                try {
+                    await fetchJSON(`${API.categories}/${id}`, { method: 'DELETE' });
+                    showToast('Category deleted.');
+                    await loadAllData();
+                } catch (err) {
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            // ─── ORDERS ───
+            async function viewOrder(id) {
+                try {
+                    const data = await fetchJSON(`${API.orders}/${id}`);
+                    orderDetailBody.innerHTML = `
+                        <div style="margin-bottom:16px;">
+                            <p><strong>Order ID:</strong> <code>${data.paymentReference || data.id}</code></p>
+                            <p><strong>Customer:</strong> ${data.customerName || 'N/A'}</p>
+                            <p><strong>Phone:</strong> ${data.customerPhone || 'N/A'}</p>
+                            <p><strong>Status:</strong> <span class="status-badge ${data.status || 'pending'}">${data.status || 'pending'}</span></p>
+                            <p><strong>Date:</strong> ${data.createdAt ? new Date(data.createdAt).toLocaleString() : '-'}</p>
+                            ${data.deliveryMethod ? `<p><strong>Delivery:</strong> ${data.deliveryMethod}</p>` : ''}
+                            ${data.deliveryAddress ? `<p><strong>Address:</strong> ${data.deliveryAddress}</p>` : ''}
+                            ${data.preferredTime ? `<p><strong>Preferred Time:</strong> ${data.preferredTime}</p>` : ''}
+                            ${data.orderNotes ? `<p><strong>Notes:</strong> ${data.orderNotes}</p>` : ''}
+                        </div>
+                        <hr style="border-color:#f0f0f0;margin:12px 0;">
+                        <div style="margin:12px 0;">
+                            <strong>Items:</strong>
+                            ${(data.items || []).map(item => `
+                                <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed #f0f0f0;">
+                                    <span>${item.name} × ${item.qty}</span>
+                                    <span>₦${Number(item.price * item.qty).toLocaleString()}</span>
+                                </div>
+                            `).join('') || '<p style="color:var(--text-muted);">No items</p>'}
+                        </div>
+                        <hr style="border-color:#f0f0f0;margin:12px 0;">
+                        <div style="display:flex;justify-content:space-between;font-size:1.1rem;font-weight:800;padding-top:8px;">
+                            <span>Total</span>
+                            <span style="color:var(--primary);">₦${Number(data.total || 0).toLocaleString()}</span>
+                        </div>
+                    `;
+                    orderModal.classList.add('open');
+                } catch (err) {
+                    showToast('Error loading order: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            async function updateOrderStatus(id, currentStatus) {
+                const statuses = ['pending', 'confirmed', 'preparing', 'ready', 'completed', 'cancelled'];
+                const currentIdx = statuses.indexOf(currentStatus);
+                const nextIdx = (currentIdx + 1) % statuses.length;
+                const newStatus = statuses[nextIdx];
+                if (!confirm(`Change order status from "${currentStatus}" to "${newStatus}"?`)) return;
+                try {
+                    await fetchJSON(`${API.orders}/${id}/status`, {
+                        method: 'PATCH',
+                        body: JSON.stringify({ status: newStatus })
+                    });
+                    showToast(`Status updated to ${newStatus}`);
+                    await loadOrders();
+                    await loadStats();
+                } catch (err) {
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            function closeOrderModal() {
+                orderModal.classList.remove('open');
+            }
+
+            // ─── TAB SWITCHING ───
+            function switchTab(tab) {
+                currentTab = tab;
+                tabs.forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.tab === tab);
+                });
+                Object.keys(panels).forEach(key => {
+                    panels[key].classList.toggle('active', key === tab);
+                });
+                if (tab === 'inventory') renderInventory();
+                if (tab === 'orders') renderOrders();
+                if (tab === 'categories') renderCategories();
+                if (tab === 'banners') loadBanners();
+            }
+
+            // ─── EVENT LISTENERS ───
+            tabs.forEach(btn => {
+                btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+            });
+
+            productSearch.addEventListener('input', renderProducts);
+            orderSearch.addEventListener('input', renderOrders);
+
+            document.getElementById('add-product-btn').addEventListener('click', () => openProductModal(null));
+            document.getElementById('product-modal-close').addEventListener('click', closeProductModal);
+            document.getElementById('product-modal-cancel').addEventListener('click', closeProductModal);
+            productForm.addEventListener('submit', saveProduct);
+            productModal.addEventListener('click', (e) => { if (e.target === productModal) closeProductModal(); });
+
+            document.getElementById('add-category-btn').addEventListener('click', () => openCategoryModal(null));
+            document.getElementById('category-modal-close').addEventListener('click', closeCategoryModal);
+            document.getElementById('category-modal-cancel').addEventListener('click', closeCategoryModal);
+            categoryForm.addEventListener('submit', saveCategory);
+            categoryModal.addEventListener('click', (e) => { if (e.target === categoryModal) closeCategoryModal(); });
+
+            document.getElementById('order-modal-close').addEventListener('click', closeOrderModal);
+            orderModal.addEventListener('click', (e) => { if (e.target === orderModal) closeOrderModal(); });
+
+            refreshBtn.addEventListener('click', () => {
+                showToast('Refreshing...', 'fa-solid fa-rotate fa-spin');
+                loadAllData().then(() => showToast('Data refreshed!'));
+            });
+
+            // Inventory view toggle
+            document.querySelectorAll('#inventory-view-toggle button').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    document.querySelectorAll('#inventory-view-toggle button').forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    renderInventory();
+                });
+            });
+
+            // Banner view toggle
+            document.querySelectorAll('#banner-view-toggle button').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    document.querySelectorAll('#banner-view-toggle button').forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    currentView = this.dataset.view;
+                    currentPage = 1;
+                    loadBanners();
+                });
+            });
+
+            // Banner modal events
+            document.getElementById('add-banner-btn').addEventListener('click', () => openBannerModal(null));
+            document.getElementById('banner-modal-close').addEventListener('click', closeBannerModal);
+            document.getElementById('banner-modal-cancel').addEventListener('click', closeBannerModal);
+            bannerForm.addEventListener('submit', saveBanner);
+            bannerModal.addEventListener('click', (e) => { if (e.target === bannerModal) closeBannerModal(); });
+
+            document.getElementById('banner-preview-close').addEventListener('click', () => {
+                bannerPreviewModal.classList.remove('open');
+            });
+            bannerPreviewModal.addEventListener('click', (e) => {
+                if (e.target === bannerPreviewModal) bannerPreviewModal.classList.remove('open');
+            });
+
+            // CTA type change in banner modal
+            document.getElementById('b-cta-type').addEventListener('change', function() {
+                document.getElementById('b-product-group').style.display = this.value === 'product' ? 'block' : 'none';
+            });
+
+            // Image upload preview
+            document.getElementById('b-image-upload').addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        document.getElementById('b-image').value = event.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                }
+            });
+
+            // Pagination
+            document.getElementById('prev-page').addEventListener('click', () => {
+                if (currentPage > 1) {
+                    currentPage--;
+                    loadBanners();
+                }
+            });
+            document.getElementById('next-page').addEventListener('click', () => {
+                if (currentPage < totalPages) {
+                    currentPage++;
+                    loadBanners();
+                }
+            });
+
+            // ─── KEYBOARD SHORTCUTS ───
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    if (productModal.classList.contains('open')) closeProductModal();
+                    if (categoryModal.classList.contains('open')) closeCategoryModal();
+                    if (orderModal.classList.contains('open')) closeOrderModal();
+                    if (bannerModal.classList.contains('open')) closeBannerModal();
+                    if (bannerPreviewModal.classList.contains('open')) bannerPreviewModal.classList.remove('open');
+                }
+            });
+
+            // ─── LOAD BANNER PRODUCT OPTIONS ───
+            loadBannerProductOptions();
+
+            // ─── INIT ───
+            loadAllData();
+
+            console.log('📦 Hot Portion Admin Panel loaded');
+            console.log('🔧 API endpoints: /api/products, /api/categories, /api/orders, /api/stats, /api/v1/banners');
+
+        })();
+    </script>
+
+</body>
+</html>
