@@ -7,13 +7,14 @@ import base64
 import logging
 import time
 import re
+import contextvars
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
-from fastapi import FastAPI, HTTPException, Depends, Query, status, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException, Depends, Query, status, BackgroundTasks, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -73,7 +74,14 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# ---------- LOGGING ----------
+# ---------- LOGGING (ContextVars for Correlation ID) ----------
+_correlation_id_var = contextvars.ContextVar("correlation_id", default="unknown")
+
+class CorrelationFilter(logging.Filter):
+    def filter(self, record):
+        record.correlation_id = _correlation_id_var.get()
+        return True
+
 class JSONFormatter(logging.Formatter):
     def format(self, record):
         log_obj = {
@@ -93,7 +101,12 @@ handler.setFormatter(JSONFormatter())
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logger.addHandler(handler)
-logging.getLogger("uvicorn.access").handlers = [handler]
+logger.addFilter(CorrelationFilter())  # ✅ Fix: Thread-safe correlation ID
+
+# Also apply to Uvicorn access logs
+uvicorn_logger = logging.getLogger("uvicorn.access")
+uvicorn_logger.handlers = [handler]
+uvicorn_logger.addFilter(CorrelationFilter())
 
 # ---------- DATABASE ----------
 _executor = ThreadPoolExecutor(max_workers=settings.MAX_DB_THREADS)
@@ -136,8 +149,10 @@ class OrderItem(BaseModel):
     price: int
 
 class OrderCreate(BaseModel):
+    # ✅ Fix: Added customer_email (required for Brevo)
     payment_reference: str
     customer_name: str
+    customer_email: str
     customer_phone: str
     total: int
     status: Optional[str] = "pending"
@@ -243,6 +258,17 @@ class AIService:
         else:
             logger.warning("OpenAI client not available")
 
+    # ✅ Fix: Normalize leetspeak to catch bypass attempts
+    def _normalize(self, text: str) -> str:
+        text = text.lower()
+        replacements = {
+            '3': 'e', '1': 'i', '4': 'a', '0': 'o',
+            '@': 'a', '$': 's', '5': 's'
+        }
+        for old, new in replacements.items():
+            text = text.replace(old, new)
+        return text
+
     def _guard_input(self, text: str) -> bool:
         patterns = [
             r"ignore (?:all )?previous instructions",
@@ -255,14 +281,18 @@ class AIService:
             if re.search(p, text, re.IGNORECASE):
                 logger.warning(f"Prompt injection attempt blocked: {text[:50]}...")
                 return False
-        words = set(re.findall(r'\b\w+\b', text.lower()))
+
+        # Normalize and check for banned words
+        norm_text = self._normalize(text)
+        words = set(re.findall(r'\b\w+\b', norm_text))
         if words.intersection(self.banned_words):
             logger.warning(f"Banned word detected in input: {text[:50]}...")
             return False
         return True
 
     def _guard_output(self, text: str) -> bool:
-        words = set(re.findall(r'\b\w+\b', text.lower()))
+        norm_text = self._normalize(text)
+        words = set(re.findall(r'\b\w+\b', norm_text))
         if words.intersection(self.banned_words):
             logger.warning(f"Banned word detected in output: {text[:50]}...")
             return False
@@ -304,7 +334,6 @@ class AIService:
         if not self._guard_input(msg):
             return {"response": "I cannot process that request.", "provider": "guardrail", "model": "blocked"}
 
-        # Build list of available providers
         available = []
         if self.groq_client:
             available.append(("groq", self.query_groq, settings.GROQ_MODEL))
@@ -316,20 +345,16 @@ class AIService:
         if not available:
             return {"response": "No AI provider available.", "provider": "error", "model": "none"}
 
-        # Order: primary first, then fallback (if different), then rest
         ordered = []
-        # Add primary
         for p in available:
             if p[0] == settings.AI_PRIMARY:
                 ordered.append(p)
                 break
-        # Add fallback if different from primary
         if settings.AI_FALLBACK != settings.AI_PRIMARY:
             for p in available:
                 if p[0] == settings.AI_FALLBACK and p not in ordered:
                     ordered.append(p)
                     break
-        # Add any remaining providers
         for p in available:
             if p not in ordered:
                 ordered.append(p)
@@ -352,6 +377,7 @@ class BrevoIntegration:
         self.base_url = "https://api.brevo.com/v3"
         self.sender = {"email": settings.BREVO_SENDER_EMAIL, "name": settings.BREVO_SENDER_NAME}
         self._session = None
+        self.healthy = False
 
     async def _get_session(self):
         if self._session is None or self._session.closed:
@@ -366,9 +392,13 @@ class BrevoIntegration:
         async with sess.get(f"{self.base_url}/account", headers=headers) as resp:
             if resp.status != 200:
                 raise RuntimeError(f"Brevo failed: {resp.status}")
+        self.healthy = True
         logger.info("Brevo ready")
 
     async def send_order_confirmation(self, data: Dict) -> bool:
+        if not self.healthy:
+            logger.warning("Brevo unhealthy, skipping email")
+            return False
         try:
             items_html = "".join(
                 f"<tr><td>{i['name']}</td><td>{i['qty']}</td><td>₦{i['price']*i['qty']:,}</td></tr>"
@@ -389,7 +419,7 @@ class BrevoIntegration:
             """
             payload = {
                 "sender": self.sender,
-                "to": [{"email": data.get("customer_email", "customer@example.com"), "name": data["customer_name"]}],
+                "to": [{"email": data["customer_email"], "name": data["customer_name"]}],
                 "subject": f"Order #{data['payment_reference']}",
                 "htmlContent": html,
             }
@@ -397,7 +427,7 @@ class BrevoIntegration:
             sess = await self._get_session()
             async with sess.post(f"{self.base_url}/smtp/email", json=payload, headers=headers) as resp:
                 if resp.status == 201:
-                    logger.info(f"Email sent to {data.get('customer_email')}")
+                    logger.info(f"Email sent to {data['customer_email']}")
                     return True
                 logger.error(f"Email failed: {await resp.text()}")
                 return False
@@ -415,6 +445,7 @@ class MonnifyIntegration:
         self._token = None
         self._token_expiry = None
         self._session = None
+        self.healthy = False
 
     async def _get_session(self):
         if self._session is None or self._session.closed:
@@ -424,6 +455,7 @@ class MonnifyIntegration:
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=5))
     async def initialize(self):
         await self._get_access_token()
+        self.healthy = True
         logger.info("Monnify ready")
 
     async def _get_access_token(self) -> str:
@@ -441,6 +473,8 @@ class MonnifyIntegration:
             raise RuntimeError(f"Monnify auth failed: {data}")
 
     async def handle_webhook(self, payload: dict, signature: str) -> Dict:
+        if not self.healthy:
+            return {"valid": False, "error": "Monnify not ready"}
         computed = hmac.new(self.secret_key.encode(), json.dumps(payload).encode(), hashlib.sha512).hexdigest()
         if computed != signature:
             return {"valid": False, "error": "Invalid signature"}
@@ -493,14 +527,46 @@ async def get_cached_stats():
     _stats_cache["timestamp"] = now
     return result
 
+def invalidate_stats_cache():
+    """✅ Fix: Force cache refresh on new orders."""
+    _stats_cache["timestamp"] = 0
+
+# ---------- DATABASE SETUP (Indexes) ----------
+async def setup_database():
+    """✅ Fix: Ensure critical indexes exist for performance."""
+    db = get_supabase()
+    try:
+        queries = [
+            "CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at DESC);",
+            "CREATE INDEX IF NOT EXISTS idx_banners_active_display ON banners(is_active, display_order);",
+            "CREATE INDEX IF NOT EXISTS idx_banners_dates ON banners(start_date, end_date);"
+        ]
+        for q in queries:
+            # Note: Supabase RPC 'exec_sql' must be enabled. If not, this gracefully fails.
+            await execute_db(db.rpc("exec_sql", {"query": q}))
+        logger.info("Database indexes ensured.")
+    except Exception as e:
+        logger.warning(f"Could not create indexes (RPC may be disabled): {e}")
+
 # ---------- LIFESPAN ----------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Hot Portion Grill - Full Monolith + AI")
-    await asyncio.gather(get_brevo().initialize(), get_monnify().initialize())
-    # AI service is initialized lazily; we can pre-initialize it here if desired
-    # but we'll let it initialize on first use.
-    logger.info("All services ready")
+
+    # ✅ Fix: Fault-tolerant initialization (don't crash if third-party is down)
+    init_results = await asyncio.gather(
+        get_brevo().initialize(),
+        get_monnify().initialize(),
+        return_exceptions=True
+    )
+    for i, result in enumerate(init_results):
+        if isinstance(result, Exception):
+            logger.error(f"Init service {i} failed: {result}")
+
+    # Setup DB indexes asynchronously (non-blocking)
+    asyncio.create_task(setup_database())
+
+    logger.info("All services ready (degraded mode allowed for external APIs)")
     yield
     logger.info("Shutting down...")
     if _brevo and _brevo._session:
@@ -512,32 +578,29 @@ async def lifespan(app: FastAPI):
 # ---------- FASTAPI APP ----------
 app = FastAPI(title="Hot Portion Grill", version="1.0.0", lifespan=lifespan, docs_url="/docs")
 
+# ✅ Fix: Correlation ID via ContextVars (Thread-safe)
 @app.middleware("http")
 async def add_correlation_id(request: Request, call_next):
-    cid = request.headers.get("X-Correlation-ID", str(int(time.time() * 1000)))
-    request.state.correlation_id = cid
-    old = logging.getLogRecordFactory()
-    def factory(*args, **kwargs):
-        rec = old(*args, **kwargs)
-        rec.correlation_id = cid
-        return rec
-    logging.setLogRecordFactory(factory)
-    resp = await call_next(request)
-    resp.headers["X-Correlation-ID"] = cid
-    return resp
+    cid = request.headers.get("X-Correlation-ID", f"{int(time.time() * 1000)}-{id(request)}")
+    token = _correlation_id_var.set(cid)
+    try:
+        response = await call_next(request)
+        response.headers["X-Correlation-ID"] = cid
+        return response
+    finally:
+        _correlation_id_var.reset(token)
 
-# ---------- GLOBAL EXCEPTION HANDLER (structured) ----------
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    correlation_id = getattr(request.state, "correlation_id", "unknown")
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    cid = _correlation_id_var.get()
+    logger.error(f"Unhandled: {exc}", exc_info=True)
     return JSONResponse(
         status_code=500,
         content={
             "type": "internal-server-error",
             "title": "An unexpected error occurred",
             "status": 500,
-            "trace_id": correlation_id,
+            "trace_id": cid,
             "detail": str(exc) if settings.DEBUG else None
         }
     )
@@ -729,6 +792,11 @@ async def get_order(oid: int):
 async def create_order(order: OrderCreate, bg: BackgroundTasks):
     r = await execute_db(get_supabase().table("orders").insert(order.dict()))
     if not r.data: raise HTTPException(400, "Failed")
+    
+    # ✅ Fix: Invalidate stats cache so dashboard updates instantly
+    invalidate_stats_cache()
+    
+    # Send email asynchronously
     bg.add_task(get_brevo().send_order_confirmation, r.data[0])
     return r.data[0]
 
@@ -742,7 +810,7 @@ async def update_order_status(oid: int, upd: OrderStatusUpdate):
 async def get_stats():
     return await get_cached_stats()
 
-# Banners (FULL: GET all, GET active, GET by id, POST, PUT, DELETE, PATCH toggle, POST duplicate, PATCH reorder)
+# Banners
 @app.get("/api/v1/banners", response_model=BannerResponse)
 async def list_banners(
     is_active: Optional[bool] = Query(None), is_hero: Optional[bool] = Query(None),
@@ -785,9 +853,12 @@ async def duplicate_banner(banner_id: int):
 async def reorder_banners(banner_ids: List[int]):
     return await BannerService().reorder_banners(banner_ids)
 
-# Webhook
+# ✅ FIXED Webhook (Header is now correctly read)
 @app.post("/api/v1/webhooks/monnify")
-async def monnify_webhook(payload: dict, x_signature: Optional[str] = Depends(lambda: None)):
+async def monnify_webhook(
+    payload: dict,
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+):
     result = await get_monnify().handle_webhook(payload, x_signature)
     if not result["valid"]:
         raise HTTPException(400, "Invalid signature")
@@ -797,7 +868,7 @@ async def monnify_webhook(payload: dict, x_signature: Optional[str] = Depends(la
             await execute_db(get_supabase().table("orders").update({"status": "paid"}).eq("payment_reference", ref))
     return {"status": "received"}
 
-# ---------- AI ENDPOINTS (with Dependency Injection) ----------
+# ---------- AI ENDPOINTS ----------
 @app.post("/api/ai/chat", response_model=AIChatResponse)
 async def chat_with_ai(req: AIChatRequest, ai_service: AIService = Depends(get_ai_service)):
     result = await ai_service.chat(req.message)
