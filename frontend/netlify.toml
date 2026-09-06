@@ -1,0 +1,42 @@
+# netlify.toml
+[build]
+  publish = "."          # Publish the current directory (frontend/)
+  command = "echo 'No build required for static PWA'"
+
+# ─── PROXY CONFIGURATION ───
+# Any request to /api/* on Netlify gets proxied to your fly.io backend
+[[redirects]]
+  from = "/api/*"
+  to = "https://hotportion-api.fly.dev/api/:splat"
+  status = 200
+  force = true
+
+# ─── SPA FALLBACK ───
+# If a route isn't found, serve index.html (for PWA routing)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# ─── HEADERS FOR PWA & SEO ───
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/manifest.json"
+  [headers.values]
+    Cache-Control = "public, max-age=86400"
+
+[[headers]]
+  for = "*.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
