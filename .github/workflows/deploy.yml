@@ -159,6 +159,19 @@ jobs:
       - name: Install Capacitor
         run: npm install -g @capacitor/cli
 
+build-ios:
+  runs-on: macos-latest          # ← Cloud Mac
+  steps:
+    - uses: actions/checkout@v4
+    - run: npm install -g @capacitor/cli
+    - run: npx cap sync ios
+    - run: cd ios/App && pod install
+    - run: xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -archivePath App.xcarchive archive
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ios-app
+        path: ./ios/App.xcarchive
+
       - name: Build iOS
         run: |
           npm install
