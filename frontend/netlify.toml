@@ -1,17 +1,12 @@
-# netlify.toml
-[build]
-  publish = "."          # Publish the current directory (frontend/)
-  command = "echo 'No build required for static PWA'"
-
 [build]
   publish = "."
-  command = "cd ../seo && npm install && npm run prerender && cp -r dist/* ../frontend/"
+  command = "echo 'No build required for static PWA'"
 
 # ─── PROXY CONFIGURATION ───
 # Any request to /api/* on Netlify gets proxied to your fly.io backend
 [[redirects]]
   from = "/api/*"
-  to = "https://hotportion-api.fly.dev/api/:splat"
+  to = "https://hotportion.fly.dev/api/:splat"
   status = 200
   force = true
 
