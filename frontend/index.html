@@ -2682,6 +2682,9 @@
                 initHeroDots();
                 startHeroAutoplay();
 
+                // ─── Handle Monnify redirect after everything is loaded ───
+                handlePaymentRedirect();
+
                 console.log(`🍔 Hot Portion Grill — ${products.length} meals, ${categories.length} categories`);
             }
 
@@ -3112,7 +3115,7 @@
             receiptClose.addEventListener('click', closeReceipt);
             receiptOverlay.addEventListener('click', function(e) { if (e.target === this) closeReceipt(); });
 
-            // ─── CHECKOUT (Backend API) ───
+            // ─── CHECKOUT (Backend API + Monnify Redirect) ───
             async function checkout() {
                 const items = Object.values(cart);
                 if (items.length === 0) {
@@ -3150,7 +3153,7 @@
 
                 const btn = checkoutBtn;
                 const originalText = btn.innerHTML;
-                btn.innerHTML = '<span class="loader-small"></span> Processing...';
+                btn.innerHTML = '<span class="loader-small"></span> Redirecting to payment...';
                 btn.disabled = true;
 
                 try {
@@ -3166,15 +3169,61 @@
                     }
 
                     const result = await response.json();
-                    console.log('✅ Order created:', result);
-                    showReceipt(orderPayload);
+                    console.log('✅ Order created, redirecting to Monnify:', result);
+
+                    // ─── REDIRECT TO MONNIFY PAYMENT PAGE ───
+                    if (result.checkout_url) {
+                        // Store order data temporarily so we can show receipt after redirect
+                        sessionStorage.setItem('pending_order', JSON.stringify(result));
+                        window.location.href = result.checkout_url;
+                    } else {
+                        // Fallback: if no checkout_url, show toast
+                        showToast('Payment init failed. Please try again.', 'fa-solid fa-exclamation-circle');
+                        btn.innerHTML = originalText;
+                        btn.disabled = false;
+                    }
 
                 } catch (err) {
                     console.error('🔥 Checkout error:', err);
                     showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
-                } finally {
                     btn.innerHTML = originalText;
                     btn.disabled = false;
+                }
+            }
+
+            // ─── HANDLE MONNIFY REDIRECT ───
+            function handlePaymentRedirect() {
+                const urlParams = new URLSearchParams(window.location.search);
+                const transactionRef = urlParams.get('transactionReference');
+                const status = urlParams.get('status');
+
+                // If we have a transaction reference, it means Monnify redirected back
+                if (transactionRef) {
+                    // Retrieve the stored order from sessionStorage
+                    const storedOrder = sessionStorage.getItem('pending_order');
+                    if (storedOrder) {
+                        try {
+                            const orderData = JSON.parse(storedOrder);
+                            // Show receipt using the stored order data
+                            showReceipt(orderData);
+                            // Clear the cart
+                            cart = {};
+                            updateCartUI();
+                            // Clear sessionStorage
+                            sessionStorage.removeItem('pending_order');
+                            // Remove the query params from URL for cleaner UX
+                            window.history.replaceState({}, document.title, '/');
+                            showToast('Payment successful!', 'fa-solid fa-check-circle');
+                            return;
+                        } catch (e) {
+                            console.warn('Failed to parse stored order:', e);
+                        }
+                    }
+
+                    // If no stored order, show a generic success message
+                    showToast('Payment verified! Check your email for confirmation.', 'fa-solid fa-check-circle');
+                    // Remove query params
+                    window.history.replaceState({}, document.title, '/');
                 }
             }
 
@@ -3481,9 +3530,6 @@
             console.log('🔐 Monnify payment integration ready (simulated)');
             console.log('🤖 Context-aware AI assistant active');
             console.log('🎠 Hero slider dynamic – loaded from backend');
-
-            // ─── The SEO injection block has been moved inside initData() ───
-            // (The old block that ran before products were loaded has been removed)
 
         })();
     </script>
