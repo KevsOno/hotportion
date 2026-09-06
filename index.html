@@ -2372,6 +2372,7 @@
             }
             window.addEventListener('load', setHeaderHeight);
             window.addEventListener('resize', setHeaderHeight);
+            
 
             // ─── STATE ───
             let products = [];
@@ -2477,6 +2478,11 @@
                     return false;
                 }
             }
+            // Inside your existing product load logic:
+if (window.__injectProductSchemas) {
+    window.__injectProductSchemas(products);
+    window.__updateFeaturedItems(products);
+}
 
             // ─── FALLBACK: hardcoded products (used if API fails) ───
             function getFallbackProducts() {
