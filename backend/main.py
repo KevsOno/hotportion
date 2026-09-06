@@ -22,59 +22,50 @@ from supabase import create_client, Client
 from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-# ---------- AI IMPORTS ----------
-import openai
-import google.generativeai as genai
+# ---------- AI Libraries ----------
+try:
+    import groq
+except ImportError:
+    groq = None
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
+try:
+    import openai
+except ImportError:
+    openai = None
 
-# ---------- LOAD ENV ----------
 load_dotenv()
 
 # ---------- CONFIGURATION ----------
 class Settings(BaseSettings):
-    # Supabase
     SUPABASE_URL: str = Field(..., min_length=1)
     SUPABASE_SERVICE_KEY: str = Field(..., min_length=1)
-    
-    # Brevo
     BREVO_API_KEY: str = Field(..., min_length=1)
     BREVO_SENDER_EMAIL: str = Field(..., min_length=1)
     BREVO_SENDER_NAME: str = "Hot Portion Grill"
-    
-    # Monnify
     MONNIFY_API_KEY: str = Field(..., min_length=1)
     MONNIFY_SECRET_KEY: str = Field(..., min_length=1)
     MONNIFY_CONTRACT_CODE: str = Field(..., min_length=1)
     MONNIFY_BASE_URL: str = "https://sandbox.monnify.com"
-    
-    # AI – Groq (primary)
     GROQ_API_KEY: Optional[str] = None
-    GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
-    GROQ_MODEL: str = "gpt-oss-120"  # custom model name, adjust if needed
-    
-    # AI – Gemini (fallback)
     GEMINI_API_KEY: Optional[str] = None
+    OPENAI_API_KEY: Optional[str] = None
+    GROQ_MODEL: str = "mixtral-8x7b-32768"
     GEMINI_MODEL: str = "gemini-2.0-flash"
-    
-    # Moderation (optional)
-    OPENAI_API_KEY: Optional[str] = None  # for moderation endpoint
-    
-    # CORS
+    OPENAI_MODEL: str = "gpt-oss-120"
+    AI_PRIMARY: str = "groq"
+    AI_FALLBACK: str = "gemini"
     ALLOWED_ORIGINS: List[str] = [
         "https://your-netlify-site.netlify.app",
         "http://localhost:3000",
         "http://localhost:8000"
     ]
-    
-    # Performance
     MAX_DB_THREADS: int = 25
     STATS_CACHE_TTL_SECONDS: int = 10
-    
-    # AI safety
-    PROFANITY_BLOCKLIST: List[str] = [
-        "badword1", "badword2"  # extend as needed
-    ]
-    ENABLE_AI_GUARDRAILS: bool = True
-    
+    DEBUG: bool = False
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
@@ -104,44 +95,6 @@ logger.setLevel(logging.INFO)
 logger.addHandler(handler)
 logging.getLogger("uvicorn.access").handlers = [handler]
 
-# ---------- MIDDLEWARE ----------
-app = FastAPI(
-    title="Hot Portion Grill API",
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
-)
-
-@app.middleware("http")
-async def add_correlation_id(request: Request, call_next):
-    correlation_id = request.headers.get("X-Correlation-ID", str(int(time.time() * 1000)))
-    request.state.correlation_id = correlation_id
-    old_factory = logging.getLogRecordFactory()
-    def record_factory(*args, **kwargs):
-        record = old_factory(*args, **kwargs)
-        record.correlation_id = correlation_id
-        return record
-    logging.setLogRecordFactory(record_factory)
-    response = await call_next(request)
-    response.headers["X-Correlation-ID"] = correlation_id
-    return response
-
-# ---------- EXCEPTION HANDLER ----------
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    correlation_id = getattr(request.state, "correlation_id", "unknown")
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={
-            "type": "internal-server-error",
-            "title": "An unexpected error occurred",
-            "status": 500,
-            "trace_id": correlation_id,
-            "detail": str(exc)
-        }
-    )
-
 # ---------- DATABASE ----------
 _executor = ThreadPoolExecutor(max_workers=settings.MAX_DB_THREADS)
 _supabase_client: Optional[Client] = None
@@ -156,150 +109,398 @@ async def execute_db(query):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_executor, query.execute)
 
-# ---------- PYDANTIC MODELS ----------
-# (All existing models remain unchanged – omitted for brevity,
-#  but they are exactly as provided in the previous code.)
-# ... (copy all Product, Category, Order, Banner models here) ...
+# ---------- PYDANTIC MODELS (FULL) ----------
+class ProductBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+    price: int
+    stock: int = 0
+    tag: str
+    emoji: str = "🍽️"
+    image: Optional[str] = None
+    tagColor: str = "primary"
 
-# ---------- AI INTEGRATION ----------
+class ProductCreate(ProductBase): pass
+class ProductUpdate(ProductBase): pass
+class Product(ProductBase):
+    id: int
+
+class CategoryBase(BaseModel):
+    name: str
+class Category(CategoryBase):
+    id: int
+
+class OrderItem(BaseModel):
+    name: str
+    qty: int
+    price: int
+
+class OrderCreate(BaseModel):
+    payment_reference: str
+    customer_name: str
+    customer_phone: str
+    total: int
+    status: Optional[str] = "pending"
+    delivery_method: Optional[str] = "pickup"
+    delivery_address: Optional[str] = None
+    preferred_time: Optional[str] = None
+    order_notes: Optional[str] = None
+    items: List[OrderItem]
+
+class OrderStatusUpdate(BaseModel):
+    status: str
+
+class BannerBase(BaseModel):
+    title: str
+    subtitle: Optional[str] = None
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+    cta_text: Optional[str] = None
+    cta_link: Optional[str] = None
+    cta_type: str = "button"
+    product_id: Optional[int] = None
+    badge_text: Optional[str] = None
+    badge_color: str = "#FF5722"
+    background_color: str = "#fff3ed"
+    text_color: str = "#1e1e1e"
+    position: int = 0
+    is_active: bool = True
+    is_hero: bool = False
+    is_featured: bool = False
+    display_order: int = 0
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    discount_type: Optional[str] = None
+    discount_value: Optional[int] = None
+    meta_data: Optional[Dict[str, Any]] = None
+
+class BannerCreate(BannerBase):
+    categories: Optional[List[int]] = []
+    products: Optional[List[int]] = []
+
+class BannerUpdate(BannerBase):
+    categories: Optional[List[int]] = None
+    products: Optional[List[int]] = None
+
+class Banner(BannerBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    categories: Optional[List[int]] = []
+    products: Optional[List[int]] = []
+
+class BannerResponse(BaseModel):
+    banners: List[Banner]
+    total: int
+    active_count: int
+    hero_count: int
+    featured_count: int
+
+class AIChatRequest(BaseModel):
+    message: str
+    context: Optional[Dict[str, Any]] = None
+
+class AIChatResponse(BaseModel):
+    response: str
+    provider: str
+    model: str
+
+# ---------- AI SERVICE (Guardrails + Fallback) ----------
 class AIService:
     def __init__(self):
         self.groq_client = None
-        self.gemini_model = None
-        self._init_groq()
-        self._init_gemini()
-        self.profanity_pattern = re.compile(
-            r'\b(' + '|'.join(re.escape(w) for w in settings.PROFANITY_BLOCKLIST) + r')\b',
-            re.IGNORECASE
+        self.genai_client = None
+        self.openai_client = None
+        self._init_clients()
+        self.banned_words = {
+            "kill", "murder", "hate", "racist", "sex", "porn", "assault", "terror", "bomb",
+            "shoot", "stab", "rape", "slave", "abuse", "harass"
+        }
+        self.system_prompt = (
+            "You are an AI assistant for 'Hot Portion Grill', a Nigerian restaurant. "
+            "Help customers with menu, orders, special offers, and food queries. "
+            "Do not answer questions unrelated to food, restaurants, or ordering. "
+            "Keep responses concise, friendly, and professional."
         )
 
-    def _init_groq(self):
-        if settings.GROQ_API_KEY:
-            self.groq_client = openai.OpenAI(
-                api_key=settings.GROQ_API_KEY,
-                base_url=settings.GROQ_BASE_URL
-            )
+    def _init_clients(self):
+        if settings.GROQ_API_KEY and groq is not None:
+            self.groq_client = groq.Groq(api_key=settings.GROQ_API_KEY)
+            logger.info("Groq client initialized")
+        else:
+            logger.warning("Groq client not available")
 
-    def _init_gemini(self):
-        if settings.GEMINI_API_KEY:
+        if settings.GEMINI_API_KEY and genai is not None:
             genai.configure(api_key=settings.GEMINI_API_KEY)
-            self.gemini_model = genai.GenerativeModel(settings.GEMINI_MODEL)
+            self.genai_client = genai.GenerativeModel(settings.GEMINI_MODEL)
+            logger.info("Gemini client initialized")
+        else:
+            logger.warning("Gemini client not available")
 
-    def _guardrail_check(self, text: str) -> bool:
-        """Check for profanity or harmful patterns."""
-        if not settings.ENABLE_AI_GUARDRAILS:
-            return True
-        # Profanity check
-        if self.profanity_pattern.search(text):
-            logger.warning("Guardrail blocked profanity")
+        if settings.OPENAI_API_KEY and openai is not None:
+            self.openai_client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
+            logger.info("OpenAI client initialized")
+        else:
+            logger.warning("OpenAI client not available")
+
+    def _guard_input(self, text: str) -> bool:
+        patterns = [
+            r"ignore (?:all )?previous instructions",
+            r"forget (?:all )?previous (?:instructions|context)",
+            r"you are (?:now )?a (?:new )?ai",
+            r"system prompt",
+            r"override (?:the )?system",
+        ]
+        for p in patterns:
+            if re.search(p, text, re.IGNORECASE):
+                logger.warning(f"Prompt injection attempt blocked: {text[:50]}...")
+                return False
+        words = set(re.findall(r'\b\w+\b', text.lower()))
+        if words.intersection(self.banned_words):
+            logger.warning(f"Banned word detected in input: {text[:50]}...")
             return False
-        # Add more checks (e.g., PII detection) if needed
         return True
 
-    @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=3),
-           retry=retry_if_exception_type((openai.APIConnectionError, openai.APITimeoutError)))
-    async def _call_groq(self, messages: List[Dict[str, str]], temperature: float = 0.7) -> Optional[str]:
-        if not self.groq_client:
-            return None
-        try:
-            response = self.groq_client.chat.completions.create(
-                model=settings.GROQ_MODEL,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=500,
-                timeout=10.0
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Groq call failed: {e}")
-            raise
+    def _guard_output(self, text: str) -> bool:
+        words = set(re.findall(r'\b\w+\b', text.lower()))
+        if words.intersection(self.banned_words):
+            logger.warning(f"Banned word detected in output: {text[:50]}...")
+            return False
+        if len(text) < 2 or len(text) > 2000:
+            return False
+        return True
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=3))
-    async def _call_gemini(self, messages: List[Dict[str, str]]) -> Optional[str]:
-        if not self.gemini_model:
-            return None
-        try:
-            # Convert messages to Gemini format (simple prompt from last user message)
-            # For simplicity, we take the last user message; better to build a chat history.
-            user_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
-            if not user_msg:
-                return None
-            response = await asyncio.to_thread(
-                self.gemini_model.generate_content,
-                user_msg,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.7,
-                    max_output_tokens=500,
-                )
-            )
-            return response.text
-        except Exception as e:
-            logger.error(f"Gemini call failed: {e}")
-            raise
-
-    async def chat_completion(self, messages: List[Dict[str, str]], temperature: float = 0.7) -> Dict[str, Any]:
-        # Input guardrail
-        for msg in messages:
-            if not self._guardrail_check(msg["content"]):
-                raise HTTPException(status_code=400, detail="Input contains prohibited content")
-
-        # Add system safety prompt if not present
-        system_prompt = (
-            "You are a helpful assistant for a restaurant ordering system. "
-            "Always be polite, helpful, and never provide harmful, offensive, or personal information. "
-            "If asked about illegal activities, refuse politely."
+    async def query_groq(self, msg: str) -> Optional[str]:
+        if not self.groq_client:
+            raise ValueError("Groq unavailable")
+        resp = self.groq_client.chat.completions.create(
+            model=settings.GROQ_MODEL,
+            messages=[{"role": "system", "content": self.system_prompt}, {"role": "user", "content": msg}],
+            temperature=0.7, max_tokens=500, timeout=10.0
         )
-        if not any(m["role"] == "system" for m in messages):
-            messages = [{"role": "system", "content": system_prompt}] + messages
+        return resp.choices[0].message.content
 
-        # Try primary (Groq) with fallback
-        try:
-            content = await self._call_groq(messages, temperature)
-            if content is not None:
-                # Output guardrail
-                if not self._guardrail_check(content):
-                    return {"error": "Output blocked by guardrails", "fallback_used": False}
-                return {"response": content, "model": "groq", "fallback_used": False}
-        except Exception:
-            logger.warning("Groq failed, falling back to Gemini")
+    @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=3))
+    async def query_gemini(self, msg: str) -> Optional[str]:
+        if not self.genai_client:
+            raise ValueError("Gemini unavailable")
+        full = f"{self.system_prompt}\n\nUser: {msg}\nAssistant:"
+        response = await asyncio.get_event_loop().run_in_executor(None, self.genai_client.generate_content, full)
+        return response.text
 
-        # Fallback to Gemini
+    @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=3))
+    async def query_openai(self, msg: str) -> Optional[str]:
+        if not self.openai_client:
+            raise ValueError("OpenAI unavailable")
+        resp = self.openai_client.chat.completions.create(
+            model=settings.OPENAI_MODEL,
+            messages=[{"role": "system", "content": self.system_prompt}, {"role": "user", "content": msg}],
+            temperature=0.7, max_tokens=500, timeout=10.0
+        )
+        return resp.choices[0].message.content
+
+    async def chat(self, msg: str) -> Dict[str, Any]:
+        if not self._guard_input(msg):
+            return {"response": "I cannot process that request.", "provider": "guardrail", "model": "blocked"}
+
+        # Build list of available providers
+        available = []
+        if self.groq_client:
+            available.append(("groq", self.query_groq, settings.GROQ_MODEL))
+        if self.genai_client:
+            available.append(("gemini", self.query_gemini, settings.GEMINI_MODEL))
+        if self.openai_client:
+            available.append(("openai", self.query_openai, settings.OPENAI_MODEL))
+
+        if not available:
+            return {"response": "No AI provider available.", "provider": "error", "model": "none"}
+
+        # Order: primary first, then fallback (if different), then rest
+        ordered = []
+        # Add primary
+        for p in available:
+            if p[0] == settings.AI_PRIMARY:
+                ordered.append(p)
+                break
+        # Add fallback if different from primary
+        if settings.AI_FALLBACK != settings.AI_PRIMARY:
+            for p in available:
+                if p[0] == settings.AI_FALLBACK and p not in ordered:
+                    ordered.append(p)
+                    break
+        # Add any remaining providers
+        for p in available:
+            if p not in ordered:
+                ordered.append(p)
+
+        for name, func, model in ordered:
+            try:
+                content = await func(msg)
+                if content and self._guard_output(content):
+                    return {"response": content, "provider": name, "model": model}
+            except Exception as e:
+                logger.warning(f"Provider {name} failed: {e}")
+                continue
+
+        return {"response": "I'm currently unable to respond. Please try again.", "provider": "error", "model": "none"}
+
+# ---------- BREVO ----------
+class BrevoIntegration:
+    def __init__(self):
+        self.api_key = settings.BREVO_API_KEY
+        self.base_url = "https://api.brevo.com/v3"
+        self.sender = {"email": settings.BREVO_SENDER_EMAIL, "name": settings.BREVO_SENDER_NAME}
+        self._session = None
+
+    async def _get_session(self):
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+        return self._session
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=5),
+           retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)))
+    async def initialize(self):
+        headers = {"api-key": self.api_key, "Content-Type": "application/json"}
+        sess = await self._get_session()
+        async with sess.get(f"{self.base_url}/account", headers=headers) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"Brevo failed: {resp.status}")
+        logger.info("Brevo ready")
+
+    async def send_order_confirmation(self, data: Dict) -> bool:
         try:
-            content = await self._call_gemini(messages)
-            if content is not None:
-                if not self._guardrail_check(content):
-                    return {"error": "Output blocked by guardrails", "fallback_used": True}
-                return {"response": content, "model": "gemini", "fallback_used": True}
+            items_html = "".join(
+                f"<tr><td>{i['name']}</td><td>{i['qty']}</td><td>₦{i['price']*i['qty']:,}</td></tr>"
+                for i in data.get("items", [])
+            )
+            html = f"""
+            <html><body>
+            <h2>Order #{data['payment_reference']}</h2>
+            <p><strong>Customer:</strong> {data['customer_name']}</p>
+            <p><strong>Phone:</strong> {data['customer_phone']}</p>
+            <p><strong>Delivery:</strong> {data.get('delivery_method', 'Pickup')}</p>
+            <table border=1><tr><th>Item</th><th>Qty</th><th>Price</th></tr>
+            {items_html}
+            <tr><td colspan=2><b>Total</b></td><td><b>₦{data['total']:,}</b></td></tr>
+            </table>
+            <p>📍 Ojo Road Aiyenero Junction, Ajegunle Apapa</p>
+            </body></html>
+            """
+            payload = {
+                "sender": self.sender,
+                "to": [{"email": data.get("customer_email", "customer@example.com"), "name": data["customer_name"]}],
+                "subject": f"Order #{data['payment_reference']}",
+                "htmlContent": html,
+            }
+            headers = {"api-key": self.api_key, "Content-Type": "application/json"}
+            sess = await self._get_session()
+            async with sess.post(f"{self.base_url}/smtp/email", json=payload, headers=headers) as resp:
+                if resp.status == 201:
+                    logger.info(f"Email sent to {data.get('customer_email')}")
+                    return True
+                logger.error(f"Email failed: {await resp.text()}")
+                return False
         except Exception as e:
-            logger.error(f"Both AI providers failed: {e}")
-            raise HTTPException(status_code=503, detail="AI service unavailable")
+            logger.error(f"Email error: {e}")
+            return False
 
-        raise HTTPException(status_code=503, detail="No AI response")
+# ---------- MONNIFY ----------
+class MonnifyIntegration:
+    def __init__(self):
+        self.api_key = settings.MONNIFY_API_KEY
+        self.secret_key = settings.MONNIFY_SECRET_KEY
+        self.contract_code = settings.MONNIFY_CONTRACT_CODE
+        self.base_url = settings.MONNIFY_BASE_URL
+        self._token = None
+        self._token_expiry = None
+        self._session = None
 
-# ---------- SINGLETON FOR AI ----------
-_ai_service: Optional[AIService] = None
+    async def _get_session(self):
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
+        return self._session
 
-def get_ai_service() -> AIService:
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=5))
+    async def initialize(self):
+        await self._get_access_token()
+        logger.info("Monnify ready")
+
+    async def _get_access_token(self) -> str:
+        if self._token and self._token_expiry and datetime.now() < self._token_expiry:
+            return self._token
+        auth = base64.b64encode(f"{self.api_key}:{self.secret_key}".encode()).decode()
+        headers = {"Authorization": f"Basic {auth}", "Content-Type": "application/json"}
+        sess = await self._get_session()
+        async with sess.post(f"{self.base_url}/api/v1/auth/login", headers=headers) as resp:
+            data = await resp.json()
+            if resp.status == 200:
+                self._token = data["responseBody"]["accessToken"]
+                self._token_expiry = datetime.now() + timedelta(hours=1)
+                return self._token
+            raise RuntimeError(f"Monnify auth failed: {data}")
+
+    async def handle_webhook(self, payload: dict, signature: str) -> Dict:
+        computed = hmac.new(self.secret_key.encode(), json.dumps(payload).encode(), hashlib.sha512).hexdigest()
+        if computed != signature:
+            return {"valid": False, "error": "Invalid signature"}
+        return {"valid": True, "event": payload.get("eventType")}
+
+# ---------- SINGLETONS ----------
+_brevo = None
+_monnify = None
+_ai_service = None
+
+def get_brevo():
+    global _brevo
+    if _brevo is None:
+        _brevo = BrevoIntegration()
+    return _brevo
+
+def get_monnify():
+    global _monnify
+    if _monnify is None:
+        _monnify = MonnifyIntegration()
+    return _monnify
+
+def get_ai_service():
     global _ai_service
     if _ai_service is None:
         _ai_service = AIService()
     return _ai_service
 
+# ---------- CACHE ----------
+_stats_cache = {"data": None, "timestamp": 0}
+
+async def get_cached_stats():
+    now = time.time()
+    if now - _stats_cache["timestamp"] < settings.STATS_CACHE_TTL_SECONDS and _stats_cache["data"] is not None:
+        return _stats_cache["data"]
+    db = get_supabase()
+    products, categories, orders, revenue = await asyncio.gather(
+        execute_db(db.table("products").select("id", count="exact")),
+        execute_db(db.table("categories").select("id", count="exact")),
+        execute_db(db.table("orders").select("id", count="exact")),
+        execute_db(db.table("orders").select("total"))
+    )
+    result = {
+        "totalProducts": products.count,
+        "totalCategories": categories.count,
+        "totalOrders": orders.count,
+        "totalRevenue": sum(o["total"] for o in revenue.data)
+    }
+    _stats_cache["data"] = result
+    _stats_cache["timestamp"] = now
+    return result
+
 # ---------- LIFESPAN ----------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting Hot Portion Grill - Production Monolith")
-    # Initialize integrations (Brevo, Monnify, AI) concurrently
-    brevo = get_brevo()
-    monnify = get_monnify()
-    ai = get_ai_service()
-    await asyncio.gather(
-        brevo.initialize(),
-        monnify.initialize(),
-        # No async init for AI, but we can log readiness
-        asyncio.to_thread(lambda: logger.info("AI service ready"))
-    )
-    logger.info("All services healthy. API ready.")
+    logger.info("Starting Hot Portion Grill - Full Monolith + AI")
+    await asyncio.gather(get_brevo().initialize(), get_monnify().initialize())
+    # AI service is initialized lazily; we can pre-initialize it here if desired
+    # but we'll let it initialize on first use.
+    logger.info("All services ready")
     yield
     logger.info("Shutting down...")
     if _brevo and _brevo._session:
@@ -308,48 +509,311 @@ async def lifespan(app: FastAPI):
         await _monnify._session.close()
     _executor.shutdown(wait=True)
 
-app = FastAPI(
-    title="Hot Portion Grill API",
-    version="1.0.0",
-    lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc"
+# ---------- FASTAPI APP ----------
+app = FastAPI(title="Hot Portion Grill", version="1.0.0", lifespan=lifespan, docs_url="/docs")
+
+@app.middleware("http")
+async def add_correlation_id(request: Request, call_next):
+    cid = request.headers.get("X-Correlation-ID", str(int(time.time() * 1000)))
+    request.state.correlation_id = cid
+    old = logging.getLogRecordFactory()
+    def factory(*args, **kwargs):
+        rec = old(*args, **kwargs)
+        rec.correlation_id = cid
+        return rec
+    logging.setLogRecordFactory(factory)
+    resp = await call_next(request)
+    resp.headers["X-Correlation-ID"] = cid
+    return resp
+
+# ---------- GLOBAL EXCEPTION HANDLER (structured) ----------
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    correlation_id = getattr(request.state, "correlation_id", "unknown")
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "type": "internal-server-error",
+            "title": "An unexpected error occurred",
+            "status": 500,
+            "trace_id": correlation_id,
+            "detail": str(exc) if settings.DEBUG else None
+        }
+    )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-# (CORS middleware already added above)
 
-# ---------- ROUTES ----------
-# ... (all existing routes: /health, /api/products, /api/categories, /api/orders, /api/stats, banners, webhooks) ...
-# For brevity, I will only show the new AI endpoint; assume all previous routes are included.
+# ---------- BANNER SERVICE (FULL CRUD) ----------
+class BannerService:
+    def __init__(self):
+        self.db = get_supabase()
+        self.table = "banners"
 
-@app.post("/api/v1/ai/chat")
-async def ai_chat(
-    request: Request,
-    messages: List[Dict[str, str]],
-    temperature: float = Query(0.7, ge=0.0, le=1.0),
-    ai_service: AIService = Depends(get_ai_service)
+    async def get_banners(self, is_active=None, is_hero=None, is_featured=None, category=None, limit=50, offset=0):
+        query = self.db.table(self.table).select("*", count="exact")
+        if is_active is not None: query = query.eq("is_active", is_active)
+        if is_hero is not None: query = query.eq("is_hero", is_hero)
+        if is_featured is not None: query = query.eq("is_featured", is_featured)
+        now = datetime.now().isoformat()
+        query = query.or_(f"start_date.is.null,start_date.lte.{now}").or_(f"end_date.is.null,end_date.gte.{now}")
+        count_res = await execute_db(query)
+        total = count_res.count
+        result = await execute_db(query.order("display_order").range(offset, offset + limit - 1))
+        for b in result.data:
+            b['categories'] = await self._get_categories(b['id'])
+            b['products'] = await self._get_products(b['id'])
+        return BannerResponse(
+            banners=result.data, total=total,
+            active_count=len([x for x in result.data if x.get('is_active')]),
+            hero_count=len([x for x in result.data if x.get('is_hero')]),
+            featured_count=len([x for x in result.data if x.get('is_featured')])
+        )
+
+    async def get_active(self, is_hero=None, is_featured=None):
+        query = self.db.table(self.table).select("*").eq("is_active", True)
+        now = datetime.now().isoformat()
+        query = query.or_(f"start_date.is.null,start_date.lte.{now}").or_(f"end_date.is.null,end_date.gte.{now}")
+        if is_hero is not None: query = query.eq("is_hero", is_hero)
+        if is_featured is not None: query = query.eq("is_featured", is_featured)
+        result = await execute_db(query.order("display_order"))
+        for b in result.data:
+            b['categories'] = await self._get_categories(b['id'])
+            b['products'] = await self._get_products(b['id'])
+        return result.data
+
+    async def get_banner(self, banner_id: int):
+        result = await execute_db(self.db.table(self.table).select("*").eq("id", banner_id))
+        if not result.data: return None
+        b = result.data[0]
+        b['categories'] = await self._get_categories(b['id'])
+        b['products'] = await self._get_products(b['id'])
+        return b
+
+    async def create_banner(self, banner: BannerCreate):
+        data = banner.dict(exclude={'categories', 'products'})
+        data["created_at"] = data["updated_at"] = datetime.now().isoformat()
+        result = await execute_db(self.db.table(self.table).insert(data))
+        if not result.data: raise HTTPException(400, "Create failed")
+        bid = result.data[0]['id']
+        if banner.categories:
+            for cid in banner.categories:
+                await execute_db(self.db.table("banner_categories").insert({"banner_id": bid, "category_id": cid}))
+        if banner.products:
+            for pid in banner.products:
+                await execute_db(self.db.table("banner_products").insert({"banner_id": bid, "product_id": pid}))
+        return result.data[0]
+
+    async def update_banner(self, banner_id: int, banner: BannerUpdate):
+        data = banner.dict(exclude={'categories', 'products'}, exclude_unset=True)
+        data["updated_at"] = datetime.now().isoformat()
+        result = await execute_db(self.db.table(self.table).update(data).eq("id", banner_id))
+        if not result.data: raise HTTPException(404, "Not found")
+        if banner.categories is not None:
+            await execute_db(self.db.table("banner_categories").delete().eq("banner_id", banner_id))
+            for cid in banner.categories:
+                await execute_db(self.db.table("banner_categories").insert({"banner_id": banner_id, "category_id": cid}))
+        if banner.products is not None:
+            await execute_db(self.db.table("banner_products").delete().eq("banner_id", banner_id))
+            for pid in banner.products:
+                await execute_db(self.db.table("banner_products").insert({"banner_id": banner_id, "product_id": pid}))
+        return result.data[0]
+
+    async def delete_banner(self, banner_id: int):
+        await execute_db(self.db.table("banner_categories").delete().eq("banner_id", banner_id))
+        await execute_db(self.db.table("banner_products").delete().eq("banner_id", banner_id))
+        result = await execute_db(self.db.table(self.table).delete().eq("id", banner_id))
+        if not result.data: raise HTTPException(404, "Not found")
+
+    async def toggle_banner(self, banner_id: int):
+        b = await self.get_banner(banner_id)
+        if not b: raise HTTPException(404, "Not found")
+        new_status = not b['is_active']
+        await execute_db(self.db.table(self.table).update({"is_active": new_status, "updated_at": datetime.now().isoformat()}).eq("id", banner_id))
+        return {"id": banner_id, "is_active": new_status}
+
+    async def duplicate_banner(self, banner_id: int):
+        original = await self.get_banner(banner_id)
+        if not original: raise HTTPException(404, "Not found")
+        copy = {k: v for k, v in original.items() if k not in ['id', 'created_at', 'updated_at']}
+        copy['title'] = f"{copy['title']} (Copy)"
+        copy['is_active'] = False
+        result = await execute_db(self.db.table(self.table).insert(copy))
+        return result.data[0]
+
+    async def reorder_banners(self, banner_ids: List[int]):
+        for idx, bid in enumerate(banner_ids):
+            await execute_db(self.db.table(self.table).update({"display_order": idx, "updated_at": datetime.now().isoformat()}).eq("id", bid))
+        return {"success": True}
+
+    async def _get_categories(self, bid):
+        r = await execute_db(self.db.table("banner_categories").select("category_id").eq("banner_id", bid))
+        return [x['category_id'] for x in r.data]
+
+    async def _get_products(self, bid):
+        r = await execute_db(self.db.table("banner_products").select("product_id").eq("banner_id", bid))
+        return [x['product_id'] for x in r.data]
+
+# ---------- API ROUTES ----------
+@app.get("/health")
+async def health():
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
+# Products
+@app.get("/api/products", response_model=List[Product])
+async def get_products():
+    r = await execute_db(get_supabase().table("products").select("*").order("name"))
+    return r.data
+
+@app.post("/api/products", response_model=Product, status_code=201)
+async def create_product(p: ProductCreate):
+    r = await execute_db(get_supabase().table("products").insert(p.dict()))
+    if not r.data: raise HTTPException(400, "Failed")
+    return r.data[0]
+
+@app.put("/api/products/{pid}")
+async def update_product(pid: int, p: ProductUpdate):
+    r = await execute_db(get_supabase().table("products").update(p.dict()).eq("id", pid))
+    if not r.data: raise HTTPException(404, "Not found")
+    return r.data[0]
+
+@app.delete("/api/products/{pid}", status_code=204)
+async def delete_product(pid: int):
+    r = await execute_db(get_supabase().table("products").delete().eq("id", pid))
+    if not r.data: raise HTTPException(404, "Not found")
+
+# Categories
+@app.get("/api/categories", response_model=List[Category])
+async def get_categories():
+    r = await execute_db(get_supabase().table("categories").select("*").order("name"))
+    return r.data
+
+@app.post("/api/categories", response_model=Category, status_code=201)
+async def create_category(c: CategoryBase):
+    r = await execute_db(get_supabase().table("categories").insert(c.dict()))
+    if not r.data: raise HTTPException(400, "Failed")
+    return r.data[0]
+
+@app.put("/api/categories/{cid}")
+async def update_category(cid: int, c: CategoryBase):
+    r = await execute_db(get_supabase().table("categories").update(c.dict()).eq("id", cid))
+    if not r.data: raise HTTPException(404, "Not found")
+    return r.data[0]
+
+@app.delete("/api/categories/{cid}", status_code=204)
+async def delete_category(cid: int):
+    r = await execute_db(get_supabase().table("categories").delete().eq("id", cid))
+    if not r.data: raise HTTPException(404, "Not found")
+
+# Orders
+@app.get("/api/orders", response_model=List[Dict])
+async def get_orders():
+    r = await execute_db(get_supabase().table("orders").select("*").order("created_at", desc=True))
+    for o in r.data:
+        o["itemCount"] = len(o.get("items", []))
+    return r.data
+
+@app.get("/api/orders/{oid}")
+async def get_order(oid: int):
+    r = await execute_db(get_supabase().table("orders").select("*").eq("id", oid))
+    if not r.data: raise HTTPException(404, "Not found")
+    return r.data[0]
+
+@app.post("/api/orders", status_code=201)
+async def create_order(order: OrderCreate, bg: BackgroundTasks):
+    r = await execute_db(get_supabase().table("orders").insert(order.dict()))
+    if not r.data: raise HTTPException(400, "Failed")
+    bg.add_task(get_brevo().send_order_confirmation, r.data[0])
+    return r.data[0]
+
+@app.patch("/api/orders/{oid}/status")
+async def update_order_status(oid: int, upd: OrderStatusUpdate):
+    r = await execute_db(get_supabase().table("orders").update({"status": upd.status}).eq("id", oid))
+    if not r.data: raise HTTPException(404, "Not found")
+    return r.data[0]
+
+@app.get("/api/stats")
+async def get_stats():
+    return await get_cached_stats()
+
+# Banners (FULL: GET all, GET active, GET by id, POST, PUT, DELETE, PATCH toggle, POST duplicate, PATCH reorder)
+@app.get("/api/v1/banners", response_model=BannerResponse)
+async def list_banners(
+    is_active: Optional[bool] = Query(None), is_hero: Optional[bool] = Query(None),
+    is_featured: Optional[bool] = Query(None), category: Optional[str] = Query(None),
+    limit: int = 50, offset: int = 0
 ):
-    """
-    Chat completion with Groq primary and Gemini fallback.
-    Messages format: [{"role": "user", "content": "..."}, ...]
-    """
-    try:
-        result = await ai_service.chat_completion(messages, temperature)
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"AI chat error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal error")
+    return await BannerService().get_banners(is_active, is_hero, is_featured, category, limit, offset)
 
-# ---------- (Include all existing route handlers here) ----------
+@app.get("/api/v1/banners/active", response_model=List[Banner])
+async def list_active_banners(is_hero: Optional[bool] = Query(None), is_featured: Optional[bool] = Query(None)):
+    return await BannerService().get_active(is_hero, is_featured)
+
+@app.get("/api/v1/banners/{banner_id}", response_model=Banner)
+async def get_banner(banner_id: int):
+    b = await BannerService().get_banner(banner_id)
+    if not b: raise HTTPException(404, "Not found")
+    return b
+
+@app.post("/api/v1/banners", response_model=Banner, status_code=201)
+async def create_banner(banner: BannerCreate):
+    return await BannerService().create_banner(banner)
+
+@app.put("/api/v1/banners/{banner_id}", response_model=Banner)
+async def update_banner(banner_id: int, banner: BannerUpdate):
+    return await BannerService().update_banner(banner_id, banner)
+
+@app.delete("/api/v1/banners/{banner_id}", status_code=204)
+async def delete_banner(banner_id: int):
+    await BannerService().delete_banner(banner_id)
+
+@app.patch("/api/v1/banners/{banner_id}/toggle")
+async def toggle_banner(banner_id: int):
+    return await BannerService().toggle_banner(banner_id)
+
+@app.post("/api/v1/banners/{banner_id}/duplicate")
+async def duplicate_banner(banner_id: int):
+    return await BannerService().duplicate_banner(banner_id)
+
+@app.patch("/api/v1/banners/reorder")
+async def reorder_banners(banner_ids: List[int]):
+    return await BannerService().reorder_banners(banner_ids)
+
+# Webhook
+@app.post("/api/v1/webhooks/monnify")
+async def monnify_webhook(payload: dict, x_signature: Optional[str] = Depends(lambda: None)):
+    result = await get_monnify().handle_webhook(payload, x_signature)
+    if not result["valid"]:
+        raise HTTPException(400, "Invalid signature")
+    if result.get("event") == "SUCCESSFUL_TRANSACTION":
+        ref = payload.get("data", {}).get("transactionReference")
+        if ref:
+            await execute_db(get_supabase().table("orders").update({"status": "paid"}).eq("payment_reference", ref))
+    return {"status": "received"}
+
+# ---------- AI ENDPOINTS (with Dependency Injection) ----------
+@app.post("/api/ai/chat", response_model=AIChatResponse)
+async def chat_with_ai(req: AIChatRequest, ai_service: AIService = Depends(get_ai_service)):
+    result = await ai_service.chat(req.message)
+    return AIChatResponse(response=result["response"], provider=result["provider"], model=result["model"])
+
+@app.get("/api/ai/health")
+async def ai_health(ai_service: AIService = Depends(get_ai_service)):
+    return {
+        "groq": ai_service.groq_client is not None,
+        "gemini": ai_service.genai_client is not None,
+        "openai": ai_service.openai_client is not None,
+        "primary": settings.AI_PRIMARY,
+        "fallback": settings.AI_FALLBACK
+    }
 
 # ---------- RUN ----------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        workers=1,
-        log_level="info"
-    )
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, workers=1, log_level="info")
