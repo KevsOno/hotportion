@@ -1391,6 +1391,8 @@
                     },
                 });
                 if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+                // Handle 204 No Content
+                if (res.status === 204) return null;
                 return res.json();
             }
 
@@ -1763,11 +1765,9 @@
             async function deleteBanner(id) {
                 if (!confirm('Are you sure you want to delete this banner?')) return;
                 try {
-                    const response = await fetch(`${API.banners}/${id}`, { method: 'DELETE' });
-                    if (response.ok) {
-                        showToast('Banner deleted successfully!');
-                        loadBanners();
-                    }
+                    await fetch(`${API.banners}/${id}`, { method: 'DELETE' });
+                    showToast('Banner deleted successfully!');
+                    loadBanners();
                 } catch (error) {
                     console.error('Error deleting banner:', error);
                     showToast('Failed to delete banner', 'fa-solid fa-exclamation-circle');
@@ -2075,7 +2075,7 @@
             async function deleteProduct(id) {
                 if (!confirm('Delete this product permanently?')) return;
                 try {
-                    await fetchJSON(`${API.products}/${id}`, { method: 'DELETE' });
+                    await fetch(`${API.products}/${id}`, { method: 'DELETE' });
                     showToast('Product deleted.');
                     await loadAllData();
                 } catch (err) {
@@ -2155,7 +2155,7 @@
                     if (!confirm(`Delete category "${cat?.name}"?`)) return;
                 }
                 try {
-                    await fetchJSON(`${API.categories}/${id}`, { method: 'DELETE' });
+                    await fetch(`${API.categories}/${id}`, { method: 'DELETE' });
                     showToast('Category deleted.');
                     await loadAllData();
                 } catch (err) {
