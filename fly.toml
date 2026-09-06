@@ -1,6 +1,6 @@
-# fly.toml - Hot Portion Grill Backend
-app = "hotportion-api"                # CHANGE THIS to a unique name
-primary_region = "cdg"                # Choose closest to your users (cdg = Paris, lon = London, ewr = US East)
+# fly.toml (located at the root of your repository)
+app = "hotportion"                 # Use your actual app name (you created "hotportion")
+primary_region = "ams"             # Amsterdam – you selected this already
 
 [build]
   dockerfile = "Dockerfile"
@@ -8,9 +8,9 @@ primary_region = "cdg"                # Choose closest to your users (cdg = Pari
 [http_service]
   internal_port = 8000
   force_https = true
-  auto_stop_machines = false           # Keep the app always on
+  auto_stop_machines = false
   min_machines_running = 1
-  max_machines_running = 3             # Auto-scale up to 3 containers
+  max_machines_running = 3
 
 [[http_service.checks]]
   grace_period = "10s"
