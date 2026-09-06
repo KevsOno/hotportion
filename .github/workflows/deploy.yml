@@ -114,3 +114,61 @@ jobs:
           source: "dist/*"
           target: "/var/www/hotportion/"
           strip_components: 1
+
+
+
+
+  build-android-pwa:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install PWABuilder CLI
+        run: npm install -g pwabuilder
+
+      - name: Build Android APK via PWABuilder
+        run: |
+          pwabuilder build --platform=android --url=https://hotportiongrill.com
+        continue-on-error: true
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: ./out/android/*.apk
+
+  build-ios:
+    runs-on: macos-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Capacitor
+        run: npm install -g @capacitor/cli
+
+      - name: Build iOS
+        run: |
+          npm install
+          npx cap sync ios
+          cd ios/App
+          pod install
+          xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -archivePath App.xcarchive archive
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-app
+          path: ./ios/App.xcarchive
