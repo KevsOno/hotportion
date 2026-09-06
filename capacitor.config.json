@@ -1,0 +1,30 @@
+{
+  "appId": "com.hotportion.grill",
+  "appName": "Hot Portion Grill",
+  "webDir": "./",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https",
+    "iosScheme": "https",
+    "allowNavigation": ["hotportiongrill.com"]
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#E53935",
+      "androidScaleType": "CENTER_CROP",
+      "showSpinner": false
+    },
+    "CapacitorCookies": {
+      "enabled": true
+    }
+  },
+  "ios": {
+    "contentInset": "automatic",
+    "backgroundColor": "#E53935"
+  },
+  "android": {
+    "backgroundColor": "#E53935",
+    "allowMixedContent": true
+  }
+}
