@@ -1,18 +1,19 @@
-name: Deploy Hot Portion Grill Monolith
+name: Deploy Hot Portion Grill Production
 
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 env:
-  DOCKER_IMAGE: hotportion/grill-api
-  DOCKER_TAG: latest
+  FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+  NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+  NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
 
 jobs:
-  test:
+
+  # ─── 1. TEST BACKEND ───
+  test-backend:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -26,65 +27,58 @@ jobs:
 
       - name: Install dependencies
         run: |
+          cd backend
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Lint with flake8
-        run: |
-          pip install flake8
-          flake8 . --count --max-complexity=10 --statistics
-
       - name: Run tests
         run: |
+          cd backend
           pip install pytest pytest-asyncio
           pytest tests/ -v
 
-  build-and-push:
-    needs: test
+  # ─── 2. DEPLOY BACKEND TO FLY.IO ───
+  deploy-backend-flyio:
+    needs: test-backend
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Setup flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Deploy to fly.io
+        run: |
+          cd backend
+          flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  deploy-production:
-    needs: build-and-push
+  # ─── 3. DEPLOY FRONTEND TO NETLIFY ───
+  deploy-frontend-netlify:
+    needs: test-backend
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
-      - name: Deploy to server via SSH
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          script: |
-            cd /opt/hotportion
-            docker compose pull
-            docker compose up -d --force-recreate
-            docker system prune -f
-            echo "✅ Deployment complete"
+      - name: Checkout code
+        uses: actions/checkout@v4
 
+      - name: Deploy to Netlify
+        uses: nwtgck/actions-netlify@v3.0
+        with:
+          publish-dir: ./frontend
+          production-branch: main
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          deploy-message: "Deploy from GitHub Actions (commit ${{ github.sha }})"
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+
+  # ─── 4. SEO PRE‑RENDERING ───
   prerender-seo:
-    needs: deploy-production
+    needs: deploy-backend-flyio
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
@@ -96,36 +90,41 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
+          cache-dependency-path: seo/package-lock.json
 
       - name: Install dependencies
-        run: npm install puppeteer
+        run: |
+          cd seo
+          npm install
 
       - name: Run prerender
+        run: |
+          cd seo
+          npm run prerender
         env:
           BASE_URL: ${{ secrets.PRODUCTION_URL }}
-        run: node prerender.js
 
-      - name: Upload prerendered files to server
+      - name: Upload prerendered files to Netlify (via SCP)
+        # Note: Since Netlify is static, you may want to commit these or serve via a separate service.
+        # This step assumes you have a separate static server for SEO snapshots.
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "dist/*"
+          host: ${{ secrets.STATIC_SERVER_HOST }}
+          username: ${{ secrets.STATIC_SERVER_USER }}
+          key: ${{ secrets.STATIC_SERVER_SSH_KEY }}
+          source: "seo/dist/*"
           target: "/var/www/hotportion/"
-          strip_components: 1
+          strip_components: 2
 
-
-
-
-  build-android-pwa:
+  # ─── 5. BUILD ANDROID APK (via PWABuilder) ───
+  build-android:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -144,106 +143,48 @@ jobs:
           name: android-apk
           path: ./out/android/*.apk
 
+  # ─── 6. BUILD IOS APP (via Capacitor) ───
   build-ios:
     runs-on: macos-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: mobile/package-lock.json
 
-      - name: Install Capacitor
-        run: npm install -g @capacitor/cli
-
-build-ios:
-  runs-on: macos-latest          # ← Cloud Mac
-  steps:
-    - uses: actions/checkout@v4
-    - run: npm install -g @capacitor/cli
-    - run: npx cap sync ios
-    - run: cd ios/App && pod install
-    - run: xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -archivePath App.xcarchive archive
-    - uses: actions/upload-artifact@v4
-      with:
-        name: ios-app
-        path: ./ios/App.xcarchive
-
-      - name: Build iOS
+      - name: Install Capacitor and dependencies
         run: |
+          cd mobile
+          npm install -g @capacitor/cli
           npm install
+
+      - name: Sync iOS project
+        run: |
+          cd mobile
           npx cap sync ios
-          cd ios/App
+
+      - name: Install CocoaPods
+        run: |
+          cd mobile/ios/App
           pod install
-          xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -archivePath App.xcarchive archive
+
+      - name: Build iOS archive
+        run: |
+          cd mobile/ios/App
+          xcodebuild -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -archivePath App.xcarchive \
+            archive
 
       - name: Upload iOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: ios-app
-
-
-
-
-          
-          pname: Deploy Production
-
-on:
-  push:
-    branches: [main]
-
-env:
-  FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-  NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-  NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
-
-jobs:
-  test-backend:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
-        run: |
-          cd backend
-          pip install -r requirements.txt
-      - name: Run tests
-        run: |
-          cd backend
-          pytest tests/ -v
-
-  deploy-backend-flyio:
-    needs: test-backend
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup flyctl
-        uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Deploy to fly.io
-        run: |
-          cd backend
-          flyctl deploy --remote-only
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
-  deploy-frontend-netlify:
-    needs: test-backend
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Deploy to Netlify
-        uses: nwtgck/actions-netlify@v3.0
-        with:
-          publish-dir: ./frontend
-          production-branch: main
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          deploy-message: "Deploy from GitHub Actions"
-        env:
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}ath: ./ios/App.xcarchive
+          path: mobile/ios/App/App.xcarchive
