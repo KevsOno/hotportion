@@ -1,5 +1,16 @@
 {
+  "name": "hotportion-seo",
+  "version": "1.0.0",
+  "description": "Hot Portion Grill - SEO Pre-rendering Service",
+  "main": "prerender.js",
   "scripts": {
-    "prerender": "node prerender.js"
+    "prerender": "node prerender.js",
+    "prerender:watch": "nodemon prerender.js"
+  },
+  "dependencies": {
+    "puppeteer": "^21.11.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
   }
 }
