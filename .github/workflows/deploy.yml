@@ -88,6 +88,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Remove any malformed root package.json
+        run: |
+          if [ -f package.json ]; then
+            echo "WARNING: Root package.json found. Deleting it to avoid conflicts."
+            rm -f package.json
+          fi
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -98,7 +105,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 \
-            libgbm1 libasound2t64   # ← FIXED: libasound2t64
+            libgbm1 libasound2t64
 
       - name: Install Node dependencies
         run: |
@@ -153,6 +160,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Remove any malformed root package.json
+        run: |
+          if [ -f package.json ]; then
+            echo "WARNING: Root package.json found. Deleting it to avoid conflicts."
+            rm -f package.json
+          fi
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -164,7 +178,7 @@ jobs:
           npm install -g @capacitor/cli
           npm install
 
-      - name: Add iOS platform (if not exists)   # ← FIXED: conditional
+      - name: Add iOS platform (if not exists)
         run: |
           cd mobile
           if [ ! -d "ios" ]; then
