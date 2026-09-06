@@ -1,1 +1,5 @@
-Node dependencies: puppeteer. Includes "prerender": "node prerender.js" script.
+{
+  "scripts": {
+    "prerender": "node prerender.js"
+  }
+}
