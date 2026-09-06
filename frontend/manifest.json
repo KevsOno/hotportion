@@ -1,4 +1,5 @@
 {
+  "id": "hotportion-grill",
   "name": "Hot Portion Grill",
   "short_name": "HotPortion",
   "description": "Order authentic Nigerian meals online – Burgers, Rice, Swallows & more.",
@@ -72,15 +73,22 @@
       "src": "/fastfood/screenshots/mobile-home.png",
       "sizes": "1080x1920",
       "type": "image/png",
-      "platform": "wide",
-      "label": "Browse the menu"
+      "platform": "narrow",
+      "label": "Browse the menu and order your favourite meals"
     },
     {
       "src": "/fastfood/screenshots/mobile-cart.png",
       "sizes": "1080x1920",
       "type": "image/png",
+      "platform": "narrow",
+      "label": "Checkout securely with Monnify"
+    },
+    {
+      "src": "/fastfood/screenshots/desktop-home.png",
+      "sizes": "1920x1080",
+      "type": "image/png",
       "platform": "wide",
-      "label": "Checkout securely"
+      "label": "Browse the menu on desktop"
     }
   ],
   "shortcuts": [
@@ -117,7 +125,7 @@
     "params": {
       "title": "Check out Hot Portion Grill!",
       "text": "I'm ordering from Hot Portion Grill. Join me!",
-      "url": "https://hotportiongrill.com"
+      "url": "https://hotportion.netlify.app"
     }
   },
   "related_applications": [
