@@ -32,7 +32,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Create dummy test (so workflow passes)
+      - name: Create dummy test
         run: |
           mkdir -p backend/tests
           echo 'def test_dummy(): assert True' > backend/tests/test_dummy.py
@@ -92,8 +92,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: seo/package-lock.json
 
       - name: Install Puppeteer dependencies
         run: |
@@ -159,8 +157,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: mobile/package-lock.json
 
       - name: Install Capacitor and dependencies
         run: |
@@ -168,7 +164,6 @@ jobs:
           npm install -g @capacitor/cli
           npm install
 
-      # ─── FIX: Add iOS platform before syncing ───
       - name: Add iOS platform
         run: |
           cd mobile
