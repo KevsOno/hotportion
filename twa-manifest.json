@@ -1,0 +1,43 @@
+{
+  "packageId": "com.hotportion.grill",
+  "host": "hotportiongrill.com",
+  "name": "Hot Portion Grill",
+  "launcherName": "Hot Portion",
+  "display": "standalone",
+  "themeColor": "#E53935",
+  "navigationColor": "#E53935",
+  "navigationColorDark": "#C62828",
+  "backgroundColor": "#FFFFFF",
+  "enableNotifications": false,
+  "startUrl": "/?utm_source=android_app",
+  "iconUrl": "https://hotportiongrill.com/fastfood/icons/icon-512.png",
+  "maskableIconUrl": "https://hotportiongrill.com/fastfood/icons/icon-512-maskable.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "hotportion"
+  },
+  "appVersion": "1.0.0",
+  "appVersionCode": 1,
+  "shortcuts": [
+    {
+      "name": "Order Now",
+      "shortName": "Order",
+      "url": "/?utm_source=android_app&action=order",
+      "iconUrl": "https://hotportiongrill.com/fastfood/icons/shortcut-order.png"
+    },
+    {
+      "name": "View Menu",
+      "shortName": "Menu",
+      "url": "/?utm_source=android_app&action=menu",
+      "iconUrl": "https://hotportiongrill.com/fastfood/icons/shortcut-menu.png"
+    }
+  ],
+  "orientation": "portrait",
+  "fallbackType": "customtabs",
+  "features": {
+    "locationDelegation": {
+      "enabled": true
+    }
+  }
+}
