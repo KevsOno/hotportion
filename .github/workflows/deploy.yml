@@ -187,6 +187,14 @@ jobs:
             echo "iOS platform already exists, skipping."
           fi
 
+      # ─── FIX: Create symlink to frontend assets ───
+      - name: Create symlink to frontend assets
+        run: |
+          cd mobile
+          rm -rf www
+          ln -s ../frontend www
+          ls -la  # Verify the symlink was created
+
       - name: Sync iOS project
         run: |
           cd mobile
