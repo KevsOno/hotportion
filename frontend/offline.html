@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Offline – Hot Portion Grill</title>
+    <style>
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: #fefcf8;
+            color: #1e1e1e;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            text-align: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 400px;
+        }
+        .icon { font-size: 4rem; color: #E53935; margin-bottom: 16px; }
+        h1 { font-size: 1.8rem; font-weight: 800; margin-bottom: 8px; }
+        p { color: var(--text-muted, #4a4a4a); margin-bottom: 20px; line-height: 1.6; }
+        .btn {
+            background: #E53935;
+            color: #fff;
+            border: none;
+            padding: 12px 28px;
+            border-radius: 50px;
+            font-weight: 700;
+            font-size: 0.95rem;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn:hover { background: #C62828; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">📡</div>
+        <h1>You're Offline</h1>
+        <p>It looks like you've lost your internet connection. Don't worry – you can still browse our menu once you're back online.</p>
+        <a href="/" class="btn">Try Again</a>
+        <p style="margin-top:16px;font-size:0.8rem;color:#9ca3af;">Hot Portion Grill – Order when connected.</p>
+    </div>
+</body>
+</html>
