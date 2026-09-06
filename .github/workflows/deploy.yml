@@ -178,22 +178,20 @@ jobs:
           npm install -g @capacitor/cli
           npm install
 
-      - name: Add iOS platform (if not exists)
-        run: |
-          cd mobile
-          if [ ! -d "ios" ]; then
-            npx cap add ios
-          else
-            echo "iOS platform already exists, skipping."
-          fi
-
-      # ─── FIX: Create symlink to frontend assets ───
+      # ─── STEP 1: Create symlink ───
       - name: Create symlink to frontend assets
         run: |
           cd mobile
           rm -rf www
           ln -s ../frontend www
-          ls -la  # Verify the symlink was created
+          ls -la
+
+      # ─── STEP 2: Add iOS platform (clean install) ───
+      - name: Add iOS platform (clean)
+        run: |
+          cd mobile
+          rm -rf ios
+          npx cap add ios
 
       - name: Sync iOS project
         run: |
