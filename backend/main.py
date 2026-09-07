@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     GROQ_API_KEY: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
-    GROQ_MODEL: str = "mixtral-8x7b-32768"
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
     GEMINI_MODEL: str = "gemini-2.0-flash"
     OPENAI_MODEL: str = "gpt-oss-120"
     AI_PRIMARY: str = "groq"
