@@ -3136,18 +3136,22 @@
                 }
             }
 
-            // ─── HANDLE MONNIFY REDIRECT ───
+            // ─── IMPROVED HANDLE MONNIFY REDIRECT ───
             function handlePaymentRedirect() {
-                const urlParams = new URLSearchParams(window.location.search);
+                // Handle malformed URLs with multiple '?' by taking the last query string
+                let queryString = window.location.search;
+                if (queryString.includes('?') && queryString.indexOf('?') !== queryString.lastIndexOf('?')) {
+                    // Multiple '?' found – use the part after the last '?'
+                    queryString = '?' + window.location.search.split('?').pop();
+                }
+                const urlParams = new URLSearchParams(queryString);
                 const transactionRef = urlParams.get('transactionReference') || urlParams.get('paymentReference');
-                const status = urlParams.get('status') || urlParams.get('paymentStatus');
+                let status = urlParams.get('status') || urlParams.get('paymentStatus');
 
-                // If we have a transaction reference, process the redirect
                 if (transactionRef) {
-                    // Remove the query params from URL after handling
+                    // Remove query params from URL
                     window.history.replaceState({}, document.title, window.location.pathname);
 
-                    // Retrieve stored order data
                     let orderData = null;
                     const stored = sessionStorage.getItem('pending_order');
                     if (stored) {
@@ -3156,39 +3160,37 @@
                         } catch (e) { /* ignore */ }
                     }
 
-                    // If no stored order, try to fetch from backend
+                    // Normalise status to uppercase for case‑insensitive comparison
+                    const normalizedStatus = (status || '').toUpperCase();
+                    const paymentOk = normalizedStatus === 'PAID' || normalizedStatus === 'SUCCESS';
+
                     if (!orderData) {
-                        fetchOrderByReference(transactionRef).then(data => {
-                            if (data) {
-                                // Check payment status from URL or data
-                                const paymentOk = status === 'PAID' || status === 'SUCCESS' || data.status === 'paid';
-                                if (paymentOk) {
-                                    showReceipt(data);
+                        fetchOrderByReference(transactionRef)
+                            .then(data => {
+                                if (data) {
+                                    if (paymentOk) {
+                                        showReceipt(data);
+                                    } else {
+                                        showToast('Payment failed or was cancelled. Please try again.', 'fa-solid fa-exclamation-circle');
+                                    }
                                 } else {
-                                    showToast('Payment failed or was cancelled. Please try again.', 'fa-solid fa-exclamation-circle');
+                                    showToast('Unable to retrieve order details. Please contact support.', 'fa-solid fa-exclamation-circle');
                                 }
-                            } else {
-                                showToast('Unable to retrieve order details. Please contact support.', 'fa-solid fa-exclamation-circle');
-                            }
-                            sessionStorage.removeItem('pending_order');
-                        }).catch(() => {
-                            showToast('Error processing payment. Please contact support.', 'fa-solid fa-exclamation-circle');
-                            sessionStorage.removeItem('pending_order');
-                        });
+                                sessionStorage.removeItem('pending_order');
+                            })
+                            .catch(() => {
+                                showToast('Error processing payment. Please contact support.', 'fa-solid fa-exclamation-circle');
+                                sessionStorage.removeItem('pending_order');
+                            });
                         return;
                     }
 
-                    // We have stored order data
-                    const paymentOk = status === 'PAID' || status === 'SUCCESS';
                     if (paymentOk) {
                         showReceipt(orderData);
                     } else {
                         showToast('Payment failed or was cancelled. Please try again.', 'fa-solid fa-exclamation-circle');
                     }
                     sessionStorage.removeItem('pending_order');
-                } else {
-                    // No redirect params – check if we have a pending order but no redirect (e.g., user closed tab)
-                    // We can ignore, as it's not a return from Monnify.
                 }
             }
 
