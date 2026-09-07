@@ -142,10 +142,12 @@ class CategoryBase(BaseModel):
 class Category(CategoryBase):
     id: int
 
+# UPDATED: OrderItem now includes product_id
 class OrderItem(BaseModel):
     name: str
     qty: int
     price: int
+    product_id: int   # <-- added
 
 class OrderCreate(BaseModel):
     payment_reference: str
@@ -159,7 +161,7 @@ class OrderCreate(BaseModel):
     preferred_time: Optional[str] = None
     order_notes: Optional[str] = None
     items: List[OrderItem]
-    # ✅ NEW: optional field to store Monnify transaction ref (updated after payment init)
+    # optional field to store Monnify transaction ref (updated after payment init)
     monnify_transaction_ref: Optional[str] = None
 
 class OrderStatusUpdate(BaseModel):
@@ -470,7 +472,6 @@ class MonnifyIntegration:
                 return self._token
             raise RuntimeError(f"Monnify auth failed: {data}")
 
-    # ✅ NEW: Initialize a transaction and return checkout URL
     async def initialize_transaction(
         self,
         amount: int,
@@ -491,7 +492,6 @@ class MonnifyIntegration:
             }
         """
         if not self.healthy:
-            # Try to refresh health
             try:
                 await self.initialize()
             except Exception as e:
@@ -503,7 +503,6 @@ class MonnifyIntegration:
             "Content-Type": "application/json"
         }
 
-        # Build payload according to Monnify API spec
         payload = {
             "amount": amount,
             "customerName": customer_name,
@@ -513,9 +512,9 @@ class MonnifyIntegration:
             "paymentDescription": payment_description,
             "contractCode": self.contract_code,
             "currencyCode": "NGN",
-            "paymentMethods": ["CARD", "ACCOUNT_TRANSFER"],  # or just CARD, etc.
-            "redirectUrl": "https://hotportion.netlify.app/?status=success",  # UPDATE THIS!
-            "webhookUrl": "https://hotportion.onrender.com/api/v1/webhooks/monnify",  # Must match webhook endpoint
+            "paymentMethods": ["CARD", "ACCOUNT_TRANSFER"],
+            "redirectUrl": "https://hotportion.netlify.app/?status=success",
+            "webhookUrl": "https://hotportion.onrender.com/api/v1/webhooks/monnify",
         }
 
         sess = await self._get_session()
@@ -849,55 +848,47 @@ async def get_order(oid: int):
     if not r.data: raise HTTPException(404, "Not found")
     return r.data[0]
 
-# ✅ REPLACED create_order with Monnify integration
 @app.post("/api/orders", status_code=201)
 async def create_order(order: OrderCreate, bg: BackgroundTasks):
-    # 1. Insert the order into Supabase (status = "pending")
-    data = order.dict(exclude={'monnify_transaction_ref'})  # we'll update later
+    # Insert the order into Supabase (status = "pending")
+    data = order.dict(exclude={'monnify_transaction_ref'})
     result = await execute_db(get_supabase().table("orders").insert(data))
     if not result.data:
         raise HTTPException(400, "Failed to create order")
     
     order_data = result.data[0]
     
-    # 2. Initialize Monnify transaction
+    # Initialize Monnify transaction
     monnify = get_monnify()
-    customer_email = order.customer_email
-    customer_name = order.customer_name
-    customer_phone = order.customer_phone
-    total_amount = order.total
-    payment_ref = order.payment_reference
-    
     monnify_result = await monnify.initialize_transaction(
-        amount=total_amount,
-        customer_name=customer_name,
-        customer_email=customer_email,
-        customer_phone=customer_phone,
-        payment_reference=payment_ref,
+        amount=order.total,
+        customer_name=order.customer_name,
+        customer_email=order.customer_email,
+        customer_phone=order.customer_phone,
+        payment_reference=order.payment_reference,
         payment_description="Hot Portion Grill Order"
     )
     
     if not monnify_result["success"]:
-        # If Monnify fails, delete the order (or mark as failed)
+        # Rollback order creation
         await execute_db(get_supabase().table("orders").delete().eq("id", order_data["id"]))
         raise HTTPException(400, f"Payment initialization failed: {monnify_result.get('error', 'Unknown error')}")
     
-    # 3. Update the order with the Monnify transaction reference
+    # Update the order with Monnify transaction reference
     await execute_db(
         get_supabase().table("orders")
         .update({"monnify_transaction_ref": monnify_result["transaction_reference"]})
         .eq("id", order_data["id"])
     )
     
-    # 4. Send email in the background (optional)
+    # Send email in background
     bg.add_task(get_brevo().send_order_confirmation, order_data)
     
-    # 5. Return the checkout URL to the frontend
     return {
         "status": "pending_payment",
         "order_id": order_data["id"],
-        "payment_reference": payment_ref,
-        "checkout_url": monnify_result["checkout_url"]   # ← This is the key!
+        "payment_reference": order.payment_reference,
+        "checkout_url": monnify_result["checkout_url"]
     }
 
 @app.patch("/api/orders/{oid}/status")
@@ -953,7 +944,7 @@ async def duplicate_banner(banner_id: int):
 async def reorder_banners(banner_ids: List[int]):
     return await BannerService().reorder_banners(banner_ids)
 
-# Webhook
+# ---------- WEBHOOK (UPDATED with stock reduction and cache invalidation) ----------
 @app.post("/api/v1/webhooks/monnify")
 async def monnify_webhook(
     payload: dict,
@@ -962,10 +953,57 @@ async def monnify_webhook(
     result = await get_monnify().handle_webhook(payload, x_signature)
     if not result["valid"]:
         raise HTTPException(400, "Invalid signature")
+
     if result.get("event") == "SUCCESSFUL_TRANSACTION":
-        ref = payload.get("data", {}).get("transactionReference")
-        if ref:
-            await execute_db(get_supabase().table("orders").update({"status": "paid"}).eq("payment_reference", ref))
+        data = payload.get("data", {})
+        trans_ref = data.get("transactionReference")
+        payment_ref = data.get("paymentReference")  # our custom ref
+
+        # Find the order
+        query = get_supabase().table("orders").select("*")
+        if payment_ref:
+            query = query.eq("payment_reference", payment_ref)
+        else:
+            query = query.eq("monnify_transaction_ref", trans_ref)
+        order_result = await execute_db(query)
+        if not order_result.data:
+            logger.warning(f"Order not found for ref: {payment_ref or trans_ref}")
+            return {"status": "ignored"}
+
+        order = order_result.data[0]
+
+        # Reduce stock for each item
+        items = order.get("items", [])
+        for item in items:
+            product_id = item.get("product_id")
+            qty = item.get("qty", 0)
+            if product_id and qty > 0:
+                # Fetch current stock
+                prod_result = await execute_db(
+                    get_supabase().table("products").select("stock").eq("id", product_id)
+                )
+                if prod_result.data:
+                    current_stock = prod_result.data[0].get("stock", 0)
+                    new_stock = max(0, current_stock - qty)  # prevent negative
+                    # Update stock
+                    await execute_db(
+                        get_supabase().table("products")
+                        .update({"stock": new_stock})
+                        .eq("id", product_id)
+                    )
+                    logger.info(f"Stock updated for product {product_id}: {current_stock} → {new_stock}")
+
+        # Invalidate stats cache after stock changes
+        invalidate_stats_cache()
+
+        # Update order status to paid (if not already)
+        if order.get("status") != "paid":
+            await execute_db(
+                get_supabase().table("orders")
+                .update({"status": "paid"})
+                .eq("id", order["id"])
+            )
+
     return {"status": "received"}
 
 # ---------- AI ENDPOINTS ----------
