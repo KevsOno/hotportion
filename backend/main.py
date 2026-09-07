@@ -23,6 +23,8 @@ from supabase import create_client, Client
 from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
+
+
 # ---------- AI Libraries ----------
 try:
     import groq
@@ -38,6 +40,22 @@ except ImportError:
     openai = None
 
 load_dotenv()
+
+
+# ---------- HELPER FUNCTION ----------
+
+def convert_datetime_to_iso(obj):
+    """Recursively convert all datetime objects in obj to ISO format strings."""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {k: convert_datetime_to_iso(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_datetime_to_iso(item) for item in obj]
+    else:
+        return obj
+        
+
 
 # ---------- CONFIGURATION ----------
 class Settings(BaseSettings):
@@ -815,7 +833,6 @@ class BannerService:
         self.table = "banners"
 
     async def get_banners(self, is_active=None, is_hero=None, is_featured=None, category=None, limit=50, offset=0):
-        # Build the base query
         query = self.db.table(self.table).select("*", count="exact")
         if is_active is not None:
             query = query.eq("is_active", is_active)
@@ -824,27 +841,22 @@ class BannerService:
         if is_featured is not None:
             query = query.eq("is_featured", is_featured)
 
-        # Get total count (without date filtering) – you may adjust if needed
         count_res = await execute_db(query)
         total = count_res.count
 
-        # Fetch paginated data (without date filters in SQL)
         result = await execute_db(query.order("display_order").range(offset, offset + limit - 1))
 
         now = datetime.now().isoformat()
 
-        # Filter in Python for date range
+        # Filter by date range in Python
         filtered_data = []
         for banner in result.data:
             start = banner.get('start_date')
             end = banner.get('end_date')
-            # If start_date is set and is in the future, skip
             if start and start > now:
                 continue
-            # If end_date is set and is in the past, skip
             if end and end < now:
                 continue
-            # Otherwise include
             filtered_data.append(banner)
 
         # Enrich with categories and products
@@ -852,21 +864,22 @@ class BannerService:
             b['categories'] = await self._get_categories(b['id'])
             b['products'] = await self._get_products(b['id'])
 
-        # Calculate stats based on the filtered data (or you can keep total as original count)
+        # ─── CONVERT ALL DATETIME OBJECTS TO ISO STRINGS ───
+        filtered_data = [convert_datetime_to_iso(b) for b in filtered_data]
+
         active_count = len([x for x in filtered_data if x.get('is_active', True)])
         hero_count = len([x for x in filtered_data if x.get('is_hero', False)])
         featured_count = len([x for x in filtered_data if x.get('is_featured', False)])
 
         return BannerResponse(
             banners=filtered_data,
-            total=len(filtered_data),      # Use filtered total (or original total if you prefer)
+            total=len(filtered_data),
             active_count=active_count,
             hero_count=hero_count,
             featured_count=featured_count
         )
 
     async def get_active(self, is_hero=None, is_featured=None):
-        # Only fetch active banners
         query = self.db.table(self.table).select("*").eq("is_active", True)
         if is_hero is not None:
             query = query.eq("is_hero", is_hero)
@@ -877,7 +890,6 @@ class BannerService:
 
         now = datetime.now().isoformat()
 
-        # Filter in Python for date range
         filtered_data = []
         for banner in result.data:
             start = banner.get('start_date')
@@ -893,6 +905,9 @@ class BannerService:
             b['categories'] = await self._get_categories(b['id'])
             b['products'] = await self._get_products(b['id'])
 
+        # ─── CONVERT ALL DATETIME OBJECTS TO ISO STRINGS ───
+        filtered_data = [convert_datetime_to_iso(b) for b in filtered_data]
+
         return filtered_data
 
     async def get_banner(self, banner_id: int):
@@ -902,6 +917,10 @@ class BannerService:
         b = result.data[0]
         b['categories'] = await self._get_categories(b['id'])
         b['products'] = await self._get_products(b['id'])
+
+        # ─── CONVERT ALL DATETIME OBJECTS TO ISO STRINGS ───
+        b = convert_datetime_to_iso(b)
+
         return b
 
     async def create_banner(self, banner: BannerCreate):
@@ -972,6 +991,7 @@ class BannerService:
     async def _get_products(self, bid):
         r = await execute_db(self.db.table("banner_products").select("product_id").eq("banner_id", bid))
         return [x['product_id'] for x in r.data]
+        
 # ---------- API ROUTES ----------
 @app.get("/health")
 async def health():
