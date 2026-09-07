@@ -3247,7 +3247,7 @@
                     delivery_address: deliveryMethod === 'delivery' ? deliveryAddress.value : '',
                     preferred_time: preferredTime.value || '',
                     order_notes: orderNotes.value || '',
-                    items: items.map(i => ({ name: i.name, qty: i.qty, price: i.price }))
+                    items: items.map(i => ({ name: i.name, qty: i.qty, price: i.price, product_id: i.id }))
                 };
 
                 const btn = checkoutBtn;
