@@ -930,36 +930,43 @@ class BannerService:
         return b
 
     async def create_banner(self, banner: BannerCreate):
-        data = banner.dict(exclude={'categories', 'products'})
-        data["created_at"] = data["updated_at"] = datetime.now().isoformat()
-        result = await execute_db(self.db.table(self.table).insert(data))
-        if not result.data:
-            raise HTTPException(400, "Create failed")
-        bid = result.data[0]['id']
-        if banner.categories:
-            for cid in banner.categories:
-                await execute_db(self.db.table("banner_categories").insert({"banner_id": bid, "category_id": cid}))
-        if banner.products:
-            for pid in banner.products:
-                await execute_db(self.db.table("banner_products").insert({"banner_id": bid, "product_id": pid}))
-        return result.data[0]
+    data = banner.dict(exclude={'categories', 'products'})
+    data["created_at"] = data["updated_at"] = datetime.now().isoformat()
+    
+    # ─── CONVERT ALL DATETIME OBJECTS TO ISO STRINGS ───
+    data = convert_datetime_to_iso(data)
 
-    async def update_banner(self, banner_id: int, banner: BannerUpdate):
-        data = banner.dict(exclude={'categories', 'products'}, exclude_unset=True)
-        data["updated_at"] = datetime.now().isoformat()
-        result = await execute_db(self.db.table(self.table).update(data).eq("id", banner_id))
-        if not result.data:
-            raise HTTPException(404, "Not found")
-        if banner.categories is not None:
-            await execute_db(self.db.table("banner_categories").delete().eq("banner_id", banner_id))
-            for cid in banner.categories:
-                await execute_db(self.db.table("banner_categories").insert({"banner_id": banner_id, "category_id": cid}))
-        if banner.products is not None:
-            await execute_db(self.db.table("banner_products").delete().eq("banner_id", banner_id))
-            for pid in banner.products:
-                await execute_db(self.db.table("banner_products").insert({"banner_id": banner_id, "product_id": pid}))
-        return result.data[0]
+    result = await execute_db(self.db.table(self.table).insert(data))
+    if not result.data:
+        raise HTTPException(400, "Create failed")
+    bid = result.data[0]['id']
+    if banner.categories:
+        for cid in banner.categories:
+            await execute_db(self.db.table("banner_categories").insert({"banner_id": bid, "category_id": cid}))
+    if banner.products:
+        for pid in banner.products:
+            await execute_db(self.db.table("banner_products").insert({"banner_id": bid, "product_id": pid}))
+    return result.data[0]
 
+async def update_banner(self, banner_id: int, banner: BannerUpdate):
+    data = banner.dict(exclude={'categories', 'products'}, exclude_unset=True)
+    data["updated_at"] = datetime.now().isoformat()
+    
+    # ─── CONVERT ALL DATETIME OBJECTS TO ISO STRINGS ───
+    data = convert_datetime_to_iso(data)
+
+    result = await execute_db(self.db.table(self.table).update(data).eq("id", banner_id))
+    if not result.data:
+        raise HTTPException(404, "Not found")
+    if banner.categories is not None:
+        await execute_db(self.db.table("banner_categories").delete().eq("banner_id", banner_id))
+        for cid in banner.categories:
+            await execute_db(self.db.table("banner_categories").insert({"banner_id": banner_id, "category_id": cid}))
+    if banner.products is not None:
+        await execute_db(self.db.table("banner_products").delete().eq("banner_id", banner_id))
+        for pid in banner.products:
+            await execute_db(self.db.table("banner_products").insert({"banner_id": banner_id, "product_id": pid}))
+    return result.data[0]
     async def delete_banner(self, banner_id: int):
         await execute_db(self.db.table("banner_categories").delete().eq("banner_id", banner_id))
         await execute_db(self.db.table("banner_products").delete().eq("banner_id", banner_id))
