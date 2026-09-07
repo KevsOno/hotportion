@@ -223,47 +223,130 @@ class AIChatResponse(BaseModel):
     model: str
 
 # ---------- AI SERVICE ----------
+
+
+# Ensure groq, genai, openai, settings are imported in your module as before
+logger = logging.getLogger(__name__)
+
+
 class AIService:
     def __init__(self):
         self.groq_client = None
         self.genai_client = None
         self.openai_client = None
+        self.supabase_client: Optional[Client] = None
+
+        # Simple memory cache for Supabase database context
+        self._context_cache: Optional[str] = None
+        self._cache_timestamp: float = 0
+        self._cache_ttl: int = 300  # Cache context for 5 minutes (300 seconds)
+
         self._init_clients()
+
         self.banned_words = {
             "kill", "murder", "hate", "racist", "sex", "porn", "assault", "terror", "bomb",
             "shoot", "stab", "rape", "slave", "abuse", "harass"
         }
-        self.system_prompt = (
+
+        self.base_system_prompt = (
             "You are an AI assistant for 'Hot Portion Grill', a Nigerian restaurant. "
-            "Help customers with menu, orders, special offers, and food queries. "
-            "Do not answer questions unrelated to food, restaurants, or ordering. "
+            "Help customers with menu, prices, orders, special offers, and food queries. "
+            "Answer strictly based on the provided PRODUCTS and KNOWLEDGE BASE below. "
+            "If an item or answer is not in the provided information, state politely that it is unavailable. "
+            "Do not answer questions completely unrelated to food, restaurants, or ordering. "
             "Keep responses concise, friendly, and professional."
         )
 
     def _init_clients(self):
-        if settings.GROQ_API_KEY and groq is not None:
+        # Initialize Supabase Client
+        supabase_url = getattr(settings, 'SUPABASE_URL', None)
+        supabase_key = getattr(settings, 'SUPABASE_KEY', None)
+        if supabase_url and supabase_key:
+            try:
+                self.supabase_client = create_client(supabase_url, supabase_key)
+                logger.info("Supabase client initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize Supabase client: {e}")
+        else:
+            logger.warning("Supabase credentials not configured")
+
+        # Initialize Groq Client
+        if getattr(settings, 'GROQ_API_KEY', None) and groq is not None:
             self.groq_client = groq.Groq(api_key=settings.GROQ_API_KEY)
             logger.info("Groq client initialized")
         else:
             logger.warning("Groq client not available")
 
-        if settings.GEMINI_API_KEY and genai is not None:
+        # Initialize Gemini Client
+        if getattr(settings, 'GEMINI_API_KEY', None) and genai is not None:
             genai.configure(api_key=settings.GEMINI_API_KEY)
             self.genai_client = genai.GenerativeModel(settings.GEMINI_MODEL)
             logger.info("Gemini client initialized")
         else:
             logger.warning("Gemini client not available")
 
-        if settings.OPENAI_API_KEY and openai is not None:
+        # Initialize OpenAI Client
+        if getattr(settings, 'OPENAI_API_KEY', None) and openai is not None:
             self.openai_client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
             logger.info("OpenAI client initialized")
         else:
             logger.warning("OpenAI client not available")
 
+    def _get_context(self) -> str:
+        """Fetch and format context from Supabase with 5-minute memory caching."""
+        current_time = time.time()
+        
+        # Return cached context if still valid
+        if self._context_cache and (current_time - self._cache_timestamp < self._cache_ttl):
+            return self._context_cache
+
+        if not self.supabase_client:
+            logger.warning("Supabase client unavailable, skipping database context fetch.")
+            return ""
+
+        try:
+            # 1. Fetch Products
+            products_res = self.supabase_client.table("products").select("*").execute()
+            products = products_res.data if products_res.data else []
+
+            # 2. Fetch Knowledge Base
+            knowledge_res = self.supabase_client.table("knowledge").select("*").execute()
+            knowledge = knowledge_res.data if knowledge_res.data else []
+
+            # Format database content
+            context = "\n\n=== PRODUCTS / MENU ===\n"
+            for p in products:
+                name = p.get('name', 'Item')
+                price = p.get('price', 'N/A')
+                desc = p.get('description', 'N/A')
+                status = p.get('status', 'available')
+                context += f"- {name}: {price} | Desc: {desc} | Status: {status}\n"
+
+            context += "\n=== KNOWLEDGE BASE & STORE INFO ===\n"
+            for k in knowledge:
+                topic = k.get('topic', 'Information')
+                content = k.get('content', '')
+                context += f"- {topic}: {content}\n"
+
+            # Save to memory cache
+            self._context_cache = context
+            self._cache_timestamp = current_time
+            logger.info("Supabase menu & knowledge base context refreshed")
+            return context
+
+        except Exception as e:
+            logger.error(f"Error fetching Supabase context: {e}")
+            # Fall back to expired cache if available to prevent outage
+            return self._context_cache or ""
+
+    def _build_system_prompt(self) -> str:
+        context = self._get_context()
+        return f"{self.base_system_prompt}{context}"
+
     def _normalize(self, text: str) -> str:
         text = text.lower()
         replacements = {
-            '3': 'e', '1': 'i', '4': 'a', '0': 'o',
+            '3': 'e', '4': 'a', '0': 'o',
             '@': 'a', '$': 's', '5': 's'
         }
         for old, new in replacements.items():
@@ -301,38 +384,75 @@ class AIService:
         return True
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=3))
-    async def query_groq(self, msg: str) -> Optional[str]:
+    async def query_groq(self, msg: str, system_prompt: str, history: List[Dict[str, str]]) -> Optional[str]:
         if not self.groq_client:
             raise ValueError("Groq unavailable")
-        resp = self.groq_client.chat.completions.create(
-            model=settings.GROQ_MODEL,
-            messages=[{"role": "system", "content": self.system_prompt}, {"role": "user", "content": msg}],
-            temperature=0.7, max_tokens=500, timeout=10.0
+        
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(history)
+        messages.append({"role": "user", "content": msg})
+
+        # Run non-blocking in executor
+        resp = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: self.groq_client.chat.completions.create(
+                model=settings.GROQ_MODEL,
+                messages=messages,
+                temperature=0.3,
+                max_tokens=500,
+                timeout=10.0
+            )
         )
         return resp.choices[0].message.content
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=3))
-    async def query_gemini(self, msg: str) -> Optional[str]:
+    async def query_gemini(self, msg: str, system_prompt: str, history: List[Dict[str, str]]) -> Optional[str]:
         if not self.genai_client:
             raise ValueError("Gemini unavailable")
-        full = f"{self.system_prompt}\n\nUser: {msg}\nAssistant:"
-        response = await asyncio.get_event_loop().run_in_executor(None, self.genai_client.generate_content, full)
+        
+        formatted_history = ""
+        for h in history:
+            role = "User" if h.get("role") == "user" else "Assistant"
+            formatted_history += f"\n{role}: {h.get('content', '')}"
+
+        full = f"{system_prompt}\n{formatted_history}\nUser: {msg}\nAssistant:"
+        
+        response = await asyncio.get_event_loop().run_in_executor(
+            None, self.genai_client.generate_content, full
+        )
         return response.text
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=3))
-    async def query_openai(self, msg: str) -> Optional[str]:
+    async def query_openai(self, msg: str, system_prompt: str, history: List[Dict[str, str]]) -> Optional[str]:
         if not self.openai_client:
             raise ValueError("OpenAI unavailable")
-        resp = self.openai_client.chat.completions.create(
-            model=settings.OPENAI_MODEL,
-            messages=[{"role": "system", "content": self.system_prompt}, {"role": "user", "content": msg}],
-            temperature=0.7, max_tokens=500, timeout=10.0
+        
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(history)
+        messages.append({"role": "user", "content": msg})
+
+        # Run non-blocking in executor
+        resp = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: self.openai_client.chat.completions.create(
+                model=settings.OPENAI_MODEL,
+                messages=messages,
+                temperature=0.3,
+                max_tokens=500,
+                timeout=10.0
+            )
         )
         return resp.choices[0].message.content
 
-    async def chat(self, msg: str) -> Dict[str, Any]:
+    async def chat(self, msg: str, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         if not self._guard_input(msg):
             return {"response": "I cannot process that request.", "provider": "guardrail", "model": "blocked"}
+
+        # Truncate history to last 6 messages (3 turns)
+        conversation_history = history[-6:] if history else []
+
+        # Build dynamic system prompt with cached Supabase RAG data
+        system_prompt = self._build_system_prompt()
 
         available = []
         if self.groq_client:
@@ -361,7 +481,7 @@ class AIService:
 
         for name, func, model in ordered:
             try:
-                content = await func(msg)
+                content = await func(msg, system_prompt, conversation_history)
                 if content and self._guard_output(content):
                     return {"response": content, "provider": name, "model": model}
             except Exception as e:
@@ -369,7 +489,6 @@ class AIService:
                 continue
 
         return {"response": "I'm currently unable to respond. Please try again.", "provider": "error", "model": "none"}
-
 # ---------- BREVO ----------
 class BrevoIntegration:
     def __init__(self):
