@@ -255,6 +255,10 @@ class AIService:
             "If an item or answer is not in the provided information, state politely that it is unavailable. "
             "Do not answer questions completely unrelated to food, restaurants, or ordering. "
             "Keep responses concise, friendly, and professional."
+            # NEW INSTRUCTION:
+            "When a user asks for the 'menu', 'what do you have', or 'list all items', "
+            "respond with a clear list of all available products from the PRODUCTS section, "
+            "including name and price. If the list is long, provide a summary and offer to give more details."
         )
 
     def _init_clients(self):
