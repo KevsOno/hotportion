@@ -1013,10 +1013,23 @@ async def delete_category(cid: int):
         raise HTTPException(404, "Not found")
 
 @app.get("/api/orders", response_model=List[Dict])
-async def get_orders():
-    r = await execute_db(get_supabase().table("orders").select("*").order("created_at", desc=True))
+async def get_orders(since: Optional[str] = Query(None)):
+    """
+    Get all orders. If 'since' is provided (ISO timestamp), only return orders
+    created after that time.
+    """
+    query = get_supabase().table("orders").select("*").order("created_at", desc=True)
+    
+    if since:
+        # Filter by created_at > since (ISO format works directly with Postgres timestamptz)
+        query = query.gt("created_at", since)
+    
+    r = await execute_db(query)
+    
+    # Add itemCount for each order
     for o in r.data:
         o["itemCount"] = len(o.get("items", []))
+    
     return r.data
 
 @app.get("/api/orders/{oid}")
