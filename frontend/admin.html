@@ -6,7 +6,7 @@
     <title>Hot Portion Grill – Admin Panel</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
     <style>
-        /* ─── ADMIN STYLES ─── */
+        /* ─── ADMIN STYLES ─── (same as before, no changes needed) ─── */
         * {
             margin: 0;
             padding: 0;
@@ -894,6 +894,8 @@
             </button>
             <button data-tab="categories"><i class="fa-solid fa-tags"></i> Categories</button>
             <button data-tab="banners"><i class="fa-solid fa-images"></i> Banners</button>
+            <!-- ─── NEW TAB ─── -->
+            <button data-tab="topproducts"><i class="fa-solid fa-chart-simple"></i> Top Products</button>
         </div>
 
         <!-- ─── PRODUCTS PANEL ─── -->
@@ -1032,6 +1034,31 @@
                 <button class="btn btn-outline btn-sm" id="prev-page"><i class="fa-solid fa-chevron-left"></i> Previous</button>
                 <span id="page-info">Page 1 of 1</span>
                 <button class="btn btn-outline btn-sm" id="next-page">Next <i class="fa-solid fa-chevron-right"></i></button>
+            </div>
+        </div>
+
+        <!-- ─── TOP PRODUCTS PANEL (NEW) ─── -->
+        <div class="panel" id="panel-topproducts">
+            <div class="panel-header">
+                <h2><i class="fa-solid fa-chart-simple" style="color:var(--primary);"></i> Top Selling Products</h2>
+                <div class="search-box">
+                    <span style="font-size:0.8rem;color:var(--text-muted);">Top 20 by quantity sold</span>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Product</th>
+                            <th>Quantity Sold</th>
+                            <th>Revenue</th>
+                        </tr>
+                    </thead>
+                    <tbody id="top-products-body">
+                        <tr><td colspan="4" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
+                    </tbody>
+                </table>
             </div>
         </div>
 
@@ -1320,6 +1347,7 @@
                 orders: '/api/orders',
                 stats: '/api/stats',
                 banners: '/api/v1/banners',
+                topProducts: '/api/top-products',  // ─── NEW ───
             };
 
             // ─── TOAST ───
@@ -1340,6 +1368,7 @@
             let categories = [];
             let orders = [];
             let banners = [];
+            let topProducts = []; // ─── NEW ───
             let currentTab = 'products';
             let currentPage = 1;
             let pageSize = 12;
@@ -1347,7 +1376,7 @@
             let currentView = 'all';
             let previousOrderCount = 0;
             let pollInterval = null;
-            let lastPollTimestamp = null;  // ─── OPTIMIZED: track the latest order timestamp
+            let lastPollTimestamp = null;
 
             // ─── DOM REFS ───
             const tabs = document.querySelectorAll('#admin-tabs button');
@@ -1357,6 +1386,7 @@
                 orders: document.getElementById('panel-orders'),
                 categories: document.getElementById('panel-categories'),
                 banners: document.getElementById('panel-banners'),
+                topproducts: document.getElementById('panel-topproducts'), // ─── NEW ───
             };
             const productsBody = document.getElementById('products-table-body');
             const inventoryBody = document.getElementById('inventory-table-body');
@@ -1365,6 +1395,7 @@
             const bannerGrid = document.getElementById('banner-grid');
             const pageInfo = document.getElementById('page-info');
             const ordersBadge = document.getElementById('orders-badge');
+            const topProductsBody = document.getElementById('top-products-body'); // ─── NEW ───
 
             const productSearch = document.getElementById('product-search');
             const orderSearch = document.getElementById('order-search');
@@ -1422,7 +1453,7 @@
             // ─── LOAD DATA ───
             async function loadAllData() {
                 try {
-                    await Promise.all([loadProducts(), loadCategories(), loadOrders(), loadStats(), loadBanners()]);
+                    await Promise.all([loadProducts(), loadCategories(), loadOrders(), loadStats(), loadBanners(), loadTopProducts()]);
                 } catch (err) {
                     console.error('Load error:', err);
                     showToast('Error loading data: ' + err.message, 'fa-solid fa-exclamation-circle');
@@ -1450,7 +1481,6 @@
                 const data = await fetchJSON(API.orders);
                 orders = data;
                 previousOrderCount = orders.length;
-                // ─── OPTIMIZED: set the last poll timestamp to the most recent order ───
                 if (orders.length > 0 && orders[0].created_at) {
                     lastPollTimestamp = orders[0].created_at;
                 } else {
@@ -1468,6 +1498,50 @@
                 document.getElementById('stat-orders').textContent = data.totalOrders || 0;
                 document.getElementById('stat-revenue').textContent = '₦' + (data.totalRevenue || 0).toLocaleString();
                 return data;
+            }
+
+            // ─── LOAD TOP PRODUCTS (NEW) ───
+            async function loadTopProducts() {
+                try {
+                    const data = await fetchJSON(API.topProducts);
+                    topProducts = data;
+                    renderTopProducts();
+                } catch (err) {
+                    console.error('Error loading top products:', err);
+                    topProducts = [];
+                    renderTopProducts();
+                }
+            }
+
+            function renderTopProducts() {
+                if (!topProductsBody) return;
+                if (topProducts.length === 0) {
+                    topProductsBody.innerHTML = `
+                        <tr><td colspan="4" class="empty-state"><i class="fa-regular fa-chart-simple"></i> No sales data yet</td></tr>
+                    `;
+                    return;
+                }
+                let html = '';
+                topProducts.forEach((item, index) => {
+                    const rank = index + 1;
+                    const revenue = item.revenue || 0;
+                    html += `
+                        <tr>
+                            <td><strong>${rank}</strong></td>
+                            <td>
+                                <div class="product-cell">
+                                    <span class="emoji">${item.emoji || '🍽️'}</span>
+                                    <div class="info">
+                                        <div class="name">${item.name}</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td>${item.quantity_sold}</td>
+                            <td>₦${Number(revenue).toLocaleString()}</td>
+                        </tr>
+                    `;
+                });
+                topProductsBody.innerHTML = html;
             }
 
             // ─── BANNER LOAD ───
@@ -2268,46 +2342,33 @@
 
             async function pollOrders() {
                 try {
-                    // ─── OPTIMIZED: Fetch only orders created after the last poll timestamp ───
                     const url = `${API.orders}?since=${encodeURIComponent(lastPollTimestamp)}`;
                     const response = await fetch(url);
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const newOrders = await response.json();
 
                     if (newOrders.length > 0) {
-                        // ─── New orders found ───
-                        // Show toast for each new order
                         newOrders.forEach(order => {
                             showToast(`🆕 New order #${order.payment_reference || order.id} from ${order.customer_name || 'Customer'}`, 'fa-solid fa-bell');
                         });
 
-                        // Prepend new orders to the existing orders array
                         orders = [...newOrders, ...orders];
-
-                        // Update counts
                         previousOrderCount = orders.length;
                         updateOrdersBadge(orders.length);
-
-                        // Update stats
                         document.getElementById('stat-orders').textContent = orders.length;
 
-                        // Re-render orders table if on orders tab
                         if (currentTab === 'orders') {
                             renderOrders();
                         }
 
-                        // ─── Update the last poll timestamp to the latest order's created_at ───
                         const latestTimestamp = newOrders[0]?.created_at;
                         if (latestTimestamp) {
                             lastPollTimestamp = latestTimestamp;
                         } else {
-                            // Fallback: use current time if no timestamp (shouldn't happen)
                             lastPollTimestamp = new Date().toISOString();
                         }
 
                     } else {
-                        // ─── No new orders ───
-                        // If more than 1 minute has passed, gently update the timestamp to prevent drift
                         const now = new Date().toISOString();
                         if (new Date(now) - new Date(lastPollTimestamp) > 60000) {
                             lastPollTimestamp = now;
@@ -2343,11 +2404,16 @@
                     panels[key].classList.toggle('active', key === tab);
                 });
                 if (tab === 'inventory') renderInventory();
-                if (tab === 'orders') {
-                    renderOrders();
-                }
+                if (tab === 'orders') renderOrders();
                 if (tab === 'categories') renderCategories();
                 if (tab === 'banners') loadBanners();
+                if (tab === 'topproducts') {
+                    if (topProducts.length === 0) {
+                        loadTopProducts();
+                    } else {
+                        renderTopProducts();
+                    }
+                }
             }
 
             // ─── EVENT LISTENERS ───
@@ -2463,17 +2529,15 @@
 
             // ─── INIT ───
             loadAllData().then(() => {
-                // Start polling after initial data load
                 startPolling();
             });
 
-            // Clean up polling when page is unloaded
             window.addEventListener('beforeunload', function() {
                 stopPolling();
             });
 
             console.log('📦 Hot Portion Admin Panel loaded');
-            console.log('🔧 API endpoints: /api/products, /api/categories, /api/orders, /api/stats, /api/v1/banners');
+            console.log('🔧 API endpoints: /api/products, /api/categories, /api/orders, /api/stats, /api/v1/banners, /api/top-products');
             console.log('🔄 Optimized order polling active (every 30s)');
 
         })();
