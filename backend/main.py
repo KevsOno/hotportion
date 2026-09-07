@@ -239,7 +239,7 @@ class AIService:
         # Simple memory cache for Supabase database context
         self._context_cache: Optional[str] = None
         self._cache_timestamp: float = 0
-        self._cache_ttl: int = 0  # Cache context for 5 minutes (300 seconds)
+        self._cache_ttl: int = 3000  # Cache context for 5 minutes (300 seconds)
 
         self._init_clients()
 
@@ -259,7 +259,19 @@ class AIService:
             "When a user asks for the 'menu', 'what do you have', or 'list all items', "
             "respond with a clear list of all available products from the PRODUCTS section, "
             "including name and price. If the list is long, provide a summary and offer to give more details."
-        )
+            # --- NEW FORMATTING INSTRUCTIONS ---
+            "When providing information, format your response for readability:\n"
+            "- Use bullet points (hyphens) for lists.\n"
+            "- Put **item names** or **headings** in bold using asterisks (e.g., **Jollof Rice**).\n"
+            "- Display prices as ₦X,XXX.\n"
+            "- Use emojis sparingly to add visual cues (e.g., 🍚 for rice, 📍 for location, ⏰ for hours).\n"
+            "- For menus, group items by category (e.g., Rice Dishes, Swallows) if possible.\n"
+            "- For services, use a clear structure with short headings (e.g., **Delivery** – ...).\n"
+            "- Keep lines short and use blank lines between sections for readability.\n"
+            "When a user asks for the 'menu', 'what do you have', or 'list all items', "
+            "respond with a clear list of all available products from the PRODUCTS section, "
+            "including name and price. If the list is long, provide a summary and offer to give more details."
+)
 
     def _init_clients(self):
         # Initialize Supabase Client
@@ -403,7 +415,7 @@ class AIService:
                 model=settings.GROQ_MODEL,
                 messages=messages,
                 temperature=0.3,
-                max_tokens=500,
+                max_tokens=700,
                 timeout=10.0
             )
         )
@@ -442,7 +454,7 @@ class AIService:
                 model=settings.OPENAI_MODEL,
                 messages=messages,
                 temperature=0.3,
-                max_tokens=500,
+                max_tokens=700,
                 timeout=10.0
             )
         )
