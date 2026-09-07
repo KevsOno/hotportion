@@ -19,9 +19,9 @@
             min-height: 100vh;
         }
         :root {
-            --primary: #FF5722;
-            --primary-dark: #E64A19;
-            --primary-light: #FF7043;
+            --primary: #E53935;
+            --primary-dark: #C62828;
+            --primary-light: #EF5350;
             --accent: #FFC107;
             --gray-light: #f7f3ee;
             --gray-mid: #bdc3c7;
@@ -99,7 +99,7 @@
         .btn-primary:hover {
             background: var(--primary-dark);
             transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(255, 87, 34, 0.30);
+            box-shadow: 0 6px 20px rgba(229, 57, 53, 0.30);
         }
         .btn-success {
             background: #22c55e;
@@ -187,6 +187,7 @@
             cursor: pointer;
             transition: all 0.2s;
             color: var(--text-muted);
+            position: relative;
         }
         .tabs button:hover {
             background: var(--gray-light);
@@ -195,6 +196,22 @@
         .tabs button.active {
             background: var(--primary);
             color: #fff;
+        }
+        .tab-badge {
+            display: none;
+            background: var(--primary);
+            color: #fff;
+            border-radius: 50%;
+            padding: 1px 8px;
+            font-size: 0.6rem;
+            font-weight: 700;
+            margin-left: 6px;
+            vertical-align: middle;
+            min-width: 20px;
+            text-align: center;
+        }
+        .tab-badge.show {
+            display: inline-block;
         }
 
         /* Panel */
@@ -409,7 +426,7 @@
         .form-group select:focus,
         .form-group textarea:focus {
             border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(255, 87, 34, 0.08);
+            box-shadow: 0 0 0 4px rgba(229, 57, 53, 0.08);
             background: #fff;
         }
         .form-group textarea {
@@ -621,7 +638,7 @@
             color: var(--text-dark);
         }
 
-        /* Banner Grid (for Banner Management) */
+        /* Banner Grid */
         .banner-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -871,7 +888,10 @@
         <div class="tabs" id="admin-tabs">
             <button class="active" data-tab="products"><i class="fa-solid fa-burger"></i> Products</button>
             <button data-tab="inventory"><i class="fa-solid fa-boxes-stacked"></i> Inventory</button>
-            <button data-tab="orders"><i class="fa-solid fa-receipt"></i> Orders</button>
+            <button data-tab="orders" id="orders-tab-btn">
+                <i class="fa-solid fa-receipt"></i> Orders
+                <span class="tab-badge" id="orders-badge">0</span>
+            </button>
             <button data-tab="categories"><i class="fa-solid fa-tags"></i> Categories</button>
             <button data-tab="banners"><i class="fa-solid fa-images"></i> Banners</button>
         </div>
@@ -931,7 +951,7 @@
             </div>
         </div>
 
-        <!-- ─── ORDERS PANEL (UPDATED) ─── -->
+        <!-- ─── ORDERS PANEL ─── -->
         <div class="panel" id="panel-orders">
             <div class="panel-header">
                 <h2><i class="fa-solid fa-receipt" style="color:var(--primary);"></i> Orders</h2>
@@ -1140,7 +1160,7 @@
                     </div>
                     <div class="form-group">
                         <label>Badge Color</label>
-                        <input type="color" id="b-badge-color" value="#FF5722" />
+                        <input type="color" id="b-badge-color" value="#E53935" />
                     </div>
                 </div>
 
@@ -1325,6 +1345,8 @@
             let pageSize = 12;
             let totalPages = 1;
             let currentView = 'all';
+            let previousOrderCount = 0;
+            let pollInterval = null;
 
             // ─── DOM REFS ───
             const tabs = document.querySelectorAll('#admin-tabs button');
@@ -1341,6 +1363,7 @@
             const categoriesBody = document.getElementById('categories-table-body');
             const bannerGrid = document.getElementById('banner-grid');
             const pageInfo = document.getElementById('page-info');
+            const ordersBadge = document.getElementById('orders-badge');
 
             const productSearch = document.getElementById('product-search');
             const orderSearch = document.getElementById('order-search');
@@ -1391,7 +1414,6 @@
                     },
                 });
                 if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-                // Handle 204 No Content
                 if (res.status === 204) return null;
                 return res.json();
             }
@@ -1426,7 +1448,9 @@
             async function loadOrders() {
                 const data = await fetchJSON(API.orders);
                 orders = data;
+                previousOrderCount = orders.length;
                 renderOrders();
+                updateOrdersBadge(orders.length);
                 return data;
             }
 
@@ -1479,7 +1503,7 @@
                     <div class="banner-card" draggable="true" data-index="${index}" data-id="${banner.id}">
                         <div class="banner-image" style="background-image: url('${banner.image_url || '/images/default-banner.jpg'}');">
                             ${banner.badge_text ? `
-                                <span class="badge" style="background:${banner.badge_color || '#FF5722'};">
+                                <span class="badge" style="background:${banner.badge_color || '#E53935'};">
                                     ${banner.badge_text}
                                 </span>
                             ` : ''}
@@ -1487,7 +1511,7 @@
                                 ${banner.is_active ? 'Active' : 'Inactive'}
                             </span>
                             ${banner.is_hero ? '<span class="tag" style="position:absolute;bottom:12px;left:12px;background:#FFC107;padding:2px10px;border-radius:20px;font-size:0.6rem;font-weight:700;">⭐ Hero</span>' : ''}
-                            ${banner.is_featured ? '<span class="tag" style="position:absolute;bottom:12px;left:80px;background:#FF5722;padding:2px10px;border-radius:20px;font-size:0.6rem;font-weight:700;color:white;">🔥 Featured</span>' : ''}
+                            ${banner.is_featured ? '<span class="tag" style="position:absolute;bottom:12px;left:80px;background:#E53935;padding:2px10px;border-radius:20px;font-size:0.6rem;font-weight:700;color:white;">🔥 Featured</span>' : ''}
                         </div>
                         <div class="banner-content">
                             <div class="title">${banner.title}</div>
@@ -1607,7 +1631,6 @@
 
             function updateBannerStats(data) {
                 // If you have stat elements for banners, you can update them here
-                // Not required for functionality, but you could add them.
             }
 
             // ─── BANNER CRUD ───
@@ -1625,7 +1648,7 @@
                         document.getElementById('b-subtitle').value = banner.subtitle || '';
                         document.getElementById('b-description').value = banner.description || '';
                         document.getElementById('b-badge').value = banner.badge_text || '';
-                        document.getElementById('b-badge-color').value = banner.badge_color || '#FF5722';
+                        document.getElementById('b-badge-color').value = banner.badge_color || '#E53935';
                         document.getElementById('b-bg-color').value = banner.background_color || '#fff3ed';
                         document.getElementById('b-text-color').value = banner.text_color || '#1e1e1e';
                         document.getElementById('b-image').value = banner.image_url || '';
@@ -1649,7 +1672,6 @@
                             document.getElementById('b-end-date').value = banner.end_date.slice(0, 16);
                         }
 
-                        // Select categories
                         const categorySelect = document.getElementById('b-categories');
                         if (banner.categories) {
                             Array.from(categorySelect.options).forEach(opt => {
@@ -1657,7 +1679,6 @@
                             });
                         }
 
-                        // Select product
                         const productSelect = document.getElementById('b-product-id');
                         if (banner.product_id) {
                             productSelect.value = banner.product_id;
@@ -1781,7 +1802,7 @@
                 previewContent.innerHTML = `
                     <div class="banner-preview" style="background:${banner.background_color || '#fff3ed'};color:${banner.text_color || '#1e1e1e'};">
                         ${banner.badge_text ? `
-                            <span class="preview-badge" style="background:${banner.badge_color || '#FF5722'};color:white;">
+                            <span class="preview-badge" style="background:${banner.badge_color || '#E53935'};color:white;">
                                 ${banner.badge_text}
                             </span>
                         ` : ''}
@@ -1789,7 +1810,7 @@
                         ${banner.subtitle ? `<p style="font-weight:700;font-size:1.2rem;">${banner.subtitle}</p>` : ''}
                         ${banner.description ? `<p>${banner.description}</p>` : ''}
                         ${banner.cta_text ? `
-                            <div class="preview-cta" style="background:${banner.badge_color || '#FF5722'};color:white;">
+                            <div class="preview-cta" style="background:${banner.badge_color || '#E53935'};color:white;">
                                 ${banner.cta_text}
                                 ${banner.discount_value ? ` ${banner.discount_type === 'percentage' ? `(${banner.discount_value}% OFF)` : `(₦${banner.discount_value} OFF)`}` : ''}
                             </div>
@@ -1909,14 +1930,13 @@
                 });
             }
 
-            // ─── RENDER ORDERS (UPDATED) ───
+            // ─── RENDER ORDERS ───
             function renderOrders() {
                 const search = orderSearch.value.toLowerCase().trim();
                 const dateFilter = orderDateFilter.value;
 
                 let filtered = orders;
 
-                // Search filter
                 if (search) {
                     filtered = filtered.filter(o =>
                         (o.customer_name || '').toLowerCase().includes(search) ||
@@ -1924,7 +1944,6 @@
                     );
                 }
 
-                // Date filter (only if a date is selected)
                 if (dateFilter) {
                     const selectedDate = new Date(dateFilter + 'T00:00:00');
                     filtered = filtered.filter(o => {
@@ -2052,12 +2071,11 @@
                 };
                 const id = productId.value;
                 try {
-                    let result;
                     if (id) {
-                        result = await fetchJSON(`${API.products}/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+                        await fetchJSON(`${API.products}/${id}`, { method: 'PUT', body: JSON.stringify(data) });
                         showToast('Product updated successfully!');
                     } else {
-                        result = await fetchJSON(API.products, { method: 'POST', body: JSON.stringify(data) });
+                        await fetchJSON(API.products, { method: 'POST', body: JSON.stringify(data) });
                         showToast('Product added successfully!');
                     }
                     closeProductModal();
@@ -2229,6 +2247,70 @@
                 orderModal.classList.remove('open');
             }
 
+            // ─── ORDER POLLING ───
+            function updateOrdersBadge(count) {
+                if (ordersBadge) {
+                    if (count > 0) {
+                        ordersBadge.textContent = count;
+                        ordersBadge.classList.add('show');
+                    } else {
+                        ordersBadge.classList.remove('show');
+                    }
+                }
+            }
+
+            async function pollOrders() {
+                try {
+                    const response = await fetch(API.orders);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const newOrders = await response.json();
+                    const newCount = newOrders.length;
+
+                    // Detect new orders
+                    if (newCount > previousOrderCount) {
+                        const diff = newCount - previousOrderCount;
+                        // Show toast notification for each new order
+                        const newItems = newOrders.slice(0, diff);
+                        newItems.forEach(order => {
+                            showToast(`🆕 New order #${order.payment_reference || order.id} from ${order.customer_name || 'Customer'}`, 'fa-solid fa-bell');
+                        });
+
+                        // Update the orders table if on orders tab
+                        if (currentTab === 'orders') {
+                            orders = newOrders;
+                            renderOrders();
+                        }
+
+                        // Update stats
+                        document.getElementById('stat-orders').textContent = newCount;
+
+                        // Update badge
+                        updateOrdersBadge(newCount);
+                    }
+
+                    // Always update orders array and count
+                    orders = newOrders;
+                    previousOrderCount = newCount;
+
+                } catch (err) {
+                    console.warn('Order poll failed:', err);
+                }
+            }
+
+            function startPolling() {
+                if (pollInterval) clearInterval(pollInterval);
+                pollInterval = setInterval(pollOrders, 30000);
+                console.log('🔄 Order polling started (every 30s)');
+            }
+
+            function stopPolling() {
+                if (pollInterval) {
+                    clearInterval(pollInterval);
+                    pollInterval = null;
+                    console.log('⏹️ Order polling stopped');
+                }
+            }
+
             // ─── TAB SWITCHING ───
             function switchTab(tab) {
                 currentTab = tab;
@@ -2239,7 +2321,10 @@
                     panels[key].classList.toggle('active', key === tab);
                 });
                 if (tab === 'inventory') renderInventory();
-                if (tab === 'orders') renderOrders();
+                if (tab === 'orders') {
+                    renderOrders();
+                    // Reset badge when viewing orders (already visible)
+                }
                 if (tab === 'categories') renderCategories();
                 if (tab === 'banners') loadBanners();
             }
@@ -2252,13 +2337,11 @@
             productSearch.addEventListener('input', renderProducts);
             orderSearch.addEventListener('input', renderOrders);
 
-            // Date filter events
             orderFilterBtn.addEventListener('click', renderOrders);
             orderClearFilter.addEventListener('click', function() {
                 orderDateFilter.value = '';
                 renderOrders();
             });
-            // Also re-filter when date changes
             orderDateFilter.addEventListener('change', renderOrders);
 
             document.getElementById('add-product-btn').addEventListener('click', () => openProductModal(null));
@@ -2315,12 +2398,10 @@
                 if (e.target === bannerPreviewModal) bannerPreviewModal.classList.remove('open');
             });
 
-            // CTA type change in banner modal
             document.getElementById('b-cta-type').addEventListener('change', function() {
                 document.getElementById('b-product-group').style.display = this.value === 'product' ? 'block' : 'none';
             });
 
-            // Image upload preview
             document.getElementById('b-image-upload').addEventListener('change', function(e) {
                 const file = e.target.files[0];
                 if (file) {
@@ -2332,7 +2413,6 @@
                 }
             });
 
-            // Pagination
             document.getElementById('prev-page').addEventListener('click', () => {
                 if (currentPage > 1) {
                     currentPage--;
@@ -2361,10 +2441,19 @@
             loadBannerProductOptions();
 
             // ─── INIT ───
-            loadAllData();
+            loadAllData().then(() => {
+                // Start polling after initial data load
+                startPolling();
+            });
+
+            // Clean up polling when page is unloaded
+            window.addEventListener('beforeunload', function() {
+                stopPolling();
+            });
 
             console.log('📦 Hot Portion Admin Panel loaded');
             console.log('🔧 API endpoints: /api/products, /api/categories, /api/orders, /api/stats, /api/v1/banners');
+            console.log('🔄 Order polling active (every 30s)');
 
         })();
     </script>
