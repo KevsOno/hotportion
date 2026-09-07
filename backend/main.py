@@ -239,7 +239,7 @@ class AIService:
         # Simple memory cache for Supabase database context
         self._context_cache: Optional[str] = None
         self._cache_timestamp: float = 0
-        self._cache_ttl: int = 300  # Cache context for 5 minutes (300 seconds)
+        self._cache_ttl: int = 0  # Cache context for 5 minutes (300 seconds)
 
         self._init_clients()
 
