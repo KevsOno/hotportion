@@ -2658,6 +2658,20 @@
                 startHeroAutoplay();
             }
 
+            // ─── PRODUCT REFRESH FUNCTION (used after stock changes) ───
+            async function refreshProducts() {
+                // Reload products from API (or fallback)
+                const loaded = await loadProductsFromAPI();
+                if (!loaded || products.length === 0) {
+                    products = getFallbackProducts();
+                    categories = [...new Set(products.map(p => p.tag))].sort();
+                }
+                renderCategoriesPills();
+                renderMenu();
+                renderFeatured();
+                console.log('🔄 Products refreshed after stock adjustment');
+            }
+
             // ─── INIT DATA ───
             async function initData() {
                 if (shimmerWrapper) shimmerWrapper.style.display = 'grid';
@@ -3119,6 +3133,8 @@
                 orderNotes.value = '';
                 preferredTime.value = '';
                 showToast('✅ Order placed successfully!', 'fa-solid fa-check-circle');
+                // Refresh products to reflect stock changes after order
+                refreshProducts();
             }
             receiptClose.addEventListener('click', closeReceipt);
             receiptOverlay.addEventListener('click', function(e) { if (e.target === this) closeReceipt(); });
@@ -3170,6 +3186,8 @@
                                 if (data) {
                                     if (paymentOk) {
                                         showReceipt(data);
+                                        // Refresh products after successful payment
+                                        refreshProducts();
                                     } else {
                                         showToast('Payment failed or was cancelled. Please try again.', 'fa-solid fa-exclamation-circle');
                                     }
@@ -3187,6 +3205,8 @@
 
                     if (paymentOk) {
                         showReceipt(orderData);
+                        // Refresh products after successful payment
+                        refreshProducts();
                     } else {
                         showToast('Payment failed or was cancelled. Please try again.', 'fa-solid fa-exclamation-circle');
                     }
