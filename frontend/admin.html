@@ -6,7 +6,7 @@
     <title>Hot Portion Grill – Admin Panel</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
     <style>
-        /* ─── ADMIN STYLES ─── (same as before, no changes needed) ─── */
+        /* ─── ADMIN STYLES ─── */
         * {
             margin: 0;
             padding: 0;
@@ -37,7 +37,6 @@
             margin: 0 auto;
             padding: 20px;
         }
-        /* ─── Header ─── */
         .admin-header {
             display: flex;
             align-items: center;
@@ -129,7 +128,6 @@
             font-size: 0.75rem;
         }
 
-        /* Stats */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -165,7 +163,6 @@
             border-left-color: var(--accent);
         }
 
-        /* Tabs */
         .tabs {
             display: flex;
             gap: 4px;
@@ -213,7 +210,6 @@
             display: inline-block;
         }
 
-        /* Panel */
         .panel {
             background: var(--white);
             border-radius: var(--radius);
@@ -270,7 +266,6 @@
             width: 160px;
         }
 
-        /* Table */
         .table-wrap {
             overflow-x: auto;
         }
@@ -298,12 +293,12 @@
         table tr:hover td {
             background: #fafafa;
         }
-        table .product-cell {
+        .product-cell {
             display: flex;
             align-items: center;
             gap: 10px;
         }
-        table .product-cell .thumb {
+        .product-cell .thumb {
             width: 40px;
             height: 40px;
             object-fit: cover;
@@ -311,35 +306,39 @@
             background: var(--gray-light);
             flex-shrink: 0;
         }
-        table .product-cell .emoji {
+        .product-cell .emoji {
             font-size: 1.5rem;
+            flex-shrink: 0;
+            width: 40px;
+            text-align: center;
         }
-        table .product-cell .info .name {
+        .product-cell .info .name {
             font-weight: 700;
         }
-        table .product-cell .info .tag {
+        .product-cell .info .tag {
             font-size: 0.65rem;
             color: var(--text-muted);
             background: var(--gray-light);
             padding: 1px 8px;
             border-radius: 20px;
+            display: inline-block;
         }
-        table .stock-badge {
+        .stock-badge {
             display: inline-block;
             padding: 2px 12px;
             border-radius: 50px;
             font-weight: 700;
             font-size: 0.7rem;
         }
-        table .stock-badge.in-stock {
+        .stock-badge.in-stock {
             background: #dcfce7;
             color: #166534;
         }
-        table .stock-badge.low-stock {
+        .stock-badge.low-stock {
             background: #fef3c7;
             color: #92400e;
         }
-        table .stock-badge.out-of-stock {
+        .stock-badge.out-of-stock {
             background: #fee2e2;
             color: #991b1b;
         }
@@ -349,7 +348,6 @@
             flex-wrap: wrap;
         }
 
-        /* Modal */
         .modal-overlay {
             position: fixed;
             inset: 0;
@@ -452,7 +450,6 @@
             justify-content: flex-end;
         }
 
-        /* Toast */
         .toast-admin {
             position: fixed;
             top: 20px;
@@ -479,7 +476,6 @@
             margin-right: 10px;
         }
 
-        /* Responsive */
         @media (max-width: 768px) {
             .admin-container {
                 padding: 12px;
@@ -584,7 +580,6 @@
             color: #1e1e1e;
         }
 
-        /* Order status badges */
         .status-badge {
             display: inline-block;
             padding: 2px 12px;
@@ -645,14 +640,12 @@
             color: var(--text-dark);
         }
 
-        /* Banner Grid */
         .banner-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
             gap: 20px;
             padding: 20px 0;
         }
-
         .banner-card {
             background: white;
             border-radius: var(--radius);
@@ -662,19 +655,16 @@
             border: 1px solid rgba(0,0,0,0.04);
             position: relative;
         }
-
         .banner-card:hover {
             transform: translateY(-4px);
             box-shadow: var(--shadow-hover);
         }
-
         .banner-card .banner-image {
             height: 180px;
             background-size: cover;
             background-position: center;
             position: relative;
         }
-
         .banner-card .banner-image .badge {
             position: absolute;
             top: 12px;
@@ -685,7 +675,6 @@
             font-weight: 700;
             color: white;
         }
-
         .banner-card .banner-image .status-badge {
             position: absolute;
             top: 12px;
@@ -695,33 +684,27 @@
             font-size: 0.65rem;
             font-weight: 700;
         }
-
         .banner-card .banner-image .status-badge.active {
             background: #22c55e;
             color: white;
         }
-
         .banner-card .banner-image .status-badge.inactive {
             background: #ef4444;
             color: white;
         }
-
         .banner-card .banner-content {
             padding: 16px 20px;
         }
-
         .banner-card .banner-content .title {
             font-size: 1.1rem;
             font-weight: 800;
             margin-bottom: 4px;
         }
-
         .banner-card .banner-content .subtitle {
             font-size: 0.9rem;
             color: var(--text-muted);
             margin-bottom: 8px;
         }
-
         .banner-card .banner-content .meta {
             display: flex;
             gap: 16px;
@@ -730,13 +713,11 @@
             margin-top: 8px;
             flex-wrap: wrap;
         }
-
         .banner-card .banner-content .meta .tag {
             background: var(--gray-light);
             padding: 2px 10px;
             border-radius: 20px;
         }
-
         .banner-card .banner-actions {
             display: flex;
             gap: 4px;
@@ -744,19 +725,16 @@
             border-top: 1px solid #f0f0f0;
             flex-wrap: wrap;
         }
-
         .banner-card .banner-actions .btn {
             font-size: 0.75rem;
             padding: 4px 12px;
         }
 
-        /* Banner Preview */
         .banner-preview-container {
             padding: 20px;
             background: #f8faf9;
             border-radius: var(--radius-sm);
         }
-
         .banner-preview-container .banner-preview {
             border-radius: var(--radius);
             padding: 40px 36px;
@@ -764,7 +742,6 @@
             overflow: hidden;
             min-height: 300px;
         }
-
         .banner-preview-container .banner-preview .preview-badge {
             display: inline-block;
             padding: 6px 16px;
@@ -775,21 +752,18 @@
             letter-spacing: 0.1em;
             margin-bottom: 14px;
         }
-
         .banner-preview-container .banner-preview h1 {
             font-size: 2.8rem;
             font-weight: 900;
             letter-spacing: -0.03em;
             line-height: 1.05;
         }
-
         .banner-preview-container .banner-preview p {
             font-size: 1.1rem;
             max-width: 480px;
             margin-top: 12px;
             line-height: 1.6;
         }
-
         .banner-preview-container .banner-preview .preview-cta {
             margin-top: 20px;
             display: inline-flex;
@@ -802,34 +776,28 @@
             border: none;
             transition: all 0.2s;
         }
-
         .banner-preview-container .banner-preview .preview-cta:hover {
             transform: translateY(-2px);
             box-shadow: 0 8px 24px rgba(0,0,0,0.15);
         }
 
-        /* Drag and Drop for Reordering */
         .banner-card.dragging {
             opacity: 0.5;
             transform: scale(0.95);
         }
-
         .banner-card.drag-over {
             border: 2px dashed var(--primary);
             transform: scale(1.02);
         }
-
         .banner-card .drag-handle {
             cursor: grab;
             padding: 4px 8px;
             color: var(--text-muted);
         }
-
         .banner-card .drag-handle:active {
             cursor: grabbing;
         }
 
-        /* Pagination */
         .pagination {
             display: flex;
             justify-content: center;
@@ -837,23 +805,19 @@
             gap: 16px;
             padding: 20px 0 0;
         }
-
         .pagination button:disabled {
             opacity: 0.4;
             pointer-events: none;
         }
 
-        /* Responsive for Banner Grid */
         @media (max-width: 768px) {
             .banner-grid {
                 grid-template-columns: 1fr;
             }
-
             .banner-preview-container .banner-preview {
                 padding: 20px 16px;
                 min-height: 200px;
             }
-
             .banner-preview-container .banner-preview h1 {
                 font-size: 1.8rem;
             }
@@ -917,7 +881,6 @@
                 <table>
                     <thead>
                         <tr>
-                            <th>Image</th>
                             <th>Product</th>
                             <th>Category</th>
                             <th>Price</th>
@@ -926,7 +889,7 @@
                         </tr>
                     </thead>
                     <tbody id="products-table-body">
-                        <tr><td colspan="6" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
+                        <tr><td colspan="5" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -946,7 +909,6 @@
                 <table>
                     <thead>
                         <tr>
-                            <th>Image</th>
                             <th>Product</th>
                             <th>Category</th>
                             <th>Stock</th>
@@ -955,7 +917,7 @@
                         </tr>
                     </thead>
                     <tbody id="inventory-table-body">
-                        <tr><td colspan="6" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
+                        <tr><td colspan="5" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1171,7 +1133,6 @@
             </div>
             <form id="banner-form" enctype="multipart/form-data">
                 <input type="hidden" id="banner-id" />
-
                 <div class="form-row">
                     <div class="form-group">
                         <label>Title *</label>
@@ -1182,12 +1143,10 @@
                         <input type="text" id="b-subtitle" placeholder="e.g. 10% OFF All Items" />
                     </div>
                 </div>
-
                 <div class="form-group">
                     <label>Description</label>
                     <textarea id="b-description" placeholder="Describe your promotion..."></textarea>
                 </div>
-
                 <div class="form-row">
                     <div class="form-group">
                         <label>Badge Text</label>
@@ -1198,7 +1157,6 @@
                         <input type="color" id="b-badge-color" value="#E53935" />
                     </div>
                 </div>
-
                 <div class="form-row">
                     <div class="form-group">
                         <label>Background Color</label>
@@ -1209,7 +1167,6 @@
                         <input type="color" id="b-text-color" value="#1e1e1e" />
                     </div>
                 </div>
-
                 <div class="form-row">
                     <div class="form-group">
                         <label>Image URL</label>
@@ -1220,7 +1177,6 @@
                         <input type="file" id="b-image-upload" accept="image/*" />
                     </div>
                 </div>
-
                 <div class="form-row">
                     <div class="form-group">
                         <label>CTA Text</label>
@@ -1231,7 +1187,6 @@
                         <input type="text" id="b-cta-link" placeholder="/menu or https://..." />
                     </div>
                 </div>
-
                 <div class="form-row">
                     <div class="form-group">
                         <label>CTA Type</label>
@@ -1248,7 +1203,6 @@
                         </select>
                     </div>
                 </div>
-
                 <div class="form-row">
                     <div class="form-group">
                         <label>Discount Type</label>
@@ -1263,7 +1217,6 @@
                         <input type="number" id="b-discount-value" placeholder="10" min="0" />
                     </div>
                 </div>
-
                 <div class="form-row">
                     <div class="form-group">
                         <label>Start Date</label>
@@ -1274,7 +1227,6 @@
                         <input type="datetime-local" id="b-end-date" />
                     </div>
                 </div>
-
                 <div class="form-row">
                     <div class="form-group">
                         <label>Display Position</label>
@@ -1285,7 +1237,6 @@
                         <input type="number" id="b-display-order" value="0" min="0" />
                     </div>
                 </div>
-
                 <div class="form-row">
                     <div class="form-group">
                         <label>
@@ -1306,7 +1257,6 @@
                         </label>
                     </div>
                 </div>
-
                 <div class="form-group">
                     <label>Categories (optional)</label>
                     <select id="b-categories" multiple style="height:100px;">
@@ -1314,12 +1264,10 @@
                     </select>
                     <small>Hold Ctrl/Cmd to select multiple</small>
                 </div>
-
                 <div class="form-group">
                     <label>Meta Data (JSON)</label>
                     <textarea id="b-meta" placeholder='{"custom_field": "value"}' style="height:60px;"></textarea>
                 </div>
-
                 <div class="form-actions">
                     <button type="button" class="btn btn-outline" id="banner-modal-cancel">Cancel</button>
                     <button type="submit" class="btn btn-primary" id="banner-modal-save">
@@ -1458,12 +1406,11 @@
                 return res.json();
             }
 
-            // ─── IMAGE HELPER (same as homepage cart) ───
+            // ─── IMAGE HELPER ───
             function getProductImage(product) {
                 if (product.image && product.image.startsWith('http')) {
                     return product.image;
                 } else if (product.image) {
-                    // Relative path – assume it's under /fastfood/images/
                     return product.image;
                 }
                 return null;
@@ -1534,9 +1481,8 @@
             function renderTopProducts() {
                 if (!topProductsBody) return;
                 if (topProducts.length === 0) {
-                    topProductsBody.innerHTML = `
-                        <tr><td colspan="4" class="empty-state"><i class="fa-regular fa-chart-simple"></i> No sales data yet</td></tr>
-                    `;
+                    topProductsBody.innerHTML =
+                        `<tr><td colspan="4" class="empty-state"><i class="fa-regular fa-chart-simple"></i> No sales data yet</td></tr>`;
                     return;
                 }
                 let html = '';
@@ -1647,10 +1593,8 @@
                     </div>
                 `).join('');
 
-                // Drag & Drop
                 setupBannerDragDrop();
 
-                // Action buttons
                 document.querySelectorAll('.edit-banner').forEach(btn => {
                     btn.addEventListener('click', () => openBannerModal(btn.dataset.id));
                 });
@@ -1728,11 +1672,9 @@
                 document.getElementById('next-page').disabled = currentPage >= totalPages;
             }
 
-            function updateBannerStats(data) {
-                // Not used
-            }
+            function updateBannerStats(data) {}
 
-            // ─── BANNER CRUD ─── (identical to before)
+            // ─── BANNER CRUD ───
             function openBannerModal(bannerId = null) {
                 const modal = document.getElementById('banner-modal');
                 const form = document.getElementById('banner-form');
@@ -1943,7 +1885,7 @@
                 }
             }
 
-            // ─── RENDER PRODUCTS (WITH IMAGES) ───
+            // ─── RENDER PRODUCTS (with thumbnail images) ───
             function renderProducts() {
                 const search = productSearch.value.toLowerCase().trim();
                 let filtered = products;
@@ -1955,7 +1897,7 @@
                 }
                 if (filtered.length === 0) {
                     productsBody.innerHTML =
-                        `<tr><td colspan="6" class="empty-state"><i class="fa-regular fa-box"></i> No products found</td></tr>`;
+                        `<tr><td colspan="5" class="empty-state"><i class="fa-regular fa-box"></i> No products found</td></tr>`;
                     return;
                 }
                 productsBody.innerHTML = filtered.map(p => {
@@ -1965,9 +1907,9 @@
                         `<span class="emoji">${p.emoji || '🍽️'}</span>`;
                     return `
                         <tr>
-                            <td>${imageHtml}</td>
                             <td>
                                 <div class="product-cell">
+                                    ${imageHtml}
                                     <div class="info">
                                         <div class="name">${p.name}</div>
                                         <div class="tag">${p.tag}</div>
@@ -1995,7 +1937,7 @@
                 });
             }
 
-            // ─── RENDER INVENTORY (WITH IMAGES) ───
+            // ─── RENDER INVENTORY (with thumbnail images) ───
             function renderInventory() {
                 const view = document.querySelector('#inventory-view-toggle .active')?.dataset.view || 'all';
                 let filtered = [...products];
@@ -2004,7 +1946,7 @@
 
                 if (filtered.length === 0) {
                     inventoryBody.innerHTML =
-                        `<tr><td colspan="6" class="empty-state"><i class="fa-regular fa-box"></i> No items in this view</td></tr>`;
+                        `<tr><td colspan="5" class="empty-state"><i class="fa-regular fa-box"></i> No items in this view</td></tr>`;
                     return;
                 }
                 inventoryBody.innerHTML = filtered.map(p => {
@@ -2016,9 +1958,9 @@
                         `<span class="emoji">${p.emoji || '🍽️'}</span>`;
                     return `
                         <tr>
-                            <td>${imageHtml}</td>
                             <td>
                                 <div class="product-cell">
+                                    ${imageHtml}
                                     <div class="info">
                                         <div class="name">${p.name}</div>
                                     </div>
@@ -2039,7 +1981,7 @@
                 });
             }
 
-            // ─── RENDER ORDERS ─── (unchanged)
+            // ─── RENDER ORDERS ───
             function renderOrders() {
                 const search = orderSearch.value.toLowerCase().trim();
                 const dateFilter = orderDateFilter.value;
@@ -2479,7 +2421,6 @@
                 loadAllData().then(() => showToast('Data refreshed!'));
             });
 
-            // Inventory view toggle
             document.querySelectorAll('#inventory-view-toggle button').forEach(btn => {
                 btn.addEventListener('click', function() {
                     document.querySelectorAll('#inventory-view-toggle button').forEach(b => b.classList.remove('active'));
@@ -2488,7 +2429,6 @@
                 });
             });
 
-            // Banner view toggle
             document.querySelectorAll('#banner-view-toggle button').forEach(btn => {
                 btn.addEventListener('click', function() {
                     document.querySelectorAll('#banner-view-toggle button').forEach(b => b.classList.remove('active'));
@@ -2499,7 +2439,6 @@
                 });
             });
 
-            // Banner modal events
             document.getElementById('add-banner-btn').addEventListener('click', () => openBannerModal(null));
             document.getElementById('banner-modal-close').addEventListener('click', closeBannerModal);
             document.getElementById('banner-modal-cancel').addEventListener('click', closeBannerModal);
@@ -2541,7 +2480,6 @@
                 }
             });
 
-            // ─── KEYBOARD SHORTCUTS ───
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
                     if (productModal.classList.contains('open')) closeProductModal();
@@ -2552,10 +2490,8 @@
                 }
             });
 
-            // ─── LOAD BANNER PRODUCT OPTIONS ───
             loadBannerProductOptions();
 
-            // ─── INIT ───
             loadAllData().then(() => {
                 startPolling();
             });
