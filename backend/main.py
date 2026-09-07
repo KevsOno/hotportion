@@ -815,40 +815,90 @@ class BannerService:
         self.table = "banners"
 
     async def get_banners(self, is_active=None, is_hero=None, is_featured=None, category=None, limit=50, offset=0):
+        # Build the base query
         query = self.db.table(self.table).select("*", count="exact")
-        if is_active is not None: query = query.eq("is_active", is_active)
-        if is_hero is not None: query = query.eq("is_hero", is_hero)
-        if is_featured is not None: query = query.eq("is_featured", is_featured)
-        now = datetime.now().isoformat()
-        query = query.or_(f"start_date.is.null,start_date.lte.{now}").or_(f"end_date.is.null,end_date.gte.{now}")
+        if is_active is not None:
+            query = query.eq("is_active", is_active)
+        if is_hero is not None:
+            query = query.eq("is_hero", is_hero)
+        if is_featured is not None:
+            query = query.eq("is_featured", is_featured)
+
+        # Get total count (without date filtering) – you may adjust if needed
         count_res = await execute_db(query)
         total = count_res.count
+
+        # Fetch paginated data (without date filters in SQL)
         result = await execute_db(query.order("display_order").range(offset, offset + limit - 1))
-        for b in result.data:
+
+        now = datetime.now().isoformat()
+
+        # Filter in Python for date range
+        filtered_data = []
+        for banner in result.data:
+            start = banner.get('start_date')
+            end = banner.get('end_date')
+            # If start_date is set and is in the future, skip
+            if start and start > now:
+                continue
+            # If end_date is set and is in the past, skip
+            if end and end < now:
+                continue
+            # Otherwise include
+            filtered_data.append(banner)
+
+        # Enrich with categories and products
+        for b in filtered_data:
             b['categories'] = await self._get_categories(b['id'])
             b['products'] = await self._get_products(b['id'])
+
+        # Calculate stats based on the filtered data (or you can keep total as original count)
+        active_count = len([x for x in filtered_data if x.get('is_active', True)])
+        hero_count = len([x for x in filtered_data if x.get('is_hero', False)])
+        featured_count = len([x for x in filtered_data if x.get('is_featured', False)])
+
         return BannerResponse(
-            banners=result.data, total=total,
-            active_count=len([x for x in result.data if x.get('is_active')]),
-            hero_count=len([x for x in result.data if x.get('is_hero')]),
-            featured_count=len([x for x in result.data if x.get('is_featured')])
+            banners=filtered_data,
+            total=len(filtered_data),      # Use filtered total (or original total if you prefer)
+            active_count=active_count,
+            hero_count=hero_count,
+            featured_count=featured_count
         )
 
     async def get_active(self, is_hero=None, is_featured=None):
+        # Only fetch active banners
         query = self.db.table(self.table).select("*").eq("is_active", True)
-        now = datetime.now().isoformat()
-        query = query.or_(f"start_date.is.null,start_date.lte.{now}").or_(f"end_date.is.null,end_date.gte.{now}")
-        if is_hero is not None: query = query.eq("is_hero", is_hero)
-        if is_featured is not None: query = query.eq("is_featured", is_featured)
+        if is_hero is not None:
+            query = query.eq("is_hero", is_hero)
+        if is_featured is not None:
+            query = query.eq("is_featured", is_featured)
+
         result = await execute_db(query.order("display_order"))
-        for b in result.data:
+
+        now = datetime.now().isoformat()
+
+        # Filter in Python for date range
+        filtered_data = []
+        for banner in result.data:
+            start = banner.get('start_date')
+            end = banner.get('end_date')
+            if start and start > now:
+                continue
+            if end and end < now:
+                continue
+            filtered_data.append(banner)
+
+        # Enrich with categories and products
+        for b in filtered_data:
             b['categories'] = await self._get_categories(b['id'])
             b['products'] = await self._get_products(b['id'])
-        return result.data
+
+        return filtered_data
 
     async def get_banner(self, banner_id: int):
         result = await execute_db(self.db.table(self.table).select("*").eq("id", banner_id))
-        if not result.data: return None
+        if not result.data:
+            return None
         b = result.data[0]
         b['categories'] = await self._get_categories(b['id'])
         b['products'] = await self._get_products(b['id'])
@@ -858,7 +908,8 @@ class BannerService:
         data = banner.dict(exclude={'categories', 'products'})
         data["created_at"] = data["updated_at"] = datetime.now().isoformat()
         result = await execute_db(self.db.table(self.table).insert(data))
-        if not result.data: raise HTTPException(400, "Create failed")
+        if not result.data:
+            raise HTTPException(400, "Create failed")
         bid = result.data[0]['id']
         if banner.categories:
             for cid in banner.categories:
@@ -872,7 +923,8 @@ class BannerService:
         data = banner.dict(exclude={'categories', 'products'}, exclude_unset=True)
         data["updated_at"] = datetime.now().isoformat()
         result = await execute_db(self.db.table(self.table).update(data).eq("id", banner_id))
-        if not result.data: raise HTTPException(404, "Not found")
+        if not result.data:
+            raise HTTPException(404, "Not found")
         if banner.categories is not None:
             await execute_db(self.db.table("banner_categories").delete().eq("banner_id", banner_id))
             for cid in banner.categories:
@@ -887,18 +939,21 @@ class BannerService:
         await execute_db(self.db.table("banner_categories").delete().eq("banner_id", banner_id))
         await execute_db(self.db.table("banner_products").delete().eq("banner_id", banner_id))
         result = await execute_db(self.db.table(self.table).delete().eq("id", banner_id))
-        if not result.data: raise HTTPException(404, "Not found")
+        if not result.data:
+            raise HTTPException(404, "Not found")
 
     async def toggle_banner(self, banner_id: int):
         b = await self.get_banner(banner_id)
-        if not b: raise HTTPException(404, "Not found")
+        if not b:
+            raise HTTPException(404, "Not found")
         new_status = not b['is_active']
         await execute_db(self.db.table(self.table).update({"is_active": new_status, "updated_at": datetime.now().isoformat()}).eq("id", banner_id))
         return {"id": banner_id, "is_active": new_status}
 
     async def duplicate_banner(self, banner_id: int):
         original = await self.get_banner(banner_id)
-        if not original: raise HTTPException(404, "Not found")
+        if not original:
+            raise HTTPException(404, "Not found")
         copy = {k: v for k, v in original.items() if k not in ['id', 'created_at', 'updated_at']}
         copy['title'] = f"{copy['title']} (Copy)"
         copy['is_active'] = False
@@ -917,7 +972,6 @@ class BannerService:
     async def _get_products(self, bid):
         r = await execute_db(self.db.table("banner_products").select("product_id").eq("banner_id", bid))
         return [x['product_id'] for x in r.data]
-
 # ---------- API ROUTES ----------
 @app.get("/health")
 async def health():
