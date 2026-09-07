@@ -22,6 +22,7 @@ from pydantic_settings import BaseSettings
 from supabase import create_client, Client
 from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from datetime import date, datetime
 
 
 
@@ -44,17 +45,22 @@ load_dotenv()
 
 # ---------- HELPER FUNCTION ----------
 
+
 def convert_datetime_to_iso(obj):
-    """Recursively convert all datetime objects in obj to ISO format strings."""
-    if isinstance(obj, datetime):
+    """
+    Recursively convert all datetime and date objects in obj to ISO format strings.
+    Handles dicts, lists, and any object with a __dict__ attribute.
+    """
+    if isinstance(obj, (datetime, date)):
         return obj.isoformat()
     elif isinstance(obj, dict):
         return {k: convert_datetime_to_iso(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [convert_datetime_to_iso(item) for item in obj]
+    elif hasattr(obj, "__dict__"):
+        return convert_datetime_to_iso(obj.__dict__)
     else:
-        return obj
-        
+        return obj        
 
 
 # ---------- CONFIGURATION ----------
