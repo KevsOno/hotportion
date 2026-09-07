@@ -264,7 +264,7 @@ class AIService:
     def _init_clients(self):
         # Initialize Supabase Client
         supabase_url = getattr(settings, 'SUPABASE_URL', None)
-        supabase_key = getattr(settings, 'SUPABASE_KEY', None)
+        supabase_key = getattr(settings, 'SUPABASE_SERVICE_KEY', None)
         if supabase_url and supabase_key:
             try:
                 self.supabase_client = create_client(supabase_url, supabase_key)
