@@ -992,6 +992,60 @@ async def get_categories():
     r = await execute_db(get_supabase().table("categories").select("*").order("name"))
     return r.data
 
+@app.get("/api/top-products")
+async def get_top_products(limit: int = 20):
+    """
+    Returns the top N products by total quantity sold (from paid/confirmed/completed orders).
+    Also includes total revenue for each product.
+    """
+    # Fetch all completed orders (status: paid, confirmed, completed)
+    query = get_supabase().table("orders").select("items").in_("status", ["paid", "confirmed", "completed"])
+    r = await execute_db(query)
+    orders = r.data
+
+    # Aggregate per product
+    totals = {}  # product_id -> {'qty': total, 'revenue': total}
+    for order in orders:
+        for item in order.get('items', []):
+            pid = item.get('product_id')
+            if pid is None:
+                continue
+            qty = item.get('qty', 0)
+            price = item.get('price', 0)
+            if pid not in totals:
+                totals[pid] = {'qty': 0, 'revenue': 0}
+            totals[pid]['qty'] += qty
+            totals[pid]['revenue'] += price * qty
+
+    # Sort by quantity descending and take top N
+    sorted_items = sorted(totals.items(), key=lambda x: x[1]['qty'], reverse=True)[:limit]
+    product_ids = [pid for pid, _ in sorted_items]
+
+    # Fetch product names, emojis
+    if product_ids:
+        prod_res = await execute_db(
+            get_supabase().table("products")
+            .select("id, name, price, emoji")
+            .in_("id", product_ids)
+        )
+        products_map = {p['id']: p for p in prod_res.data}
+    else:
+        products_map = {}
+
+    result = []
+    for pid, data in sorted_items:
+        product_info = products_map.get(pid, {})
+        result.append({
+            "product_id": pid,
+            "name": product_info.get('name', 'Unknown'),
+            "emoji": product_info.get('emoji', '🍽️'),
+            "quantity_sold": data['qty'],
+            "revenue": data['revenue']
+        })
+
+    return result
+
+
 @app.post("/api/categories", response_model=Category, status_code=201)
 async def create_category(c: CategoryBase):
     r = await execute_db(get_supabase().table("categories").insert(c.dict()))
