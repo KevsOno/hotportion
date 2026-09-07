@@ -841,12 +841,12 @@
             .banner-grid {
                 grid-template-columns: 1fr;
             }
-            
+
             .banner-preview-container .banner-preview {
                 padding: 20px 16px;
                 min-height: 200px;
             }
-            
+
             .banner-preview-container .banner-preview h1 {
                 font-size: 1.8rem;
             }
@@ -1136,7 +1136,7 @@
             </div>
             <form id="banner-form" enctype="multipart/form-data">
                 <input type="hidden" id="banner-id" />
-                
+
                 <div class="form-row">
                     <div class="form-group">
                         <label>Title *</label>
@@ -1347,6 +1347,7 @@
             let currentView = 'all';
             let previousOrderCount = 0;
             let pollInterval = null;
+            let lastPollTimestamp = null;  // ─── OPTIMIZED: track the latest order timestamp
 
             // ─── DOM REFS ───
             const tabs = document.querySelectorAll('#admin-tabs button');
@@ -1449,6 +1450,12 @@
                 const data = await fetchJSON(API.orders);
                 orders = data;
                 previousOrderCount = orders.length;
+                // ─── OPTIMIZED: set the last poll timestamp to the most recent order ───
+                if (orders.length > 0 && orders[0].created_at) {
+                    lastPollTimestamp = orders[0].created_at;
+                } else {
+                    lastPollTimestamp = new Date().toISOString();
+                }
                 renderOrders();
                 updateOrdersBadge(orders.length);
                 return data;
@@ -2247,7 +2254,7 @@
                 orderModal.classList.remove('open');
             }
 
-            // ─── ORDER POLLING ───
+            // ─── ORDER POLLING (OPTIMIZED) ───
             function updateOrdersBadge(count) {
                 if (ordersBadge) {
                     if (count > 0) {
@@ -2261,36 +2268,51 @@
 
             async function pollOrders() {
                 try {
-                    const response = await fetch(API.orders);
+                    // ─── OPTIMIZED: Fetch only orders created after the last poll timestamp ───
+                    const url = `${API.orders}?since=${encodeURIComponent(lastPollTimestamp)}`;
+                    const response = await fetch(url);
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const newOrders = await response.json();
-                    const newCount = newOrders.length;
 
-                    // Detect new orders
-                    if (newCount > previousOrderCount) {
-                        const diff = newCount - previousOrderCount;
-                        // Show toast notification for each new order
-                        const newItems = newOrders.slice(0, diff);
-                        newItems.forEach(order => {
+                    if (newOrders.length > 0) {
+                        // ─── New orders found ───
+                        // Show toast for each new order
+                        newOrders.forEach(order => {
                             showToast(`🆕 New order #${order.payment_reference || order.id} from ${order.customer_name || 'Customer'}`, 'fa-solid fa-bell');
                         });
 
-                        // Update the orders table if on orders tab
+                        // Prepend new orders to the existing orders array
+                        orders = [...newOrders, ...orders];
+
+                        // Update counts
+                        previousOrderCount = orders.length;
+                        updateOrdersBadge(orders.length);
+
+                        // Update stats
+                        document.getElementById('stat-orders').textContent = orders.length;
+
+                        // Re-render orders table if on orders tab
                         if (currentTab === 'orders') {
-                            orders = newOrders;
                             renderOrders();
                         }
 
-                        // Update stats
-                        document.getElementById('stat-orders').textContent = newCount;
+                        // ─── Update the last poll timestamp to the latest order's created_at ───
+                        const latestTimestamp = newOrders[0]?.created_at;
+                        if (latestTimestamp) {
+                            lastPollTimestamp = latestTimestamp;
+                        } else {
+                            // Fallback: use current time if no timestamp (shouldn't happen)
+                            lastPollTimestamp = new Date().toISOString();
+                        }
 
-                        // Update badge
-                        updateOrdersBadge(newCount);
+                    } else {
+                        // ─── No new orders ───
+                        // If more than 1 minute has passed, gently update the timestamp to prevent drift
+                        const now = new Date().toISOString();
+                        if (new Date(now) - new Date(lastPollTimestamp) > 60000) {
+                            lastPollTimestamp = now;
+                        }
                     }
-
-                    // Always update orders array and count
-                    orders = newOrders;
-                    previousOrderCount = newCount;
 
                 } catch (err) {
                     console.warn('Order poll failed:', err);
@@ -2300,7 +2322,7 @@
             function startPolling() {
                 if (pollInterval) clearInterval(pollInterval);
                 pollInterval = setInterval(pollOrders, 30000);
-                console.log('🔄 Order polling started (every 30s)');
+                console.log('🔄 Optimized order polling started (every 30s, since=' + lastPollTimestamp + ')');
             }
 
             function stopPolling() {
@@ -2323,7 +2345,6 @@
                 if (tab === 'inventory') renderInventory();
                 if (tab === 'orders') {
                     renderOrders();
-                    // Reset badge when viewing orders (already visible)
                 }
                 if (tab === 'categories') renderCategories();
                 if (tab === 'banners') loadBanners();
@@ -2453,7 +2474,7 @@
 
             console.log('📦 Hot Portion Admin Panel loaded');
             console.log('🔧 API endpoints: /api/products, /api/categories, /api/orders, /api/stats, /api/v1/banners');
-            console.log('🔄 Order polling active (every 30s)');
+            console.log('🔄 Optimized order polling active (every 30s)');
 
         })();
     </script>
