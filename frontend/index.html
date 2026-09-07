@@ -10,6 +10,7 @@
     <link rel="apple-touch-icon" href="/.netlify/images?url=https%3A%2F%2Fajmauddonufaryjbiavh.supabase.co%2Fstorage%2Fv1%2Fobject%2Fpublic%2Fbucket%2Ffastfood%2Fimages%2Ficon-192.png&w=192&format=webp" />
     <title>Hot Portion Grill – Nigerian Meals</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         /* ─── RESET & BASE ─── */
         * {
@@ -125,6 +126,32 @@
             flex-wrap: wrap;
             gap: 12px;
         }
+        /* Chat message Markdown styles */
+.chat-msg-bubble h2 {
+    font-size: 1.1rem;
+    font-weight: 800;
+    margin: 0.4rem 0 0.2rem;
+    color: var(--text-dark);
+}
+.chat-msg-bubble ul {
+    margin: 0.3rem 0 0.6rem;
+    padding-left: 1.2rem;
+}
+.chat-msg-bubble li {
+    list-style-type: disc;
+    margin-bottom: 0.2rem;
+}
+.chat-msg-bubble strong {
+    font-weight: 700;
+    color: var(--primary-dark);
+}
+.chat-msg-bubble p {
+    margin: 0.2rem 0;
+}
+.chat-msg-bubble .hero-offer, 
+.chat-msg-bubble .hero-badge {
+    display: none;  /* hide any accidental hero styles inside chat */
+}
         .brand {
             display: flex;
             align-items: center;
@@ -3307,7 +3334,9 @@
                 if (isTyping && sender === 'assistant') {
                     bubble.innerHTML = '<div class="thinking-dots"><span></span><span></span><span></span></div>';
                 } else {
-                    bubble.innerHTML = text + extraHtml;
+                    // --- NEW: parse Markdown to HTML ---
+                    const parsed = marked.parse(text);   // <-- add this line
+                    bubble.innerHTML = parsed + extraHtml;
                 }
                 row.appendChild(bubble);
                 chatMessages.appendChild(row);
