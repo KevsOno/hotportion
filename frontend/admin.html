@@ -626,79 +626,68 @@
             margin-right: 10px;
         }
 
+        /* ─── SUB-TABS FOR DELIVERY RULES ─── */
+        .sub-tabs {
+            display: flex;
+            gap: 2px;
+            background: var(--gray-light);
+            border-radius: var(--radius-sm);
+            padding: 3px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .sub-tabs button {
+            padding: 6px 16px;
+            border: none;
+            background: transparent;
+            border-radius: var(--radius-sm);
+            font-weight: 600;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--text-muted);
+        }
+        .sub-tabs button:hover {
+            background: rgba(255,255,255,0.5);
+        }
+        .sub-tabs button.active {
+            background: var(--white);
+            color: var(--text-dark);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        .sub-panel {
+            display: none;
+        }
+        .sub-panel.active {
+            display: block;
+            animation: fadeUp 0.2s ease-out;
+        }
+
         @media (max-width: 768px) {
-            .admin-container {
-                padding: 12px;
-            }
-            .admin-header {
-                padding: 12px 16px;
-            }
-            .admin-header .brand {
-                font-size: 1rem;
-            }
-            .stats-grid {
-                grid-template-columns: 1fr 1fr;
-            }
-            .stat-card .number {
-                font-size: 1.4rem;
-            }
-            .panel {
-                padding: 16px;
-            }
-            .panel-header {
-                flex-direction: column;
-                align-items: stretch;
-            }
-            .panel-header .search-box input {
-                width: 100%;
-            }
-            .form-row {
-                grid-template-columns: 1fr;
-            }
-            .modal {
-                padding: 20px;
-                margin: 10px;
-            }
-            .modal.map-modal {
-                max-width: 100%;
-            }
-            .tabs button {
-                padding: 8px 14px;
-                font-size: 0.75rem;
-            }
-            table {
-                font-size: 0.75rem;
-            }
-            table th,
-            table td {
-                padding: 8px 8px;
-            }
-            .actions-cell .btn {
-                font-size: 0.65rem;
-                padding: 3px 8px;
-            }
-            #delivery-area-map-modal {
-                height: 300px;
-            }
-            #delivery-area-map {
-                height: 300px;
-            }
-            .autocomplete-dropdown {
-                max-height: 150px;
-            }
-            .autocomplete-item {
-                padding: 8px 12px;
-                font-size: 0.8rem;
-            }
+            .admin-container { padding: 12px; }
+            .admin-header { padding: 12px 16px; }
+            .admin-header .brand { font-size: 1rem; }
+            .stats-grid { grid-template-columns: 1fr 1fr; }
+            .stat-card .number { font-size: 1.4rem; }
+            .panel { padding: 16px; }
+            .panel-header { flex-direction: column; align-items: stretch; }
+            .panel-header .search-box input { width: 100%; }
+            .form-row { grid-template-columns: 1fr; }
+            .modal { padding: 20px; margin: 10px; }
+            .modal.map-modal { max-width: 100%; }
+            .tabs button { padding: 8px 14px; font-size: 0.75rem; }
+            table { font-size: 0.75rem; }
+            table th, table td { padding: 8px 8px; }
+            .actions-cell .btn { font-size: 0.65rem; padding: 3px 8px; }
+            #delivery-area-map-modal { height: 300px; }
+            #delivery-area-map { height: 300px; }
+            .autocomplete-dropdown { max-height: 150px; }
+            .autocomplete-item { padding: 8px 12px; font-size: 0.8rem; }
+            .sub-tabs button { font-size: 0.7rem; padding: 4px 10px; }
         }
         @media (max-width: 480px) {
-            .stats-grid {
-                grid-template-columns: 1fr;
-            }
-            .admin-header .actions .badge {
-                font-size: 0.65rem;
-                padding: 4px 10px;
-            }
+            .stats-grid { grid-template-columns: 1fr; }
+            .admin-header .actions .badge { font-size: 0.65rem; padding: 4px 10px; }
         }
 
         .loading-spinner {
@@ -711,12 +700,8 @@
             animation: spin 0.6s linear infinite;
         }
         @keyframes spin {
-            0% {
-                transform: rotate(0deg);
-            }
-            100% {
-                transform: rotate(360deg);
-            }
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
         .empty-state {
             text-align: center;
@@ -737,14 +722,8 @@
             font-weight: 700;
             background: var(--gray-light);
         }
-        .tag-preview.primary {
-            background: var(--primary);
-            color: #fff;
-        }
-        .tag-preview.orange {
-            background: var(--accent);
-            color: #1e1e1e;
-        }
+        .tag-preview.primary { background: var(--primary); color: #fff; }
+        .tag-preview.orange { background: var(--accent); color: #1e1e1e; }
 
         .status-badge {
             display: inline-block;
@@ -754,30 +733,12 @@
             font-size: 0.65rem;
             text-transform: uppercase;
         }
-        .status-badge.pending {
-            background: #fef3c7;
-            color: #92400e;
-        }
-        .status-badge.confirmed {
-            background: #dbeafe;
-            color: #1e40af;
-        }
-        .status-badge.preparing {
-            background: #e0f2fe;
-            color: #0369a1;
-        }
-        .status-badge.ready {
-            background: #dcfce7;
-            color: #166534;
-        }
-        .status-badge.completed {
-            background: #e5e7eb;
-            color: #374151;
-        }
-        .status-badge.cancelled {
-            background: #fee2e2;
-            color: #991b1b;
-        }
+        .status-badge.pending { background: #fef3c7; color: #92400e; }
+        .status-badge.confirmed { background: #dbeafe; color: #1e40af; }
+        .status-badge.preparing { background: #e0f2fe; color: #0369a1; }
+        .status-badge.ready { background: #dcfce7; color: #166534; }
+        .status-badge.completed { background: #e5e7eb; color: #374151; }
+        .status-badge.cancelled { background: #fee2e2; color: #991b1b; }
 
         .view-toggle {
             display: flex;
@@ -800,7 +761,7 @@
         .view-toggle button.active {
             background: var(--white);
             color: var(--text-dark);
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
         }
         .view-toggle button:hover:not(.active) {
             color: var(--text-dark);
@@ -850,27 +811,11 @@
             font-size: 0.65rem;
             font-weight: 700;
         }
-        .banner-card .banner-image .status-badge.active {
-            background: #22c55e;
-            color: white;
-        }
-        .banner-card .banner-image .status-badge.inactive {
-            background: #ef4444;
-            color: white;
-        }
-        .banner-card .banner-content {
-            padding: 16px 20px;
-        }
-        .banner-card .banner-content .title {
-            font-size: 1.1rem;
-            font-weight: 800;
-            margin-bottom: 4px;
-        }
-        .banner-card .banner-content .subtitle {
-            font-size: 0.9rem;
-            color: var(--text-muted);
-            margin-bottom: 8px;
-        }
+        .banner-card .banner-image .status-badge.active { background: #22c55e; color: white; }
+        .banner-card .banner-image .status-badge.inactive { background: #ef4444; color: white; }
+        .banner-card .banner-content { padding: 16px 20px; }
+        .banner-card .banner-content .title { font-size: 1.1rem; font-weight: 800; margin-bottom: 4px; }
+        .banner-card .banner-content .subtitle { font-size: 0.9rem; color: var(--text-muted); margin-bottom: 8px; }
         .banner-card .banner-content .meta {
             display: flex;
             gap: 16px;
@@ -879,11 +824,7 @@
             margin-top: 8px;
             flex-wrap: wrap;
         }
-        .banner-card .banner-content .meta .tag {
-            background: var(--gray-light);
-            padding: 2px 10px;
-            border-radius: 20px;
-        }
+        .banner-card .banner-content .meta .tag { background: var(--gray-light); padding: 2px 10px; border-radius: 20px; }
         .banner-card .banner-actions {
             display: flex;
             gap: 4px;
@@ -891,10 +832,7 @@
             border-top: 1px solid #f0f0f0;
             flex-wrap: wrap;
         }
-        .banner-card .banner-actions .btn {
-            font-size: 0.75rem;
-            padding: 4px 12px;
-        }
+        .banner-card .banner-actions .btn { font-size: 0.75rem; padding: 4px 12px; }
 
         .banner-preview-container {
             padding: 20px;
@@ -947,22 +885,10 @@
             box-shadow: 0 8px 24px rgba(0,0,0,0.15);
         }
 
-        .banner-card.dragging {
-            opacity: 0.5;
-            transform: scale(0.95);
-        }
-        .banner-card.drag-over {
-            border: 2px dashed var(--primary);
-            transform: scale(1.02);
-        }
-        .banner-card .drag-handle {
-            cursor: grab;
-            padding: 4px 8px;
-            color: var(--text-muted);
-        }
-        .banner-card .drag-handle:active {
-            cursor: grabbing;
-        }
+        .banner-card.dragging { opacity: 0.5; transform: scale(0.95); }
+        .banner-card.drag-over { border: 2px dashed var(--primary); transform: scale(1.02); }
+        .banner-card .drag-handle { cursor: grab; padding: 4px 8px; color: var(--text-muted); }
+        .banner-card .drag-handle:active { cursor: grabbing; }
 
         .pagination {
             display: flex;
@@ -971,29 +897,24 @@
             gap: 16px;
             padding: 20px 0 0;
         }
-        .pagination button:disabled {
-            opacity: 0.4;
-            pointer-events: none;
-        }
+        .pagination button:disabled { opacity: 0.4; pointer-events: none; }
 
-        /* Autocomplete highlight */
-        .autocomplete-item .highlight {
-            font-weight: 700;
-            color: var(--primary);
+        /* ─── Rule table inline edit (optional) ─── */
+        .inline-edit-input {
+            border: 1px solid transparent;
+            background: transparent;
+            padding: 4px 6px;
+            width: 100%;
+            font-size: 0.85rem;
+            transition: border-color 0.2s, background 0.2s;
+            border-radius: 4px;
         }
-
-        @media (max-width: 768px) {
-            .banner-grid {
-                grid-template-columns: 1fr;
-            }
-            .banner-preview-container .banner-preview {
-                padding: 20px 16px;
-                min-height: 200px;
-            }
-            .banner-preview-container .banner-preview h1 {
-                font-size: 1.8rem;
-            }
+        .inline-edit-input:focus {
+            border-color: var(--primary);
+            background: white;
+            outline: none;
         }
+        .inline-edit-input:hover { background: #f8faf9; }
     </style>
     <!-- ─── LEAFTET CDN ─── -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -1041,8 +962,9 @@
             <button data-tab="categories"><i class="fa-solid fa-tags"></i> Categories</button>
             <button data-tab="banners"><i class="fa-solid fa-images"></i> Banners</button>
             <button data-tab="topproducts"><i class="fa-solid fa-chart-simple"></i> Top Products</button>
-            <!-- NEW TAB: Areas Covered -->
             <button data-tab="areas"><i class="fa-solid fa-map-location-dot"></i> Areas Covered</button>
+            <!-- NEW TAB: Delivery Rules -->
+            <button data-tab="deliveryrules"><i class="fa-solid fa-truck-fast"></i> Delivery Rules</button>
         </div>
 
         <!-- ─── PRODUCTS PANEL ─── -->
@@ -1256,6 +1178,120 @@
                         </thead>
                         <tbody id="areas-table-body">
                             <tr><td colspan="5" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading areas...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── DELIVERY RULES PANEL ─── -->
+        <div class="panel" id="panel-deliveryrules">
+            <div class="panel-header">
+                <h2><i class="fa-solid fa-truck-fast" style="color:var(--primary);"></i> Delivery Fee Rules</h2>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <button class="btn btn-primary btn-sm" id="refresh-rules"><i class="fa-solid fa-rotate"></i> Refresh</button>
+                </div>
+            </div>
+
+            <!-- Sub-tabs -->
+            <div class="sub-tabs" id="rules-sub-tabs">
+                <button class="active" data-subtab="value-discount">Value Discount</button>
+                <button data-subtab="peak-hours">Peak Hours</button>
+                <button data-subtab="loyalty">Loyalty</button>
+                <button data-subtab="item-surcharge">Item Surcharge</button>
+            </div>
+
+            <!-- ── Value Discount Rules ── -->
+            <div class="sub-panel active" id="sub-value-discount">
+                <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+                    <button class="btn btn-primary btn-sm" id="add-value-rule"><i class="fa-solid fa-plus"></i> Add Rule</button>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Min Order (₦)</th>
+                                <th>Max Order (₦)</th>
+                                <th>Multiplier</th>
+                                <th>Discount (₦)</th>
+                                <th>Free Delivery</th>
+                                <th>Description</th>
+                                <th style="text-align:right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="value-rules-body">
+                            <tr><td colspan="7" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ── Peak Hours ── -->
+            <div class="sub-panel" id="sub-peak-hours">
+                <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+                    <button class="btn btn-primary btn-sm" id="add-peak-setting"><i class="fa-solid fa-plus"></i> Add Peak Setting</button>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Day</th>
+                                <th>Start</th>
+                                <th>End</th>
+                                <th>Surcharge (₦)</th>
+                                <th>Active</th>
+                                <th style="text-align:right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="peak-settings-body">
+                            <tr><td colspan="6" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ── Loyalty ── -->
+            <div class="sub-panel" id="sub-loyalty">
+                <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+                    <button class="btn btn-primary btn-sm" id="add-loyalty-setting"><i class="fa-solid fa-plus"></i> Add Loyalty Setting</button>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Min Orders</th>
+                                <th>Discount %</th>
+                                <th>Active</th>
+                                <th style="text-align:right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="loyalty-settings-body">
+                            <tr><td colspan="4" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ── Item Surcharge ── -->
+            <div class="sub-panel" id="sub-item-surcharge">
+                <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+                    <button class="btn btn-primary btn-sm" id="add-item-surcharge-rule"><i class="fa-solid fa-plus"></i> Add Surcharge Rule</button>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Min Main Items</th>
+                                <th>Max Main Items</th>
+                                <th>Surcharge (₦)</th>
+                                <th>Weight Threshold (kg)</th>
+                                <th>Surcharge per kg (₦)</th>
+                                <th>Description</th>
+                                <th style="text-align:right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="item-surcharge-body">
+                            <tr><td colspan="7" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -1577,6 +1613,182 @@
         </div>
     </div>
 
+    <!-- ─── RULE MODALS ─── -->
+
+    <!-- Value Discount Rule Modal -->
+    <div class="modal-overlay" id="value-rule-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="value-rule-title">Add Value Discount Rule</h3>
+                <button class="modal-close" id="value-rule-close">&times;</button>
+            </div>
+            <form id="value-rule-form">
+                <input type="hidden" id="value-rule-id" />
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Min Order Value (₦)</label>
+                        <input type="number" id="vr-min" required min="0" step="100" />
+                    </div>
+                    <div class="form-group">
+                        <label>Max Order Value (₦) <small>(optional)</small></label>
+                        <input type="number" id="vr-max" min="0" step="100" />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Fee Multiplier (e.g. 0.7)</label>
+                        <input type="number" id="vr-multiplier" step="0.01" min="0" value="1.0" />
+                    </div>
+                    <div class="form-group">
+                        <label>Fixed Discount (₦)</label>
+                        <input type="number" id="vr-discount" min="0" step="100" value="0" />
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="vr-free" /> Free Delivery (overrides multiplier & discount)
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <input type="text" id="vr-desc" placeholder="e.g. 50% off" />
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-outline" id="value-rule-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Peak Setting Modal -->
+    <div class="modal-overlay" id="peak-setting-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="peak-setting-title">Add Peak Hour Setting</h3>
+                <button class="modal-close" id="peak-setting-close">&times;</button>
+            </div>
+            <form id="peak-setting-form">
+                <input type="hidden" id="peak-setting-id" />
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Day of Week</label>
+                        <select id="ps-day">
+                            <option value="">All Days</option>
+                            <option value="0">Sunday</option>
+                            <option value="1">Monday</option>
+                            <option value="2">Tuesday</option>
+                            <option value="3">Wednesday</option>
+                            <option value="4">Thursday</option>
+                            <option value="5">Friday</option>
+                            <option value="6">Saturday</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Start Time</label>
+                        <input type="time" id="ps-start" required />
+                    </div>
+                    <div class="form-group">
+                        <label>End Time</label>
+                        <input type="time" id="ps-end" required />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Surcharge Amount (₦)</label>
+                        <input type="number" id="ps-amount" required min="0" step="50" value="200" />
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="ps-active" checked /> Active
+                        </label>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-outline" id="peak-setting-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Loyalty Setting Modal -->
+    <div class="modal-overlay" id="loyalty-setting-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="loyalty-setting-title">Add Loyalty Setting</h3>
+                <button class="modal-close" id="loyalty-setting-close">&times;</button>
+            </div>
+            <form id="loyalty-setting-form">
+                <input type="hidden" id="loyalty-setting-id" />
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Min Orders</label>
+                        <input type="number" id="ls-min-orders" required min="1" value="5" />
+                    </div>
+                    <div class="form-group">
+                        <label>Discount Percentage</label>
+                        <input type="number" id="ls-discount-pct" required min="0" max="100" value="20" />
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="ls-active" checked /> Active
+                    </label>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-outline" id="loyalty-setting-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Item Surcharge Rule Modal -->
+    <div class="modal-overlay" id="item-surcharge-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="item-surcharge-title">Add Item Surcharge Rule</h3>
+                <button class="modal-close" id="item-surcharge-close">&times;</button>
+            </div>
+            <form id="item-surcharge-form">
+                <input type="hidden" id="item-surcharge-id" />
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Min Main Items</label>
+                        <input type="number" id="isr-min-items" min="0" step="1" />
+                    </div>
+                    <div class="form-group">
+                        <label>Max Main Items</label>
+                        <input type="number" id="isr-max-items" min="0" step="1" />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Surcharge Amount (₦)</label>
+                        <input type="number" id="isr-amount" min="0" step="50" value="0" />
+                    </div>
+                    <div class="form-group">
+                        <label>Weight Threshold (kg) <small>(optional)</small></label>
+                        <input type="number" id="isr-weight-threshold" step="0.1" min="0" />
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Surcharge per kg (₦) <small>(if weight threshold set)</small></label>
+                    <input type="number" id="isr-per-kg" min="0" step="10" value="50" />
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <input type="text" id="isr-desc" placeholder="e.g. 7-10 main items" />
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-outline" id="item-surcharge-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- ─── SCRIPTS ─── -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
@@ -1593,6 +1805,11 @@
                 banners: '/api/v1/banners',
                 topProducts: '/api/top-products',
                 deliveryAreas: '/api/delivery-areas',
+                // Delivery Rules
+                valueRules: '/api/admin/delivery-rules',
+                peakSettings: '/api/admin/peak-settings',
+                loyaltySettings: '/api/admin/loyalty-settings',
+                itemSurchargeRules: '/api/admin/item-surcharge-rules',
             };
 
             // ─── TOAST ───
@@ -1647,6 +1864,7 @@
                 banners: document.getElementById('panel-banners'),
                 topproducts: document.getElementById('panel-topproducts'),
                 areas: document.getElementById('panel-areas'),
+                deliveryrules: document.getElementById('panel-deliveryrules'),
             };
             const productsBody = document.getElementById('products-table-body');
             const inventoryBody = document.getElementById('inventory-table-body');
@@ -1834,12 +2052,10 @@
                     return;
                 }
                 areasBody.innerHTML = deliveryAreas.map(area => {
-                    // Handle both possible field names from the API
                     const id = area.id || area.area_id;
                     const name = area.name || area.area_name;
                     const fee = area.fee || area.area_fee;
                     const createdAt = area.created_at || area.area_created_at;
-                    
                     return `
                         <tr>
                             <td><code style="background:#f0f0f0;padding:2px 8px;border-radius:4px;font-size:0.75rem;">${id}</code></td>
@@ -1864,15 +2080,12 @@
                 });
             }
 
-            // ─── AREA MAP ───
+            // ─── AREA MAP (unchanged) ───
             function initAreaMap() {
                 const mapContainer = document.getElementById('delivery-area-map');
                 if (!mapContainer) return;
-
-                // Default center: Lagos, Nigeria
                 const center = [6.5244, 3.3792];
                 const zoom = 12;
-
                 if (!areaMap) {
                     areaMap = L.map(mapContainer, {
                         center: center,
@@ -1890,26 +2103,19 @@
 
             function updateAreaMap() {
                 if (!areaMap) return;
-
-                // Clear existing layers
                 areaMapLayers.forEach(layer => {
                     if (areaMap.hasLayer(layer)) {
                         areaMap.removeLayer(layer);
                     }
                 });
                 areaMapLayers = [];
-
-                // Add each area as a polygon
                 deliveryAreas.forEach(area => {
                     try {
-                        // Handle polygon field - could be 'polygon' or 'area_polygon'
                         const polygonData = area.polygon || area.area_polygon;
                         if (!polygonData) return;
-                        
                         const geojson = typeof polygonData === 'string' ? JSON.parse(polygonData) : polygonData;
                         const name = area.name || area.area_name;
                         const fee = area.fee || area.area_fee;
-                        
                         const layer = L.geoJSON(geojson, {
                             style: {
                                 color: '#E53935',
@@ -1932,8 +2138,6 @@
                         console.warn('Error rendering area:', area.id, err);
                     }
                 });
-
-                // Fit map to show all areas
                 if (areaMapLayers.length > 0) {
                     const group = L.featureGroup(areaMapLayers);
                     areaMap.fitBounds(group.getBounds().pad(0.1));
@@ -1946,10 +2150,8 @@
             function initAreaModalMap() {
                 const mapContainer = document.getElementById('delivery-area-map-modal');
                 if (!mapContainer) return;
-
                 const center = [6.5244, 3.3792];
                 const zoom = 12;
-
                 if (!areaMapModal) {
                     areaMapModal = L.map(mapContainer, {
                         center: center,
@@ -1960,8 +2162,6 @@
                         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
                         maxZoom: 19,
                     }).addTo(areaMapModal);
-
-                    // Add draw control
                     areaDrawControl = new L.Control.Draw({
                         draw: {
                             polygon: {
@@ -1987,26 +2187,20 @@
                         }
                     });
                     areaMapModal.addControl(areaDrawControl);
-
-                    // Handle draw events
                     areaMapModal.on(L.Draw.Event.CREATED, function(event) {
                         const layer = event.layer;
-                        // Remove existing polygon if any
                         if (areaDrawnPolygon) {
                             areaMapModal.removeLayer(areaDrawnPolygon);
                             areaDrawnPolygon = null;
                         }
                         areaDrawnPolygon = layer;
                         areaMapModal.addLayer(layer);
-
-                        // Update status
                         const coords = layer.getLatLngs()[0];
                         if (coords && coords.length >= 4) {
                             polygonStatus.textContent = `Polygon drawn (${coords.length} points)`;
                             polygonStatus.style.color = '#22c55e';
                         }
                     });
-
                     areaMapModal.on(L.Draw.Event.DELETED, function() {
                         if (areaDrawnPolygon) {
                             areaMapModal.removeLayer(areaDrawnPolygon);
@@ -2015,7 +2209,6 @@
                         polygonStatus.textContent = 'None';
                         polygonStatus.style.color = 'var(--text-dark)';
                     });
-
                     areaMapModal.on(L.Draw.Event.EDITED, function(event) {
                         const layers = event.layers;
                         layers.eachLayer(function(layer) {
@@ -2033,7 +2226,6 @@
                     });
                 } else {
                     areaMapModal.setView(center, zoom);
-                    // Clear any existing drawn layers
                     if (areaDrawnPolygon) {
                         areaMapModal.removeLayer(areaDrawnPolygon);
                         areaDrawnPolygon = null;
@@ -2047,16 +2239,11 @@
                 }
             }
 
-            // ─── Get Polygon GeoJSON ───
             function getPolygonGeoJSON() {
                 if (!areaDrawnPolygon) return null;
                 try {
-                    // Get the GeoJSON from the drawn layer (Leaflet returns a Feature)
                     const feature = areaDrawnPolygon.toGeoJSON();
-                    
-                    // Extract just the geometry from the Feature
                     if (feature && feature.geometry) {
-                        // Return the raw geometry object (just the Polygon)
                         return feature.geometry;
                     }
                     console.error('Invalid polygon geometry:', feature);
@@ -2070,7 +2257,6 @@
             function setPolygonFromGeoJSON(geojson) {
                 if (!areaMapModal || !geojson) return;
                 try {
-                    // Clear any existing drawn polygon
                     if (areaDrawnPolygon) {
                         areaMapModal.removeLayer(areaDrawnPolygon);
                         areaDrawnPolygon = null;
@@ -2079,7 +2265,6 @@
                         areaMapModal.removeLayer(areaEditLayer);
                         areaEditLayer = null;
                     }
-
                     const layer = L.geoJSON(geojson, {
                         style: {
                             color: '#E53935',
@@ -2089,12 +2274,9 @@
                             fillOpacity: 0.2,
                         }
                     });
-                    
                     areaEditLayer = layer;
                     areaMapModal.addLayer(layer);
                     areaMapModal.fitBounds(layer.getBounds().pad(0.1));
-
-                    // Get the polygon layer from the geoJSON
                     layer.eachLayer(function(l) {
                         areaDrawnPolygon = l;
                         const coords = l.getLatLngs()[0];
@@ -2115,55 +2297,42 @@
                     autocompleteDropdown.classList.remove('show');
                     return;
                 }
-
                 const loadingEl = autocompleteDropdown.querySelector('.autocomplete-loading');
                 const emptyEl = autocompleteDropdown.querySelector('.autocomplete-empty');
                 loadingEl.style.display = 'block';
                 emptyEl.style.display = 'none';
                 autocompleteDropdown.classList.add('show');
-
                 try {
                     const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=8&addressdetails=1`;
                     const response = await fetch(url, {
                         headers: { 'User-Agent': 'HotPortionGrill/1.0' }
                     });
-
                     if (!response.ok) throw new Error('Search failed');
-
                     const data = await response.json();
                     loadingEl.style.display = 'none';
-
-                    // Remove old results (keep loading and empty elements)
                     const items = autocompleteDropdown.querySelectorAll('.autocomplete-item');
                     items.forEach(el => el.remove());
-
                     if (!data || data.length === 0) {
                         emptyEl.style.display = 'block';
                         return;
                     }
-
                     emptyEl.style.display = 'none';
-
                     data.forEach(result => {
                         const item = document.createElement('div');
                         item.className = 'autocomplete-item';
-
                         const displayName = result.display_name || result.name || 'Unknown location';
                         const subText = result.address ? 
                             `${result.address.city || result.address.town || result.address.village || ''}, ${result.address.country || ''}` : 
                             '';
-
                         item.innerHTML = `
                             <span>${highlightText(displayName, query)}</span>
                             ${subText ? `<span class="sub-text">${highlightText(subText, query)}</span>` : ''}
                         `;
-
                         item.addEventListener('click', function() {
                             const lat = parseFloat(result.lat);
                             const lng = parseFloat(result.lon);
                             if (areaMapModal && !isNaN(lat) && !isNaN(lng)) {
                                 areaMapModal.setView([lat, lng], 14);
-                                // Add a temporary marker to show the location
                                 const marker = L.marker([lat, lng]).addTo(areaMapModal);
                                 setTimeout(() => {
                                     areaMapModal.removeLayer(marker);
@@ -2172,10 +2341,8 @@
                             locationSearch.value = displayName;
                             autocompleteDropdown.classList.remove('show');
                         });
-
                         autocompleteDropdown.appendChild(item);
                     });
-
                 } catch (err) {
                     console.warn('Autocomplete error:', err);
                     loadingEl.style.display = 'none';
@@ -2200,8 +2367,6 @@
                 polygonStatus.style.color = 'var(--text-dark)';
                 locationSearch.value = '';
                 autocompleteDropdown.classList.remove('show');
-
-                // Reset map
                 if (areaMapModal) {
                     if (areaDrawnPolygon) {
                         areaMapModal.removeLayer(areaDrawnPolygon);
@@ -2213,7 +2378,6 @@
                     }
                     areaMapModal.setView([6.5244, 3.3792], 12);
                 }
-
                 if (areaIdToEdit) {
                     const area = deliveryAreas.find(a => a.id == areaIdToEdit || a.area_id == areaIdToEdit);
                     if (area) {
@@ -2222,11 +2386,9 @@
                         areaId.value = area.id || area.area_id;
                         areaName.value = area.name || area.area_name;
                         areaFee.value = area.fee || area.area_fee;
-                        // Load polygon
                         const polygonData = area.polygon || area.area_polygon;
                         if (polygonData) {
                             const geojson = typeof polygonData === 'string' ? JSON.parse(polygonData) : polygonData;
-                            // Need to wait for map to be ready
                             setTimeout(() => {
                                 if (areaMapModal) {
                                     setPolygonFromGeoJSON(geojson);
@@ -2241,9 +2403,7 @@
                     areaName.value = '';
                     areaFee.value = '';
                 }
-
                 modal.classList.add('open');
-                // Re-initialize modal map if needed
                 setTimeout(() => {
                     initAreaModalMap();
                     if (areaMapModal) {
@@ -2266,13 +2426,11 @@
                 autocompleteDropdown.classList.remove('show');
             }
 
-            // ─── saveArea with correct polygon format ───
             async function saveArea(e) {
                 e.preventDefault();
                 const id = areaId.value;
                 const name = areaName.value.trim();
                 const fee = parseInt(areaFee.value);
-
                 if (!name) {
                     showToast('Please enter an area name.', 'fa-solid fa-exclamation-circle');
                     return;
@@ -2281,22 +2439,12 @@
                     showToast('Please enter a valid fee.', 'fa-solid fa-exclamation-circle');
                     return;
                 }
-
                 const polygon = getPolygonGeoJSON();
                 if (!polygon) {
                     showToast('Please draw a polygon on the map.', 'fa-solid fa-exclamation-circle');
                     return;
                 }
-
-                // Log the polygon for debugging
-                console.log('Sending polygon:', JSON.stringify(polygon));
-
-                const data = {
-                    name: name,
-                    fee: fee,
-                    polygon: polygon
-                };
-
+                const data = { name, fee, polygon };
                 try {
                     let response;
                     if (id) {
@@ -2312,19 +2460,15 @@
                             body: JSON.stringify(data)
                         });
                     }
-
-                    // Try to parse the response even if it's an error
                     let result;
                     const contentType = response.headers.get('content-type');
                     if (contentType && contentType.includes('application/json')) {
                         result = await response.json();
                     }
-
                     if (!response.ok) {
                         const errorMsg = result?.message || result?.detail || 'Failed to save area';
                         throw new Error(errorMsg);
                     }
-
                     showToast(id ? 'Area updated successfully!' : 'Area created successfully!');
                     closeAreaModal();
                     await loadDeliveryAreas();
@@ -2339,7 +2483,6 @@
                 const name = area?.name || area?.area_name || 'Unknown';
                 if (!area) return;
                 if (!confirm(`Delete delivery area "${name}"? This action cannot be undone.`)) return;
-
                 try {
                     const response = await fetch(`${API.deliveryAreas}/${id}`, {
                         method: 'DELETE'
@@ -2356,7 +2499,7 @@
                 }
             }
 
-            // ─── RENDER PRODUCTS ───
+            // ─── RENDER FUNCTIONS (unchanged) ───
             function renderProducts() {
                 const search = productSearch.value.toLowerCase().trim();
                 let filtered = products;
@@ -2399,7 +2542,6 @@
                         </tr>
                     `;
                 }).join('');
-
                 document.querySelectorAll('.edit-product').forEach(btn => {
                     btn.addEventListener('click', () => editProduct(btn.dataset.id));
                 });
@@ -2408,13 +2550,11 @@
                 });
             }
 
-            // ─── RENDER INVENTORY ───
             function renderInventory() {
                 const view = document.querySelector('#inventory-view-toggle .active')?.dataset.view || 'all';
                 let filtered = [...products];
                 if (view === 'low') filtered = filtered.filter(p => p.stock > 0 && p.stock <= 10);
                 if (view === 'out') filtered = filtered.filter(p => p.stock === 0);
-
                 if (filtered.length === 0) {
                     inventoryBody.innerHTML =
                         `<tr><td colspan="5" class="empty-state"><i class="fa-regular fa-box"></i> No items in this view</td></tr>`;
@@ -2446,26 +2586,21 @@
                         </tr>
                     `;
                 }).join('');
-
                 document.querySelectorAll('.adjust-stock').forEach(btn => {
                     btn.addEventListener('click', () => adjustStock(btn.dataset.id, parseInt(btn.dataset.current)));
                 });
             }
 
-            // ─── RENDER ORDERS ───
             function renderOrders() {
                 const search = orderSearch.value.toLowerCase().trim();
                 const dateFilter = orderDateFilter.value;
-
                 let filtered = orders;
-
                 if (search) {
                     filtered = filtered.filter(o =>
                         (o.customer_name || '').toLowerCase().includes(search) ||
                         (o.payment_reference || '').toLowerCase().includes(search)
                     );
                 }
-
                 if (dateFilter) {
                     const selectedDate = new Date(dateFilter + 'T00:00:00');
                     filtered = filtered.filter(o => {
@@ -2474,13 +2609,11 @@
                         return orderDate.toDateString() === selectedDate.toDateString();
                     });
                 }
-
                 if (filtered.length === 0) {
                     ordersBody.innerHTML =
                         `<tr><td colspan="8" class="empty-state"><i class="fa-regular fa-receipt"></i> No orders found</td></tr>`;
                     return;
                 }
-
                 ordersBody.innerHTML = filtered.map(o => {
                     const itemCount = Array.isArray(o.items) ? o.items.reduce((sum, i) => sum + (i.qty || 0), 0) : 0;
                     const createdAt = o.created_at ? new Date(o.created_at).toLocaleString() : '-';
@@ -2500,7 +2633,6 @@
                         </tr>
                     `;
                 }).join('');
-
                 document.querySelectorAll('.view-order').forEach(btn => {
                     btn.addEventListener('click', () => viewOrder(btn.dataset.id));
                 });
@@ -2539,7 +2671,6 @@
                 topProductsBody.innerHTML = html;
             }
 
-            // ─── RENDER CATEGORIES ───
             function renderCategories() {
                 if (categories.length === 0) {
                     categoriesBody.innerHTML =
@@ -2559,7 +2690,6 @@
                         </tr>
                     `;
                 }).join('');
-
                 document.querySelectorAll('.edit-category').forEach(btn => {
                     btn.addEventListener('click', () => editCategory(btn.dataset.id));
                 });
@@ -2744,7 +2874,6 @@
                             <span>₦${Number(item.price * item.qty).toLocaleString()}</span>
                         </div>
                     `).join('') || '<p style="color:var(--text-muted);">No items</p>';
-
                     orderDetailBody.innerHTML = `
                         <div style="margin-bottom:16px;">
                             <p><strong>Order ID:</strong> <code>${data.payment_reference || data.id}</code></p>
@@ -2800,7 +2929,6 @@
                 orderModal.classList.remove('open');
             }
 
-            // ─── ORDER POLLING ───
             function updateOrdersBadge(count) {
                 if (ordersBadge) {
                     if (count > 0) {
@@ -2818,35 +2946,29 @@
                     const response = await fetch(url);
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const newOrders = await response.json();
-
                     if (newOrders.length > 0) {
                         newOrders.forEach(order => {
                             showToast(`🆕 New order #${order.payment_reference || order.id} from ${order.customer_name || 'Customer'}`, 'fa-solid fa-bell');
                         });
-
                         orders = [...newOrders, ...orders];
                         previousOrderCount = orders.length;
                         updateOrdersBadge(orders.length);
                         document.getElementById('stat-orders').textContent = orders.length;
-
                         if (currentTab === 'orders') {
                             renderOrders();
                         }
-
                         const latestTimestamp = newOrders[0]?.created_at;
                         if (latestTimestamp) {
                             lastPollTimestamp = latestTimestamp;
                         } else {
                             lastPollTimestamp = new Date().toISOString();
                         }
-
                     } else {
                         const now = new Date().toISOString();
                         if (new Date(now) - new Date(lastPollTimestamp) > 60000) {
                             lastPollTimestamp = now;
                         }
                     }
-
                 } catch (err) {
                     console.warn('Order poll failed:', err);
                 }
@@ -2876,7 +2998,6 @@
                     if (currentView === 'active') params.append('is_active', 'true');
                     else if (currentView === 'hero') params.append('is_hero', 'true');
                     else if (currentView === 'featured') params.append('is_featured', 'true');
-
                     const response = await fetch(`${API.banners}?${params}`);
                     const data = await response.json();
                     banners = data.banners || [];
@@ -2900,7 +3021,6 @@
                     `;
                     return;
                 }
-
                 bannerGrid.innerHTML = banners.map((banner, index) => `
                     <div class="banner-card" draggable="true" data-index="${index}" data-id="${banner.id}">
                         <div class="banner-image" style="background-image: url('${banner.image_url || '/images/default-banner.jpg'}');">
@@ -2949,9 +3069,7 @@
                         </div>
                     </div>
                 `).join('');
-
                 setupBannerDragDrop();
-
                 document.querySelectorAll('.edit-banner').forEach(btn => {
                     btn.addEventListener('click', () => openBannerModal(btn.dataset.id));
                 });
@@ -2973,14 +3091,12 @@
                 let dragStartIndex = null;
                 let dragEndIndex = null;
                 const grid = bannerGrid;
-
                 grid.querySelectorAll('.banner-card').forEach(card => {
                     card.addEventListener('dragstart', (e) => {
                         dragStartIndex = parseInt(card.dataset.index);
                         card.classList.add('dragging');
                         e.dataTransfer.effectAllowed = 'move';
                     });
-
                     card.addEventListener('dragend', () => {
                         card.classList.remove('dragging');
                         if (dragStartIndex !== null && dragEndIndex !== null && dragStartIndex !== dragEndIndex) {
@@ -2990,14 +3106,12 @@
                         dragEndIndex = null;
                         grid.querySelectorAll('.banner-card').forEach(c => c.classList.remove('drag-over'));
                     });
-
                     card.addEventListener('dragover', (e) => {
                         e.preventDefault();
                         e.dataTransfer.dropEffect = 'move';
                         card.classList.add('drag-over');
                         dragEndIndex = parseInt(card.dataset.index);
                     });
-
                     card.addEventListener('dragleave', () => {
                         card.classList.remove('drag-over');
                     });
@@ -3008,7 +3122,6 @@
                 const bannerIds = banners.map(b => b.id);
                 const [removed] = bannerIds.splice(fromIndex, 1);
                 bannerIds.splice(toIndex, 0, removed);
-
                 try {
                     await fetch(`${API.banners}/reorder`, {
                         method: 'PATCH',
@@ -3034,7 +3147,6 @@
                 const modal = document.getElementById('banner-modal');
                 const form = document.getElementById('banner-form');
                 form.reset();
-
                 if (bannerId) {
                     const banner = banners.find(b => b.id == bannerId);
                     if (banner) {
@@ -3060,26 +3172,22 @@
                         document.getElementById('b-is-hero').checked = banner.is_hero;
                         document.getElementById('b-is-featured').checked = banner.is_featured;
                         document.getElementById('b-meta').value = JSON.stringify(banner.meta_data || {}, null, 2);
-
                         if (banner.start_date) {
                             document.getElementById('b-start-date').value = banner.start_date.slice(0, 16);
                         }
                         if (banner.end_date) {
                             document.getElementById('b-end-date').value = banner.end_date.slice(0, 16);
                         }
-
                         const categorySelect = document.getElementById('b-categories');
                         if (banner.categories) {
                             Array.from(categorySelect.options).forEach(opt => {
                                 opt.selected = banner.categories.includes(parseInt(opt.value));
                             });
                         }
-
                         const productSelect = document.getElementById('b-product-id');
                         if (banner.product_id) {
                             productSelect.value = banner.product_id;
                         }
-
                         bannerModalSave.textContent = 'Update Banner';
                     }
                 } else {
@@ -3088,7 +3196,6 @@
                     document.getElementById('b-is-active').checked = true;
                     bannerModalSave.textContent = 'Create Banner';
                 }
-
                 modal.classList.add('open');
             }
 
@@ -3102,7 +3209,6 @@
                 const id = bannerIdEl.value;
                 const categories = Array.from(document.getElementById('b-categories').selectedOptions)
                     .map(opt => parseInt(opt.value));
-
                 const data = {
                     title: document.getElementById('b-title').value,
                     subtitle: document.getElementById('b-subtitle').value,
@@ -3128,17 +3234,14 @@
                     meta_data: JSON.parse(document.getElementById('b-meta').value || '{}'),
                     categories: categories
                 };
-
                 try {
                     const url = id ? `${API.banners}/${id}` : API.banners;
                     const method = id ? 'PUT' : 'POST';
-
                     const response = await fetch(url, {
                         method: method,
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(data)
                     });
-
                     if (response.ok) {
                         showToast(id ? 'Banner updated successfully!' : 'Banner created successfully!');
                         closeBannerModal();
@@ -3194,7 +3297,6 @@
             async function previewBanner(id) {
                 const banner = banners.find(b => b.id == id);
                 if (!banner) return;
-
                 previewContent.innerHTML = `
                     <div class="banner-preview" style="background:${banner.background_color || '#fff3ed'};color:${banner.text_color || '#1e1e1e'};">
                         ${banner.badge_text ? `
@@ -3240,7 +3342,410 @@
                 }
             }
 
-            // ─── TAB SWITCHING ───
+            // ─── DELIVERY RULES FUNCTIONS ───
+
+            // Value Discount
+            async function loadValueRules() {
+                try {
+                    const data = await fetchJSON(API.valueRules);
+                    renderValueRules(data);
+                } catch (err) {
+                    console.error('Error loading value rules:', err);
+                    document.getElementById('value-rules-body').innerHTML =
+                        `<tr><td colspan="7" class="empty-state">Failed to load rules</td></tr>`;
+                }
+            }
+
+            function renderValueRules(rules) {
+                const tbody = document.getElementById('value-rules-body');
+                if (!rules || rules.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="7" class="empty-state">No value discount rules defined.</td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = rules.map(r => `
+                    <tr>
+                        <td>₦${r.min_order_value}</td>
+                        <td>${r.max_order_value ? '₦'+r.max_order_value : '∞'}</td>
+                        <td>${r.fee_multiplier}</td>
+                        <td>₦${r.fee_discount}</td>
+                        <td>${r.free_delivery ? '✅' : '❌'}</td>
+                        <td>${r.description || '-'}</td>
+                        <td style="text-align:right;">
+                            <button class="btn btn-primary btn-sm edit-value-rule" data-id="${r.id}"><i class="fa-regular fa-pen-to-square"></i></button>
+                            <button class="btn btn-danger btn-sm delete-value-rule" data-id="${r.id}"><i class="fa-regular fa-trash-can"></i></button>
+                        </td>
+                    </tr>
+                `).join('');
+                document.querySelectorAll('.edit-value-rule').forEach(btn => btn.addEventListener('click', () => openValueRuleModal(btn.dataset.id)));
+                document.querySelectorAll('.delete-value-rule').forEach(btn => btn.addEventListener('click', () => deleteValueRule(btn.dataset.id)));
+            }
+
+            // Peak Settings
+            async function loadPeakSettings() {
+                try {
+                    const data = await fetchJSON(API.peakSettings);
+                    renderPeakSettings(data);
+                } catch (err) {
+                    console.error('Error loading peak settings:', err);
+                    document.getElementById('peak-settings-body').innerHTML =
+                        `<tr><td colspan="6" class="empty-state">Failed to load peak settings</td></tr>`;
+                }
+            }
+
+            function renderPeakSettings(settings) {
+                const tbody = document.getElementById('peak-settings-body');
+                if (!settings || settings.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="6" class="empty-state">No peak hour settings defined.</td></tr>`;
+                    return;
+                }
+                const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+                tbody.innerHTML = settings.map(s => `
+                    <tr>
+                        <td>${s.day_of_week !== null ? days[s.day_of_week] : 'All Days'}</td>
+                        <td>${s.start_time}</td>
+                        <td>${s.end_time}</td>
+                        <td>₦${s.surcharge_amount}</td>
+                        <td>${s.is_active ? '✅' : '❌'}</td>
+                        <td style="text-align:right;">
+                            <button class="btn btn-primary btn-sm edit-peak-setting" data-id="${s.id}"><i class="fa-regular fa-pen-to-square"></i></button>
+                            <button class="btn btn-danger btn-sm delete-peak-setting" data-id="${s.id}"><i class="fa-regular fa-trash-can"></i></button>
+                        </td>
+                    </tr>
+                `).join('');
+                document.querySelectorAll('.edit-peak-setting').forEach(btn => btn.addEventListener('click', () => openPeakSettingModal(btn.dataset.id)));
+                document.querySelectorAll('.delete-peak-setting').forEach(btn => btn.addEventListener('click', () => deletePeakSetting(btn.dataset.id)));
+            }
+
+            // Loyalty Settings
+            async function loadLoyaltySettings() {
+                try {
+                    const data = await fetchJSON(API.loyaltySettings);
+                    renderLoyaltySettings(data);
+                } catch (err) {
+                    console.error('Error loading loyalty settings:', err);
+                    document.getElementById('loyalty-settings-body').innerHTML =
+                        `<tr><td colspan="4" class="empty-state">Failed to load loyalty settings</td></tr>`;
+                }
+            }
+
+            function renderLoyaltySettings(settings) {
+                const tbody = document.getElementById('loyalty-settings-body');
+                if (!settings || settings.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="4" class="empty-state">No loyalty settings defined.</td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = settings.map(s => `
+                    <tr>
+                        <td>${s.min_orders}</td>
+                        <td>${s.discount_percentage}%</td>
+                        <td>${s.is_active ? '✅' : '❌'}</td>
+                        <td style="text-align:right;">
+                            <button class="btn btn-primary btn-sm edit-loyalty-setting" data-id="${s.id}"><i class="fa-regular fa-pen-to-square"></i></button>
+                            <button class="btn btn-danger btn-sm delete-loyalty-setting" data-id="${s.id}"><i class="fa-regular fa-trash-can"></i></button>
+                        </td>
+                    </tr>
+                `).join('');
+                document.querySelectorAll('.edit-loyalty-setting').forEach(btn => btn.addEventListener('click', () => openLoyaltySettingModal(btn.dataset.id)));
+                document.querySelectorAll('.delete-loyalty-setting').forEach(btn => btn.addEventListener('click', () => deleteLoyaltySetting(btn.dataset.id)));
+            }
+
+            // Item Surcharge
+            async function loadItemSurchargeRules() {
+                try {
+                    const data = await fetchJSON(API.itemSurchargeRules);
+                    renderItemSurchargeRules(data);
+                } catch (err) {
+                    console.error('Error loading item surcharge rules:', err);
+                    document.getElementById('item-surcharge-body').innerHTML =
+                        `<tr><td colspan="7" class="empty-state">Failed to load item surcharge rules</td></tr>`;
+                }
+            }
+
+            function renderItemSurchargeRules(rules) {
+                const tbody = document.getElementById('item-surcharge-body');
+                if (!rules || rules.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="7" class="empty-state">No item surcharge rules defined.</td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = rules.map(r => `
+                    <tr>
+                        <td>${r.min_main_items ?? '∞'}</td>
+                        <td>${r.max_main_items ?? '∞'}</td>
+                        <td>₦${r.surcharge_amount}</td>
+                        <td>${r.weight_threshold_kg ?? '-'}</td>
+                        <td>${r.surcharge_per_kg ? '₦'+r.surcharge_per_kg : '-'}</td>
+                        <td>${r.description || '-'}</td>
+                        <td style="text-align:right;">
+                            <button class="btn btn-primary btn-sm edit-item-surcharge" data-id="${r.id}"><i class="fa-regular fa-pen-to-square"></i></button>
+                            <button class="btn btn-danger btn-sm delete-item-surcharge" data-id="${r.id}"><i class="fa-regular fa-trash-can"></i></button>
+                        </td>
+                    </tr>
+                `).join('');
+                document.querySelectorAll('.edit-item-surcharge').forEach(btn => btn.addEventListener('click', () => openItemSurchargeModal(btn.dataset.id)));
+                document.querySelectorAll('.delete-item-surcharge').forEach(btn => btn.addEventListener('click', () => deleteItemSurchargeRule(btn.dataset.id)));
+            }
+
+            // ─── RULE MODALS ───
+
+            // Value Rule
+            function openValueRuleModal(id = null) {
+                const modal = document.getElementById('value-rule-modal');
+                const form = document.getElementById('value-rule-form');
+                form.reset();
+                document.getElementById('value-rule-id').value = '';
+                document.getElementById('value-rule-title').textContent = id ? 'Edit Value Discount Rule' : 'Add Value Discount Rule';
+                if (id) {
+                    fetchJSON(`${API.valueRules}/${id}`).then(rule => {
+                        if (rule) {
+                            document.getElementById('value-rule-id').value = rule.id;
+                            document.getElementById('vr-min').value = rule.min_order_value;
+                            document.getElementById('vr-max').value = rule.max_order_value || '';
+                            document.getElementById('vr-multiplier').value = rule.fee_multiplier;
+                            document.getElementById('vr-discount').value = rule.fee_discount;
+                            document.getElementById('vr-free').checked = rule.free_delivery;
+                            document.getElementById('vr-desc').value = rule.description || '';
+                        }
+                    }).catch(err => console.error(err));
+                }
+                modal.classList.add('open');
+            }
+
+            function closeValueRuleModal() {
+                document.getElementById('value-rule-modal').classList.remove('open');
+            }
+
+            async function saveValueRule(e) {
+                e.preventDefault();
+                const id = document.getElementById('value-rule-id').value;
+                const data = {
+                    min_order_value: parseInt(document.getElementById('vr-min').value),
+                    max_order_value: document.getElementById('vr-max').value ? parseInt(document.getElementById('vr-max').value) : null,
+                    fee_multiplier: parseFloat(document.getElementById('vr-multiplier').value),
+                    fee_discount: parseInt(document.getElementById('vr-discount').value),
+                    free_delivery: document.getElementById('vr-free').checked,
+                    description: document.getElementById('vr-desc').value.trim() || null,
+                };
+                try {
+                    let url = API.valueRules;
+                    let method = 'POST';
+                    if (id) { url += '/' + id; method = 'PUT'; }
+                    const result = await fetchJSON(url, { method, body: JSON.stringify(data) });
+                    showToast(id ? 'Rule updated!' : 'Rule created!');
+                    closeValueRuleModal();
+                    loadValueRules();
+                } catch (err) {
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            async function deleteValueRule(id) {
+                if (!confirm('Delete this value discount rule?')) return;
+                try {
+                    await fetch(`${API.valueRules}/${id}`, { method: 'DELETE' });
+                    showToast('Rule deleted.');
+                    loadValueRules();
+                } catch (err) {
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            // Peak Setting
+            function openPeakSettingModal(id = null) {
+                const modal = document.getElementById('peak-setting-modal');
+                const form = document.getElementById('peak-setting-form');
+                form.reset();
+                document.getElementById('peak-setting-id').value = '';
+                document.getElementById('peak-setting-title').textContent = id ? 'Edit Peak Setting' : 'Add Peak Setting';
+                if (id) {
+                    fetchJSON(`${API.peakSettings}/${id}`).then(setting => {
+                        if (setting) {
+                            document.getElementById('peak-setting-id').value = setting.id;
+                            document.getElementById('ps-day').value = setting.day_of_week !== null ? setting.day_of_week : '';
+                            document.getElementById('ps-start').value = setting.start_time;
+                            document.getElementById('ps-end').value = setting.end_time;
+                            document.getElementById('ps-amount').value = setting.surcharge_amount;
+                            document.getElementById('ps-active').checked = setting.is_active;
+                        }
+                    }).catch(err => console.error(err));
+                }
+                modal.classList.add('open');
+            }
+
+            function closePeakSettingModal() {
+                document.getElementById('peak-setting-modal').classList.remove('open');
+            }
+
+            async function savePeakSetting(e) {
+                e.preventDefault();
+                const id = document.getElementById('peak-setting-id').value;
+                const data = {
+                    day_of_week: document.getElementById('ps-day').value ? parseInt(document.getElementById('ps-day').value) : null,
+                    start_time: document.getElementById('ps-start').value,
+                    end_time: document.getElementById('ps-end').value,
+                    surcharge_amount: parseInt(document.getElementById('ps-amount').value),
+                    is_active: document.getElementById('ps-active').checked,
+                };
+                try {
+                    let url = API.peakSettings;
+                    let method = 'POST';
+                    if (id) { url += '/' + id; method = 'PUT'; }
+                    await fetchJSON(url, { method, body: JSON.stringify(data) });
+                    showToast(id ? 'Peak setting updated!' : 'Peak setting created!');
+                    closePeakSettingModal();
+                    loadPeakSettings();
+                } catch (err) {
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            async function deletePeakSetting(id) {
+                if (!confirm('Delete this peak setting?')) return;
+                try {
+                    await fetch(`${API.peakSettings}/${id}`, { method: 'DELETE' });
+                    showToast('Peak setting deleted.');
+                    loadPeakSettings();
+                } catch (err) {
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            // Loyalty Setting
+            function openLoyaltySettingModal(id = null) {
+                const modal = document.getElementById('loyalty-setting-modal');
+                const form = document.getElementById('loyalty-setting-form');
+                form.reset();
+                document.getElementById('loyalty-setting-id').value = '';
+                document.getElementById('loyalty-setting-title').textContent = id ? 'Edit Loyalty Setting' : 'Add Loyalty Setting';
+                if (id) {
+                    fetchJSON(`${API.loyaltySettings}/${id}`).then(setting => {
+                        if (setting) {
+                            document.getElementById('loyalty-setting-id').value = setting.id;
+                            document.getElementById('ls-min-orders').value = setting.min_orders;
+                            document.getElementById('ls-discount-pct').value = setting.discount_percentage;
+                            document.getElementById('ls-active').checked = setting.is_active;
+                        }
+                    }).catch(err => console.error(err));
+                }
+                modal.classList.add('open');
+            }
+
+            function closeLoyaltySettingModal() {
+                document.getElementById('loyalty-setting-modal').classList.remove('open');
+            }
+
+            async function saveLoyaltySetting(e) {
+                e.preventDefault();
+                const id = document.getElementById('loyalty-setting-id').value;
+                const data = {
+                    min_orders: parseInt(document.getElementById('ls-min-orders').value),
+                    discount_percentage: parseInt(document.getElementById('ls-discount-pct').value),
+                    is_active: document.getElementById('ls-active').checked,
+                };
+                try {
+                    let url = API.loyaltySettings;
+                    let method = 'POST';
+                    if (id) { url += '/' + id; method = 'PUT'; }
+                    await fetchJSON(url, { method, body: JSON.stringify(data) });
+                    showToast(id ? 'Loyalty setting updated!' : 'Loyalty setting created!');
+                    closeLoyaltySettingModal();
+                    loadLoyaltySettings();
+                } catch (err) {
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            async function deleteLoyaltySetting(id) {
+                if (!confirm('Delete this loyalty setting?')) return;
+                try {
+                    await fetch(`${API.loyaltySettings}/${id}`, { method: 'DELETE' });
+                    showToast('Loyalty setting deleted.');
+                    loadLoyaltySettings();
+                } catch (err) {
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            // Item Surcharge
+            function openItemSurchargeModal(id = null) {
+                const modal = document.getElementById('item-surcharge-modal');
+                const form = document.getElementById('item-surcharge-form');
+                form.reset();
+                document.getElementById('item-surcharge-id').value = '';
+                document.getElementById('item-surcharge-title').textContent = id ? 'Edit Item Surcharge Rule' : 'Add Item Surcharge Rule';
+                if (id) {
+                    fetchJSON(`${API.itemSurchargeRules}/${id}`).then(rule => {
+                        if (rule) {
+                            document.getElementById('item-surcharge-id').value = rule.id;
+                            document.getElementById('isr-min-items').value = rule.min_main_items || '';
+                            document.getElementById('isr-max-items').value = rule.max_main_items || '';
+                            document.getElementById('isr-amount').value = rule.surcharge_amount;
+                            document.getElementById('isr-weight-threshold').value = rule.weight_threshold_kg || '';
+                            document.getElementById('isr-per-kg').value = rule.surcharge_per_kg || 50;
+                            document.getElementById('isr-desc').value = rule.description || '';
+                        }
+                    }).catch(err => console.error(err));
+                }
+                modal.classList.add('open');
+            }
+
+            function closeItemSurchargeModal() {
+                document.getElementById('item-surcharge-modal').classList.remove('open');
+            }
+
+            async function saveItemSurchargeRule(e) {
+                e.preventDefault();
+                const id = document.getElementById('item-surcharge-id').value;
+                const data = {
+                    min_main_items: document.getElementById('isr-min-items').value ? parseInt(document.getElementById('isr-min-items').value) : null,
+                    max_main_items: document.getElementById('isr-max-items').value ? parseInt(document.getElementById('isr-max-items').value) : null,
+                    surcharge_amount: parseInt(document.getElementById('isr-amount').value),
+                    weight_threshold_kg: document.getElementById('isr-weight-threshold').value ? parseFloat(document.getElementById('isr-weight-threshold').value) : null,
+                    surcharge_per_kg: document.getElementById('isr-per-kg').value ? parseInt(document.getElementById('isr-per-kg').value) : null,
+                    description: document.getElementById('isr-desc').value.trim() || null,
+                };
+                try {
+                    let url = API.itemSurchargeRules;
+                    let method = 'POST';
+                    if (id) { url += '/' + id; method = 'PUT'; }
+                    await fetchJSON(url, { method, body: JSON.stringify(data) });
+                    showToast(id ? 'Item surcharge rule updated!' : 'Item surcharge rule created!');
+                    closeItemSurchargeModal();
+                    loadItemSurchargeRules();
+                } catch (err) {
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            async function deleteItemSurchargeRule(id) {
+                if (!confirm('Delete this item surcharge rule?')) return;
+                try {
+                    await fetch(`${API.itemSurchargeRules}/${id}`, { method: 'DELETE' });
+                    showToast('Item surcharge rule deleted.');
+                    loadItemSurchargeRules();
+                } catch (err) {
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            // ─── SUB-TAB SWITCHING ───
+            function switchSubTab(subtab) {
+                document.querySelectorAll('#rules-sub-tabs button').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.subtab === subtab);
+                });
+                document.querySelectorAll('.sub-panel').forEach(panel => {
+                    panel.classList.toggle('active', panel.id === 'sub-' + subtab);
+                });
+            }
+
+            // ─── LOAD ALL RULES ───
+            function loadAllRules() {
+                loadValueRules();
+                loadPeakSettings();
+                loadLoyaltySettings();
+                loadItemSurchargeRules();
+            }
+
+            // ─── TAB SWITCHING (overridden) ───
             function switchTab(tab) {
                 currentTab = tab;
                 tabs.forEach(btn => {
@@ -3261,22 +3766,25 @@
                     }
                 }
                 if (tab === 'areas') {
-                    // Initialize map and load areas
                     setTimeout(() => {
                         initAreaMap();
                         loadDeliveryAreas();
                     }, 100);
                 }
+                if (tab === 'deliveryrules') {
+                    loadAllRules();
+                }
             }
 
             // ─── EVENT LISTENERS ───
+            // Re‑attach tab listeners
             tabs.forEach(btn => {
                 btn.addEventListener('click', () => switchTab(btn.dataset.tab));
             });
 
+            // Product search
             productSearch.addEventListener('input', renderProducts);
             orderSearch.addEventListener('input', renderOrders);
-
             orderFilterBtn.addEventListener('click', renderOrders);
             orderClearFilter.addEventListener('click', function() {
                 orderDateFilter.value = '';
@@ -3284,26 +3792,31 @@
             });
             orderDateFilter.addEventListener('change', renderOrders);
 
+            // Product modal
             document.getElementById('add-product-btn').addEventListener('click', () => openProductModal(null));
             document.getElementById('product-modal-close').addEventListener('click', closeProductModal);
             document.getElementById('product-modal-cancel').addEventListener('click', closeProductModal);
             productForm.addEventListener('submit', saveProduct);
             productModal.addEventListener('click', (e) => { if (e.target === productModal) closeProductModal(); });
 
+            // Category modal
             document.getElementById('add-category-btn').addEventListener('click', () => openCategoryModal(null));
             document.getElementById('category-modal-close').addEventListener('click', closeCategoryModal);
             document.getElementById('category-modal-cancel').addEventListener('click', closeCategoryModal);
             categoryForm.addEventListener('submit', saveCategory);
             categoryModal.addEventListener('click', (e) => { if (e.target === categoryModal) closeCategoryModal(); });
 
+            // Order modal
             document.getElementById('order-modal-close').addEventListener('click', closeOrderModal);
             orderModal.addEventListener('click', (e) => { if (e.target === orderModal) closeOrderModal(); });
 
+            // Refresh
             refreshBtn.addEventListener('click', () => {
                 showToast('Refreshing...', 'fa-solid fa-rotate fa-spin');
                 loadAllData().then(() => showToast('Data refreshed!'));
             });
 
+            // Inventory view toggle
             document.querySelectorAll('#inventory-view-toggle button').forEach(btn => {
                 btn.addEventListener('click', function() {
                     document.querySelectorAll('#inventory-view-toggle button').forEach(b => b.classList.remove('active'));
@@ -3312,6 +3825,7 @@
                 });
             });
 
+            // Banner view toggle
             document.querySelectorAll('#banner-view-toggle button').forEach(btn => {
                 btn.addEventListener('click', function() {
                     document.querySelectorAll('#banner-view-toggle button').forEach(b => b.classList.remove('active'));
@@ -3322,23 +3836,21 @@
                 });
             });
 
+            // Banner buttons
             document.getElementById('add-banner-btn').addEventListener('click', () => openBannerModal(null));
             document.getElementById('banner-modal-close').addEventListener('click', closeBannerModal);
             document.getElementById('banner-modal-cancel').addEventListener('click', closeBannerModal);
             bannerForm.addEventListener('submit', saveBanner);
             bannerModal.addEventListener('click', (e) => { if (e.target === bannerModal) closeBannerModal(); });
-
             document.getElementById('banner-preview-close').addEventListener('click', () => {
                 bannerPreviewModal.classList.remove('open');
             });
             bannerPreviewModal.addEventListener('click', (e) => {
                 if (e.target === bannerPreviewModal) bannerPreviewModal.classList.remove('open');
             });
-
             document.getElementById('b-cta-type').addEventListener('change', function() {
                 document.getElementById('b-product-group').style.display = this.value === 'product' ? 'block' : 'none';
             });
-
             document.getElementById('b-image-upload').addEventListener('change', function(e) {
                 const file = e.target.files[0];
                 if (file) {
@@ -3350,6 +3862,7 @@
                 }
             });
 
+            // Banner pagination
             document.getElementById('prev-page').addEventListener('click', () => {
                 if (currentPage > 1) {
                     currentPage--;
@@ -3363,7 +3876,7 @@
                 }
             });
 
-            // ─── AREAS EVENT LISTENERS ───
+            // Areas
             document.getElementById('add-area-btn').addEventListener('click', () => openAreaModal(null));
             document.getElementById('refresh-areas-btn').addEventListener('click', () => {
                 loadDeliveryAreas();
@@ -3374,7 +3887,7 @@
             areaForm.addEventListener('submit', saveArea);
             areaModal.addEventListener('click', (e) => { if (e.target === areaModal) closeAreaModal(); });
 
-            // ─── AUTOCOMPLETE EVENT LISTENERS ───
+            // Autocomplete
             locationSearch.addEventListener('input', function() {
                 clearTimeout(autocompleteTimeout);
                 const query = this.value.trim();
@@ -3386,19 +3899,16 @@
                     searchLocations(query);
                 }, 300);
             });
-
             locationSearch.addEventListener('focus', function() {
                 if (this.value.trim().length >= 2) {
                     autocompleteDropdown.classList.add('show');
                 }
             });
-
             locationSearch.addEventListener('blur', function() {
                 setTimeout(() => {
                     autocompleteDropdown.classList.remove('show');
                 }, 200);
             });
-
             locationSearch.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape') {
                     autocompleteDropdown.classList.remove('show');
@@ -3411,6 +3921,37 @@
                 }
             });
 
+            // ─── RULES SUB-TABS ───
+            document.querySelectorAll('#rules-sub-tabs button').forEach(btn => {
+                btn.addEventListener('click', () => switchSubTab(btn.dataset.subtab));
+            });
+
+            // Rule refresh
+            document.getElementById('refresh-rules').addEventListener('click', loadAllRules);
+
+            // Rule add buttons
+            document.getElementById('add-value-rule').addEventListener('click', () => openValueRuleModal(null));
+            document.getElementById('add-peak-setting').addEventListener('click', () => openPeakSettingModal(null));
+            document.getElementById('add-loyalty-setting').addEventListener('click', () => openLoyaltySettingModal(null));
+            document.getElementById('add-item-surcharge-rule').addEventListener('click', () => openItemSurchargeModal(null));
+
+            // Rule modal close/cancel
+            document.getElementById('value-rule-close').addEventListener('click', closeValueRuleModal);
+            document.getElementById('value-rule-cancel').addEventListener('click', closeValueRuleModal);
+            document.getElementById('value-rule-form').addEventListener('submit', saveValueRule);
+
+            document.getElementById('peak-setting-close').addEventListener('click', closePeakSettingModal);
+            document.getElementById('peak-setting-cancel').addEventListener('click', closePeakSettingModal);
+            document.getElementById('peak-setting-form').addEventListener('submit', savePeakSetting);
+
+            document.getElementById('loyalty-setting-close').addEventListener('click', closeLoyaltySettingModal);
+            document.getElementById('loyalty-setting-cancel').addEventListener('click', closeLoyaltySettingModal);
+            document.getElementById('loyalty-setting-form').addEventListener('submit', saveLoyaltySetting);
+
+            document.getElementById('item-surcharge-close').addEventListener('click', closeItemSurchargeModal);
+            document.getElementById('item-surcharge-cancel').addEventListener('click', closeItemSurchargeModal);
+            document.getElementById('item-surcharge-form').addEventListener('submit', saveItemSurchargeRule);
+
             // ─── KEYBOARD SHORTCUTS ───
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
@@ -3420,17 +3961,18 @@
                     if (bannerModal.classList.contains('open')) closeBannerModal();
                     if (bannerPreviewModal.classList.contains('open')) bannerPreviewModal.classList.remove('open');
                     if (areaModal.classList.contains('open')) closeAreaModal();
+                    if (document.getElementById('value-rule-modal').classList.contains('open')) closeValueRuleModal();
+                    if (document.getElementById('peak-setting-modal').classList.contains('open')) closePeakSettingModal();
+                    if (document.getElementById('loyalty-setting-modal').classList.contains('open')) closeLoyaltySettingModal();
+                    if (document.getElementById('item-surcharge-modal').classList.contains('open')) closeItemSurchargeModal();
                     if (autocompleteDropdown.classList.contains('show')) autocompleteDropdown.classList.remove('show');
                 }
             });
 
             // ─── BOOT ───
             loadBannerProductOptions();
-
-            // Load initial data
             loadAllData().then(() => {
                 startPolling();
-                // Pre-initialize area map
                 setTimeout(() => {
                     initAreaMap();
                 }, 500);
@@ -3444,6 +3986,7 @@
             console.log('🔧 API endpoints: /api/products, /api/categories, /api/orders, /api/stats, /api/v1/banners, /api/top-products, /api/delivery-areas');
             console.log('🔄 Optimized order polling active (every 30s)');
             console.log('🗺️ Delivery Areas management with Leaflet map and autocomplete loaded');
+            console.log('📋 Delivery Rules management loaded');
 
         })();
     </script>
