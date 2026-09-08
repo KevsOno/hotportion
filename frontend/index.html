@@ -73,6 +73,11 @@
         .btn-primary:active {
             transform: scale(0.97);
         }
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
         .btn-secondary {
             background: var(--accent);
             color: #fff;
@@ -106,6 +111,34 @@
             background: var(--primary);
             color: #fff;
         }
+        .btn-gps {
+            background: #2d7d46;
+            color: #fff;
+            border: none;
+            padding: 8px 14px;
+            border-radius: 50px;
+            font-weight: 700;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.15s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .btn-gps:hover {
+            background: #1e5f34;
+            transform: translateY(-1px);
+        }
+        .btn-gps:active {
+            transform: scale(0.95);
+        }
+        .btn-gps:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
 
         /* ─── HEADER ─── */
         .header {
@@ -127,31 +160,31 @@
             gap: 12px;
         }
         /* Chat message Markdown styles */
-.chat-msg-bubble h2 {
-    font-size: 1.1rem;
-    font-weight: 800;
-    margin: 0.4rem 0 0.2rem;
-    color: var(--text-dark);
-}
-.chat-msg-bubble ul {
-    margin: 0.2rem 0 0.5rem;
-    padding-left: 1.1rem;
-}
-.chat-msg-bubble li {
-    list-style-type: disc;
-    margin-bottom: 0.2rem;
-}
-.chat-msg-bubble strong {
-    font-weight: 700;
-    color: var(--primary-dark);
-}
-.chat-msg-bubble p {
-    margin: 0.2rem 0;
-}
-.chat-msg-bubble .hero-offer, 
-.chat-msg-bubble .hero-badge {
-    display: none;  /* hide any accidental hero styles inside chat */
-}
+        .chat-msg-bubble h2 {
+            font-size: 1.1rem;
+            font-weight: 800;
+            margin: 0.4rem 0 0.2rem;
+            color: var(--text-dark);
+        }
+        .chat-msg-bubble ul {
+            margin: 0.2rem 0 0.5rem;
+            padding-left: 1.1rem;
+        }
+        .chat-msg-bubble li {
+            list-style-type: disc;
+            margin-bottom: 0.2rem;
+        }
+        .chat-msg-bubble strong {
+            font-weight: 700;
+            color: var(--primary-dark);
+        }
+        .chat-msg-bubble p {
+            margin: 0.2rem 0;
+        }
+        .chat-msg-bubble .hero-offer, 
+        .chat-msg-bubble .hero-badge {
+            display: none;  /* hide any accidental hero styles inside chat */
+        }
         .brand {
             display: flex;
             align-items: center;
@@ -1126,6 +1159,36 @@
             resize: vertical;
             min-height: 50px;
         }
+
+        /* ─── ADDRESS INPUT WITH GPS BUTTON ─── */
+        .address-input-wrap {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .address-input-wrap input {
+            flex: 1;
+        }
+        .address-input-wrap .btn-gps {
+            flex-shrink: 0;
+        }
+        .delivery-status {
+            margin-top: 6px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            padding: 4px 0;
+            min-height: 24px;
+        }
+        .delivery-status.covered {
+            color: #2d7d46;
+        }
+        .delivery-status.not-covered {
+            color: var(--primary);
+        }
+        .delivery-status.loading {
+            color: var(--text-muted);
+        }
+
         .checkout-form .delivery-options {
             display: flex;
             gap: 8px;
@@ -2252,7 +2315,13 @@
                 </div>
                 <div class="form-group" id="address-group" style="display:none;">
                     <label for="delivery-address">Delivery Address</label>
-                    <input type="text" id="delivery-address" placeholder="Enter your delivery address" autocomplete="off">
+                    <div class="address-input-wrap">
+                        <input type="text" id="delivery-address" placeholder="Enter your delivery address" autocomplete="off">
+                        <button class="btn-gps" id="gps-btn" aria-label="Get current location">
+                            <i class="fa-solid fa-location-crosshairs" aria-hidden="true"></i> GPS
+                        </button>
+                    </div>
+                    <div class="delivery-status" id="delivery-status"></div>
                     <div class="delivery-fee-display" id="delivery-fee-display">Delivery fee: <span>₦0</span></div>
                 </div>
                 <div class="form-group">
@@ -2415,6 +2484,11 @@
             let deliveryFee = 0;
             let lastOrderData = null;
             let isDataLoaded = false;
+            
+            // ─── Delivery Coverage State ───
+            let isDeliveryCovered = false;
+            let isCheckingDelivery = false;
+            let lastCheckedAddress = '';
 
             // ─── DOM REFS ───
             const menuGrid = document.getElementById('menu-grid');
@@ -2446,6 +2520,8 @@
             const addressGroup = document.getElementById('address-group');
             const deliveryAddress = document.getElementById('delivery-address');
             const deliveryFeeDisplay = document.getElementById('delivery-fee-display');
+            const deliveryStatus = document.getElementById('delivery-status');
+            const gpsBtn = document.getElementById('gps-btn');
             const customerName = document.getElementById('customer-name');
             const customerEmail = document.getElementById('customer-email');
             const customerPhone = document.getElementById('customer-phone');
@@ -2490,6 +2566,212 @@
                     'https://ajmauddonufaryjbiavh.supabase.co/storage/v1/object/public/bucket/fastfood/images/';
                 const url = base + path.replace(/^\/fastfood\/images\//, '');
                 return `/.netlify/images?url=${encodeURIComponent(url)}&w=${width}&format=webp`;
+            }
+
+            // ================================================================
+            // ─── GEOCODING HELPERS (Future-proof for Google Maps API) ───
+            // TODO: Replace Nominatim with Google Geocoding API
+            //   - Google Geocoding endpoint: https://maps.googleapis.com/maps/api/geocode/json
+            //   - Google Reverse Geocoding: https://maps.googleapis.com/maps/api/geocode/json?latlng={lat},{lng}
+            //   - Requires API key: &key=YOUR_GOOGLE_API_KEY
+            // ================================================================
+
+            /**
+             * Geocode an address to lat/lng using Nominatim (OpenStreetMap)
+             * TODO: Replace with Google Geocoding API
+             */
+            async function geocodeAddress(address) {
+                const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`;
+                const response = await fetch(url, {
+                    headers: { 'User-Agent': 'HotPortionGrill/1.0' }
+                });
+                if (!response.ok) throw new Error('Geocoding service unavailable');
+                const data = await response.json();
+                if (!data || data.length === 0) throw new Error('Address not found');
+                return {
+                    lat: parseFloat(data[0].lat),
+                    lng: parseFloat(data[0].lon),
+                    display_name: data[0].display_name
+                };
+            }
+
+            /**
+             * Reverse geocode lat/lng to address using Nominatim (OpenStreetMap)
+             * TODO: Replace with Google Geocoding API
+             */
+            async function reverseGeocode(lat, lng) {
+                const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`;
+                const response = await fetch(url, {
+                    headers: { 'User-Agent': 'HotPortionGrill/1.0' }
+                });
+                if (!response.ok) throw new Error('Reverse geocoding service unavailable');
+                const data = await response.json();
+                if (!data || !data.display_name) throw new Error('Location not found');
+                return data.display_name;
+            }
+
+            /**
+             * Check delivery coverage via backend API
+             */
+            async function checkDeliveryCoverage(address) {
+                if (!address || address.trim().length < 5) {
+                    return { covered: false, error: 'Please enter a full address' };
+                }
+
+                isCheckingDelivery = true;
+                updateDeliveryStatus('loading', 'Checking delivery availability...');
+
+                try {
+                    const response = await fetch('/api/delivery-fee', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ address: address.trim() })
+                    });
+
+                    if (!response.ok) {
+                        // If API fails, fallback to random fee (existing behavior)
+                        console.warn('Delivery API failed, using fallback');
+                        return { covered: true, fee: Math.floor(Math.random() * 1500) + 500, fallback: true };
+                    }
+
+                    const data = await response.json();
+                    return data;
+
+                } catch (err) {
+                    console.warn('Delivery check error:', err);
+                    // Fallback to random fee if API is down
+                    return { covered: true, fee: Math.floor(Math.random() * 1500) + 500, fallback: true };
+                } finally {
+                    isCheckingDelivery = false;
+                }
+            }
+
+            /**
+             * Get user's current location via browser GPS
+             */
+            function getCurrentPosition() {
+                return new Promise((resolve, reject) => {
+                    if (!navigator.geolocation) {
+                        reject(new Error('Geolocation not supported by your browser'));
+                        return;
+                    }
+                    navigator.geolocation.getCurrentPosition(
+                        (position) => {
+                            resolve({
+                                lat: position.coords.latitude,
+                                lng: position.coords.longitude
+                            });
+                        },
+                        (error) => {
+                            let message = 'Unable to get location';
+                            switch (error.code) {
+                                case error.PERMISSION_DENIED:
+                                    message = 'Location permission denied. Please enable GPS in your browser settings.';
+                                    break;
+                                case error.POSITION_UNAVAILABLE:
+                                    message = 'Location information unavailable. Please check your GPS signal.';
+                                    break;
+                                case error.TIMEOUT:
+                                    message = 'Location request timed out. Please try again.';
+                                    break;
+                            }
+                            reject(new Error(message));
+                        }, {
+                            enableHighAccuracy: true,
+                            timeout: 15000,
+                            maximumAge: 60000
+                        }
+                    );
+                });
+            }
+
+            // ─── DELIVERY ADDRESS HANDLER ───
+            let deliveryDebounceTimer = null;
+
+            async function handleDeliveryAddressChange() {
+                const address = deliveryAddress.value.trim();
+                
+                // Don't check if address is too short or same as last checked
+                if (address.length < 5) {
+                    resetDeliveryStatus();
+                    return;
+                }
+                if (address === lastCheckedAddress && isDeliveryCovered) {
+                    return;
+                }
+
+                lastCheckedAddress = address;
+                const result = await checkDeliveryCoverage(address);
+
+                if (result.fallback) {
+                    // API fallback: use random fee with warning
+                    deliveryFee = result.fee;
+                    isDeliveryCovered = true;
+                    updateDeliveryStatus('covered', '⚠️ Using estimated delivery fee (service temporarily unavailable)');
+                    updateDeliveryFeeUI(deliveryFee);
+                    showToast('Delivery service is experiencing issues. Using estimated fee.', 'fa-solid fa-triangle-exclamation');
+                    return;
+                }
+
+                if (result.covered) {
+                    deliveryFee = result.fee || 0;
+                    isDeliveryCovered = true;
+                    const areaMsg = result.area_name ? ` (${result.area_name})` : '';
+                    updateDeliveryStatus('covered', `✅ We deliver to your area! Fee: ${formatPrice(deliveryFee)}${areaMsg}`);
+                    updateDeliveryFeeUI(deliveryFee);
+                } else {
+                    deliveryFee = 0;
+                    isDeliveryCovered = false;
+                    updateDeliveryStatus('not-covered', result.message || '❌ Sorry, we don\'t deliver to this area yet.');
+                    updateDeliveryFeeUI(0);
+                }
+            }
+
+            function updateDeliveryStatus(type, message) {
+                deliveryStatus.className = 'delivery-status ' + type;
+                deliveryStatus.textContent = message;
+            }
+
+            function resetDeliveryStatus() {
+                deliveryStatus.className = 'delivery-status';
+                deliveryStatus.textContent = '';
+                isDeliveryCovered = false;
+                deliveryFee = 0;
+                updateDeliveryFeeUI(0);
+            }
+
+            function updateDeliveryFeeUI(fee) {
+                deliveryFeeDisplay.innerHTML = `Delivery fee: <span>${formatPrice(fee)}</span>`;
+                updateCartUI();
+            }
+
+            // ─── GPS BUTTON HANDLER ───
+            async function handleGPSButton() {
+                if (deliveryMethod !== 'delivery') {
+                    showToast('Please select "Delivery" first.', 'fa-solid fa-exclamation-circle');
+                    return;
+                }
+
+                gpsBtn.disabled = true;
+                gpsBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Locating...';
+
+                try {
+                    const position = await getCurrentPosition();
+                    const address = await reverseGeocode(position.lat, position.lng);
+                    
+                    if (address) {
+                        deliveryAddress.value = address;
+                        // Trigger address check
+                        await handleDeliveryAddressChange();
+                        showToast('📍 Location found!', 'fa-solid fa-check-circle');
+                    }
+                } catch (err) {
+                    showToast('GPS error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                    console.warn('GPS error:', err);
+                } finally {
+                    gpsBtn.disabled = false;
+                    gpsBtn.innerHTML = '<i class="fa-solid fa-location-crosshairs" aria-hidden="true"></i> GPS';
+                }
             }
 
             // ─── LOAD PRODUCTS FROM BACKEND API ───
@@ -3061,15 +3343,51 @@
                 }
 
                 const subtotal = cartTotalPrice;
-                const total = subtotal + (deliveryMethod === 'delivery' ? deliveryFee : 0);
+                // Only add delivery fee if delivery method is 'delivery' and area is covered
+                const finalDeliveryFee = (deliveryMethod === 'delivery' && isDeliveryCovered) ? deliveryFee : 0;
+                const total = subtotal + finalDeliveryFee;
                 cartSubtotal.textContent = formatPrice(subtotal);
-                cartDeliveryFee.textContent = formatPrice(deliveryFee);
-                if (deliveryMethod === 'delivery' && deliveryFee > 0) {
+                cartDeliveryFee.textContent = formatPrice(finalDeliveryFee);
+                if (deliveryMethod === 'delivery' && finalDeliveryFee > 0) {
                     deliveryFeeRow.style.display = 'flex';
                 } else {
                     deliveryFeeRow.style.display = 'none';
                 }
                 cartTotal.textContent = formatPrice(total);
+
+                // Update checkout button state
+                updateCheckoutButton();
+            }
+
+            // ─── UPDATE CHECKOUT BUTTON ───
+            function updateCheckoutButton() {
+                const items = Object.values(cart);
+                const hasItems = items.length > 0;
+                const name = customerName.value.trim();
+                const email = customerEmail.value.trim();
+                const phone = customerPhone.value.trim();
+                const isDelivery = deliveryMethod === 'delivery';
+                const addressOk = !isDelivery || (isDeliveryCovered && deliveryAddress.value.trim().length > 5);
+
+                let disabled = !hasItems || !name || !email || !phone;
+                if (isDelivery) {
+                    disabled = disabled || !addressOk;
+                }
+
+                checkoutBtn.disabled = disabled;
+
+                // Update button text with status
+                if (!hasItems) {
+                    checkoutBtn.innerHTML = '<i class="fa-regular fa-credit-card"></i> Add items to cart';
+                } else if (isDelivery && !isDeliveryCovered && deliveryAddress.value.trim().length > 5) {
+                    checkoutBtn.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Address not covered';
+                } else if (isDelivery && deliveryAddress.value.trim().length < 5) {
+                    checkoutBtn.innerHTML = '<i class="fa-regular fa-credit-card"></i> Enter delivery address';
+                } else if (!name || !email || !phone) {
+                    checkoutBtn.innerHTML = '<i class="fa-regular fa-credit-card"></i> Fill in your details';
+                } else {
+                    checkoutBtn.innerHTML = '<i class="fa-regular fa-credit-card"></i> Proceed to Payment';
+                }
             }
 
             // ─── DELIVERY METHOD ───
@@ -3081,15 +3399,26 @@
                 if (method === 'delivery') {
                     addressGroup.style.display = 'block';
                     deliveryAddress.required = true;
-                    deliveryFee = Math.floor(Math.random() * 1500) + 500;
-                    deliveryFeeDisplay.innerHTML = `Delivery fee: <span>${formatPrice(deliveryFee)}</span>`;
+                    // Trigger address check if there's already text
+                    if (deliveryAddress.value.trim().length >= 5) {
+                        handleDeliveryAddressChange();
+                    } else {
+                        resetDeliveryStatus();
+                        deliveryFee = 0;
+                        updateDeliveryFeeUI(0);
+                    }
                 } else {
                     addressGroup.style.display = 'none';
                     deliveryAddress.required = false;
+                    // Reset delivery state
+                    isDeliveryCovered = false;
                     deliveryFee = 0;
-                    deliveryFeeDisplay.innerHTML = `Delivery fee: <span>₦0</span>`;
+                    resetDeliveryStatus();
+                    updateDeliveryFeeUI(0);
+                    deliveryFeeRow.style.display = 'none';
                 }
                 updateCartUI();
+                updateCheckoutButton();
             }
 
             // ─── RECEIPT ───
@@ -3159,6 +3488,12 @@
                 deliveryAddress.value = '';
                 orderNotes.value = '';
                 preferredTime.value = '';
+                // Reset delivery state
+                isDeliveryCovered = false;
+                deliveryFee = 0;
+                resetDeliveryStatus();
+                updateDeliveryFeeUI(0);
+                deliveryFeeRow.style.display = 'none';
                 showToast('✅ Order placed successfully!', 'fa-solid fa-check-circle');
                 // Refresh products to reflect stock changes after order
                 refreshProducts();
@@ -3255,13 +3590,20 @@
                     showToast('Please enter your name, email, and phone number.', 'fa-solid fa-exclamation-circle');
                     return;
                 }
-                if (deliveryMethod === 'delivery' && !deliveryAddress.value.trim()) {
-                    showToast('Please enter your delivery address.', 'fa-solid fa-exclamation-circle');
-                    return;
+                if (deliveryMethod === 'delivery') {
+                    if (!deliveryAddress.value.trim()) {
+                        showToast('Please enter your delivery address.', 'fa-solid fa-exclamation-circle');
+                        return;
+                    }
+                    if (!isDeliveryCovered) {
+                        showToast('We don\'t deliver to this area. Please choose Pickup or Dine-in.', 'fa-solid fa-exclamation-circle');
+                        return;
+                    }
                 }
 
                 const subtotal = cartTotalPrice;
-                const total = subtotal + (deliveryMethod === 'delivery' ? deliveryFee : 0);
+                const finalDeliveryFee = (deliveryMethod === 'delivery' && isDeliveryCovered) ? deliveryFee : 0;
+                const total = subtotal + finalDeliveryFee;
 
                 const orderPayload = {
                     payment_reference: 'HP-' + Date.now(),
@@ -3274,6 +3616,7 @@
                     delivery_address: deliveryMethod === 'delivery' ? deliveryAddress.value : '',
                     preferred_time: preferredTime.value || '',
                     order_notes: orderNotes.value || '',
+                    delivery_fee: finalDeliveryFee,
                     items: items.map(i => ({ name: i.name, qty: i.qty, price: i.price, product_id: i.id }))
                 };
 
@@ -3510,6 +3853,8 @@
                 cartDrawer.classList.add('open');
                 cartOverlay.classList.add('open');
                 document.body.style.overflow = 'hidden';
+                // Update checkout button state when cart opens
+                updateCheckoutButton();
             }
 
             function closeCart() {
@@ -3545,6 +3890,29 @@
                 btn.addEventListener('click', function() { setDeliveryMethod(this.dataset.method); });
             });
             setDeliveryMethod('pickup');
+
+            // ─── DELIVERY ADDRESS INPUT HANDLER ───
+            deliveryAddress.addEventListener('input', function() {
+                clearTimeout(deliveryDebounceTimer);
+                const address = this.value.trim();
+                if (address.length < 5) {
+                    resetDeliveryStatus();
+                    deliveryFee = 0;
+                    updateDeliveryFeeUI(0);
+                    updateCartUI();
+                    updateCheckoutButton();
+                    return;
+                }
+                deliveryDebounceTimer = setTimeout(handleDeliveryAddressChange, 500);
+            });
+
+            // ─── GPS BUTTON ───
+            gpsBtn.addEventListener('click', handleGPSButton);
+
+            // ─── FORM INPUTS FOR CHECKOUT BUTTON STATE ───
+            [customerName, customerEmail, customerPhone].forEach(input => {
+                input.addEventListener('input', updateCheckoutButton);
+            });
 
             chatLauncher.addEventListener('click', toggleChat);
             chatBubble.addEventListener('click', function(e) { e.stopPropagation();
@@ -3617,6 +3985,7 @@
             // ─── BOOT ───
             initData().then(() => {
                 console.log('🚀 Hot Portion Grill ready!');
+                console.log('📍 Delivery coverage system active (Nominatim → Google Maps ready)');
             });
 
             console.log('📱 Bottom nav: Home, Menu, Chat, Cart (mobile only)');
