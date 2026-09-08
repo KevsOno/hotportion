@@ -2036,11 +2036,19 @@
             function getPolygonGeoJSON() {
                 if (!areaDrawnPolygon) return null;
                 try {
+                    // Get the GeoJSON from the drawn layer
                     const geojson = areaDrawnPolygon.toGeoJSON();
+                    
                     // Ensure it's a valid Polygon
-                    if (geojson.geometry.type === 'Polygon') {
-                        return geojson;
+                    if (geojson && geojson.geometry && geojson.geometry.type === 'Polygon') {
+                        // Make sure coordinates are valid
+                        const coords = geojson.geometry.coordinates;
+                        if (coords && coords.length > 0 && coords[0].length >= 4) {
+                            // The polygon should have at least 4 points (first == last)
+                            return geojson;
+                        }
                     }
+                    console.error('Invalid polygon geometry:', geojson);
                     return null;
                 } catch (err) {
                     console.error('Error converting polygon to GeoJSON:', err);
@@ -2051,6 +2059,16 @@
             function setPolygonFromGeoJSON(geojson) {
                 if (!areaMapModal || !geojson) return;
                 try {
+                    // Clear any existing drawn polygon
+                    if (areaDrawnPolygon) {
+                        areaMapModal.removeLayer(areaDrawnPolygon);
+                        areaDrawnPolygon = null;
+                    }
+                    if (areaEditLayer) {
+                        areaMapModal.removeLayer(areaEditLayer);
+                        areaEditLayer = null;
+                    }
+
                     const layer = L.geoJSON(geojson, {
                         style: {
                             color: '#E53935',
@@ -2060,14 +2078,11 @@
                             fillOpacity: 0.2,
                         }
                     });
+                    
                     areaEditLayer = layer;
                     areaMapModal.addLayer(layer);
                     areaMapModal.fitBounds(layer.getBounds().pad(0.1));
 
-                    // Also set as drawn polygon
-                    if (areaDrawnPolygon) {
-                        areaMapModal.removeLayer(areaDrawnPolygon);
-                    }
                     // Get the polygon layer from the geoJSON
                     layer.eachLayer(function(l) {
                         areaDrawnPolygon = l;
@@ -2079,6 +2094,7 @@
                     });
                 } catch (err) {
                     console.error('Error loading polygon:', err);
+                    showToast('Error loading polygon: ' + err.message, 'fa-solid fa-exclamation-circle');
                 }
             }
 
@@ -2281,9 +2297,16 @@
                         });
                     }
 
+                    // Try to parse the response even if it's an error
+                    let result;
+                    const contentType = response.headers.get('content-type');
+                    if (contentType && contentType.includes('application/json')) {
+                        result = await response.json();
+                    }
+
                     if (!response.ok) {
-                        const err = await response.json();
-                        throw new Error(err.message || 'Failed to save area');
+                        const errorMsg = result?.message || result?.detail || 'Failed to save area';
+                        throw new Error(errorMsg);
                     }
 
                     showToast(id ? 'Area updated successfully!' : 'Area created successfully!');
@@ -2305,7 +2328,8 @@
                         method: 'DELETE'
                     });
                     if (!response.ok) {
-                        throw new Error('Failed to delete area');
+                        const result = await response.json();
+                        throw new Error(result.message || 'Failed to delete area');
                     }
                     showToast('Area deleted successfully!');
                     await loadDeliveryAreas();
