@@ -183,6 +183,7 @@ class OrderCreate(BaseModel):
     order_notes: Optional[str] = None
     items: List[OrderItem]
     monnify_transaction_ref: Optional[str] = None
+    delivery_fee: Optional[int] = 0  # Added delivery_fee field
 
 class OrderStatusUpdate(BaseModel):
     status: str
@@ -241,6 +242,35 @@ class AIChatResponse(BaseModel):
     response: str
     provider: str
     model: str
+
+# =============================================
+# DELIVERY AREA MODELS
+# =============================================
+
+class DeliveryAreaBase(BaseModel):
+    name: str
+    fee: int
+
+class DeliveryAreaCreate(DeliveryAreaBase):
+    polygon: Dict[str, Any]  # GeoJSON Polygon
+
+class DeliveryAreaUpdate(DeliveryAreaBase):
+    polygon: Dict[str, Any]  # GeoJSON Polygon
+
+class DeliveryArea(DeliveryAreaBase):
+    id: int
+    polygon: Dict[str, Any]  # GeoJSON representation
+    created_at: datetime
+    updated_at: datetime
+
+class DeliveryFeeRequest(BaseModel):
+    address: str
+
+class DeliveryFeeResponse(BaseModel):
+    covered: bool
+    fee: Optional[int] = None
+    area_name: Optional[str] = None
+    message: Optional[str] = None
 
 # ---------- AI SERVICE ----------
 logger = logging.getLogger(__name__)
@@ -530,6 +560,7 @@ class BrevoIntegration:
             <p><strong>Customer:</strong> {data['customer_name']}</p>
             <p><strong>Phone:</strong> {data['customer_phone']}</p>
             <p><strong>Delivery:</strong> {data.get('delivery_method', 'Pickup')}</p>
+            <p><strong>Delivery Fee:</strong> ₦{data.get('delivery_fee', 0):,}</p>
             <table border=1><tr><th>Item</th><th>Qty</th><th>Price</th></tr>
             {items_html}
             <tr><td colspan=2><b>Total</b></td><td><b>₦{data['total']:,}</b></td></tr>
@@ -715,11 +746,12 @@ async def setup_database():
         queries = [
             "CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at DESC);",
             "CREATE INDEX IF NOT EXISTS idx_banners_active_display ON banners(is_active, display_order);",
-            "CREATE INDEX IF NOT EXISTS idx_banners_dates ON banners(start_date, end_date);"
+            "CREATE INDEX IF NOT EXISTS idx_banners_dates ON banners(start_date, end_date);",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee INTEGER DEFAULT 0;"
         ]
         for q in queries:
             await execute_db(db.rpc("exec_sql", {"query": q}))
-        logger.info("Database indexes ensured.")
+        logger.info("Database indexes and columns ensured.")
     except Exception as e:
         logger.warning(f"Could not create indexes (RPC may be disabled): {e}")
 
@@ -1095,7 +1127,13 @@ async def get_order(oid: int):
 
 @app.post("/api/orders", status_code=201)
 async def create_order(order: OrderCreate, bg: BackgroundTasks):
+    """Create a new order with optional delivery_fee."""
     data = order.dict(exclude={'monnify_transaction_ref'})
+    
+    # Ensure delivery_fee is included (defaults to 0 from model)
+    if "delivery_fee" not in data:
+        data["delivery_fee"] = 0
+    
     result = await execute_db(get_supabase().table("orders").insert(data))
     if not result.data:
         raise HTTPException(400, "Failed to create order")
@@ -1240,6 +1278,317 @@ async def monnify_webhook(
             )
 
     return {"status": "received"}
+
+# =============================================
+# DELIVERY AREA ENDPOINTS
+# =============================================
+
+@app.post("/api/delivery-fee", response_model=DeliveryFeeResponse)
+async def get_delivery_fee(request: DeliveryFeeRequest):
+    """
+    Geocode an address and find the delivery area containing it.
+    """
+    try:
+        # Geocode address using Nominatim
+        geocode_url = "https://nominatim.openstreetmap.org/search"
+        params = {
+            "q": request.address,
+            "format": "json",
+            "limit": 1
+        }
+        headers = {
+            "User-Agent": "HotPortionGrill/1.0"
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(geocode_url, params=params, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.error(f"Geocoding API error: {resp.status}")
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail="Geocoding service temporarily unavailable"
+                    )
+                
+                data = await resp.json()
+                
+                if not data or len(data) == 0:
+                    return DeliveryFeeResponse(
+                        covered=False,
+                        message="Address not found. Please check the address and try again."
+                    )
+                
+                # Extract lat/lng from first result
+                lat = float(data[0].get("lat", 0))
+                lng = float(data[0].get("lon", 0))
+                
+                logger.info(f"Geocoded '{request.address}' to lat={lat}, lng={lng}")
+                
+                # Find delivery area using Supabase RPC
+                db = get_supabase()
+                # Call the RPC function with lat/lng
+                rpc_params = {"lat": lat, "lng": lng}
+                result = await execute_db(
+                    db.rpc("find_delivery_area", rpc_params)
+                )
+                
+                if result.data and len(result.data) > 0:
+                    area = result.data[0]
+                    return DeliveryFeeResponse(
+                        covered=True,
+                        fee=area.get("fee", 0),
+                        area_name=area.get("name", "Unknown Area")
+                    )
+                else:
+                    return DeliveryFeeResponse(
+                        covered=False,
+                        message="Address not in any delivery area."
+                    )
+                    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_delivery_fee: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error processing delivery fee request"
+        )
+
+
+@app.get("/api/delivery-areas", response_model=List[DeliveryArea])
+async def get_all_delivery_areas():
+    """
+    Get all delivery areas with polygons as GeoJSON.
+    """
+    try:
+        db = get_supabase()
+        result = await execute_db(
+            db.rpc("get_delivery_areas_geojson")
+        )
+        
+        # Convert datetime objects to ISO strings
+        areas = []
+        for area_data in result.data:
+            # Convert datetime fields
+            area_dict = dict(area_data)
+            if "created_at" in area_dict and isinstance(area_dict["created_at"], (datetime, date)):
+                area_dict["created_at"] = area_dict["created_at"].isoformat()
+            if "updated_at" in area_dict and isinstance(area_dict["updated_at"], (datetime, date)):
+                area_dict["updated_at"] = area_dict["updated_at"].isoformat()
+            
+            # Parse polygon JSON if it's a string
+            if "polygon" in area_dict and isinstance(area_dict["polygon"], str):
+                area_dict["polygon"] = json.loads(area_dict["polygon"])
+            
+            areas.append(area_dict)
+        
+        return areas
+        
+    except Exception as e:
+        logger.error(f"Error fetching delivery areas: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error fetching delivery areas"
+        )
+
+
+@app.post("/api/delivery-areas", response_model=DeliveryArea, status_code=201)
+async def create_delivery_area(area: DeliveryAreaCreate):
+    """
+    Create a new delivery area.
+    """
+    try:
+        # Validate GeoJSON polygon
+        if "type" not in area.polygon or area.polygon["type"] != "Polygon":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid polygon: must be a GeoJSON Polygon"
+            )
+        
+        if "coordinates" not in area.polygon or not area.polygon["coordinates"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid polygon: missing coordinates"
+            )
+        
+        # Validate polygon has at least 4 points (first = last)
+        coords = area.polygon["coordinates"][0]
+        if len(coords) < 4:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid polygon: must have at least 4 points"
+            )
+        
+        db = get_supabase()
+        result = await execute_db(
+            db.rpc(
+                "insert_delivery_area",
+                {
+                    "_name": area.name,
+                    "_fee": area.fee,
+                    "_geojson": json.dumps(area.polygon)  # Convert dict to JSON string
+                }
+            )
+        )
+        
+        if not result.data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to create delivery area. Check that the polygon is valid."
+            )
+        
+        # Convert the returned row to the response format
+        created = dict(result.data[0])
+        created["polygon"] = area.polygon  # Use the original GeoJSON
+        
+        # Convert datetime objects
+        if "created_at" in created and isinstance(created["created_at"], (datetime, date)):
+            created["created_at"] = created["created_at"].isoformat()
+        if "updated_at" in created and isinstance(created["updated_at"], (datetime, date)):
+            created["updated_at"] = created["updated_at"].isoformat()
+        
+        return created
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating delivery area: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error creating delivery area: {str(e)}"
+        )
+
+
+@app.put("/api/delivery-areas/{area_id}", response_model=DeliveryArea)
+async def update_delivery_area(area_id: int, area: DeliveryAreaUpdate):
+    """
+    Update an existing delivery area.
+    """
+    try:
+        # Validate GeoJSON polygon
+        if "type" not in area.polygon or area.polygon["type"] != "Polygon":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid polygon: must be a GeoJSON Polygon"
+            )
+        
+        if "coordinates" not in area.polygon or not area.polygon["coordinates"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid polygon: missing coordinates"
+            )
+        
+        # Validate polygon has at least 4 points (first = last)
+        coords = area.polygon["coordinates"][0]
+        if len(coords) < 4:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid polygon: must have at least 4 points"
+            )
+        
+        db = get_supabase()
+        result = await execute_db(
+            db.rpc(
+                "update_delivery_area",
+                {
+                    "_id": area_id,
+                    "_name": area.name,
+                    "_fee": area.fee,
+                    "_geojson": json.dumps(area.polygon)  # Convert dict to JSON string
+                }
+            )
+        )
+        
+        if not result.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Delivery area with ID {area_id} not found"
+            )
+        
+        # Convert the returned row to the response format
+        updated = dict(result.data[0])
+        updated["polygon"] = area.polygon  # Use the original GeoJSON
+        
+        # Convert datetime objects
+        if "created_at" in updated and isinstance(updated["created_at"], (datetime, date)):
+            updated["created_at"] = updated["created_at"].isoformat()
+        if "updated_at" in updated and isinstance(updated["updated_at"], (datetime, date)):
+            updated["updated_at"] = updated["updated_at"].isoformat()
+        
+        return updated
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating delivery area: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error updating delivery area: {str(e)}"
+        )
+
+
+@app.delete("/api/delivery-areas/{area_id}", status_code=204)
+async def delete_delivery_area(area_id: int):
+    """
+    Delete a delivery area.
+    """
+    try:
+        db = get_supabase()
+        # Check if area exists
+        check_result = await execute_db(
+            db.table("delivery_areas").select("id").eq("id", area_id)
+        )
+        if not check_result.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Delivery area with ID {area_id} not found"
+            )
+        
+        # Delete the area
+        await execute_db(
+            db.table("delivery_areas").delete().eq("id", area_id)
+        )
+        
+        return None  # 204 No Content
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting delivery area: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting delivery area: {str(e)}"
+        )
+
+
+@app.get("/api/delivery-areas/point")
+async def get_area_by_point(lat: float, lng: float):
+    """
+    Get the delivery area containing a specific point.
+    Useful for debugging or checking coverage.
+    """
+    try:
+        db = get_supabase()
+        result = await execute_db(
+            db.rpc("find_delivery_area", {"lat": lat, "lng": lng})
+        )
+        
+        if result.data and len(result.data) > 0:
+            return {
+                "covered": True,
+                "area": result.data[0]
+            }
+        else:
+            return {
+                "covered": False,
+                "message": "Point not in any delivery area"
+            }
+            
+    except Exception as e:
+        logger.error(f"Error checking point: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error checking delivery area coverage"
+        )
 
 # ---------- AI ENDPOINTS ----------
 @app.post("/api/ai/chat", response_model=AIChatResponse)
