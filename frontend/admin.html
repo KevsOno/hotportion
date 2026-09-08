@@ -2033,22 +2033,19 @@
                 }
             }
 
+            // ─── FIXED: Get Polygon GeoJSON ───
             function getPolygonGeoJSON() {
                 if (!areaDrawnPolygon) return null;
                 try {
-                    // Get the GeoJSON from the drawn layer
-                    const geojson = areaDrawnPolygon.toGeoJSON();
+                    // Get the GeoJSON from the drawn layer (Leaflet returns a Feature)
+                    const feature = areaDrawnPolygon.toGeoJSON();
                     
-                    // Ensure it's a valid Polygon
-                    if (geojson && geojson.geometry && geojson.geometry.type === 'Polygon') {
-                        // Make sure coordinates are valid
-                        const coords = geojson.geometry.coordinates;
-                        if (coords && coords.length > 0 && coords[0].length >= 4) {
-                            // The polygon should have at least 4 points (first == last)
-                            return geojson;
-                        }
+                    // Extract just the geometry from the Feature
+                    if (feature && feature.geometry) {
+                        // Return the raw geometry object (just the Polygon)
+                        return feature.geometry;
                     }
-                    console.error('Invalid polygon geometry:', geojson);
+                    console.error('Invalid polygon geometry:', feature);
                     return null;
                 } catch (err) {
                     console.error('Error converting polygon to GeoJSON:', err);
@@ -2254,6 +2251,7 @@
                 autocompleteDropdown.classList.remove('show');
             }
 
+            // ─── FIXED: saveArea with correct polygon format ───
             async function saveArea(e) {
                 e.preventDefault();
                 const id = areaId.value;
@@ -2274,6 +2272,9 @@
                     showToast('Please draw a polygon on the map.', 'fa-solid fa-exclamation-circle');
                     return;
                 }
+
+                // Log the polygon for debugging
+                console.log('Sending polygon:', JSON.stringify(polygon));
 
                 const data = {
                     name: name,
