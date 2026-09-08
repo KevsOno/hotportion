@@ -85,6 +85,23 @@ class Settings(BaseSettings):
     MAX_DB_THREADS: int = 25
     STATS_CACHE_TTL_SECONDS: int = 10
     DEBUG: bool = False
+    # Delivery settings
+    MINIMUM_DELIVERY_FEE: int = 500
+    MAX_LOYALTY_DISCOUNT_PERCENT: int = 15
+    VOLUME_SURCHARGE_THRESHOLDS: Dict[str, int] = {
+        "large": 4,      # 4+ items
+        "xlarge": 6,     # 6+ items
+        "xxlarge": 10    # 10+ items
+    }
+    VOLUME_SURCHARGE_AMOUNTS: Dict[str, int] = {
+        "large": 150,
+        "xlarge": 300,
+        "xxlarge": 500
+    }
+    WEIGHT_THRESHOLD_KG: float = 5.0
+    WEIGHT_SURCHARGE_PER_KG: int = 100
+    BULKY_ITEM_SURCHARGE: int = 200
+    PEAK_SURCHARGE: int = 200
 
     class Config:
         env_file = ".env"
@@ -341,6 +358,7 @@ class DeliveryFeeResponse(BaseModel):
     covered: bool
     base_fee: Optional[int] = None
     area_name: Optional[str] = None
+    volume_surcharge: int = 0
     value_discount: int = 0
     item_surcharge: int = 0
     peak_surcharge: int = 0
@@ -817,7 +835,7 @@ def invalidate_stats_cache():
     _stats_cache["timestamp"] = 0
 
 # =============================================
-# INTELLIGENT DELIVERY FEE ENGINE
+# INTELLIGENT DELIVERY FEE ENGINE (UPDATED)
 # =============================================
 
 # Caches for rules (TTL 60 seconds)
@@ -904,86 +922,95 @@ async def calculate_intelligent_delivery_fee(
     order_time: Optional[datetime] = None,
     customer_email: Optional[str] = None
 ) -> Dict[str, Any]:
+    """
+    Calculate delivery fee with business-friendly logic:
+    - Base fee increases with order weight/value
+    - Volume surcharge for large orders (more logistics cost)
+    - Small loyalty discount (capped at 15%)
+    - Peak surcharge during busy hours
+    - Minimum fee to cover logistics costs
+    """
     fee = base_fee
     value_discount = 0
     item_surcharge = 0
     peak_surcharge = 0
     loyalty_discount = 0
+    volume_surcharge = 0
+    minimum_fee = settings.MINIMUM_DELIVERY_FEE
 
-    # 1. Value Discount
-    rules = await get_delivery_fee_rules()
-    for rule in rules:
-        min_val = rule.get("min_order_value", 0)
-        max_val = rule.get("max_order_value")
-        if order_value >= min_val and (max_val is None or order_value <= max_val):
-            if rule.get("free_delivery", False):
-                value_discount = fee
-                fee = 0
-            else:
-                multiplier = rule.get("fee_multiplier", 1.0)
-                discount_amount = rule.get("fee_discount", 0)
-                new_fee = fee * multiplier - discount_amount
-                value_discount = fee - new_fee
-                fee = max(0, new_fee)
+    # ─── 1. FETCH PRODUCT DETAILS ───
+    product_ids = [item.product_id for item in items]
+    db = get_supabase()
+    result = await execute_db(
+        db.table("products").select("id, is_main_item, weight_kg, is_bulky").in_("id", product_ids)
+    )
+    product_map = {p["id"]: p for p in result.data} if result.data else {}
+
+    # ─── 2. CALCULATE ITEM METRICS ───
+    main_count = 0
+    total_weight = 0.0
+    bulky_count = 0
+    total_items = sum(item.qty for item in items)
+    
+    for item in items:
+        pid = item.product_id
+        prod = product_map.get(pid)
+        if prod:
+            if prod.get("is_main_item", True):
+                main_count += item.qty
+            weight = prod.get("weight_kg", 0.5)
+            total_weight += weight * item.qty
+            if prod.get("is_bulky", False):
+                bulky_count += item.qty
+        else:
+            main_count += item.qty
+            total_weight += 0.5 * item.qty
+
+    # ─── 3. VOLUME SURCHARGE (more items = higher logistics cost) ───
+    if total_items >= settings.VOLUME_SURCHARGE_THRESHOLDS["xxlarge"]:
+        volume_surcharge += settings.VOLUME_SURCHARGE_AMOUNTS["xxlarge"]
+    elif total_items >= settings.VOLUME_SURCHARGE_THRESHOLDS["xlarge"]:
+        volume_surcharge += settings.VOLUME_SURCHARGE_AMOUNTS["xlarge"]
+    elif total_items >= settings.VOLUME_SURCHARGE_THRESHOLDS["large"]:
+        volume_surcharge += settings.VOLUME_SURCHARGE_AMOUNTS["large"]
+
+    # ─── 4. WEIGHT SURCHARGE ───
+    if total_weight > settings.WEIGHT_THRESHOLD_KG:
+        extra_kg = total_weight - settings.WEIGHT_THRESHOLD_KG
+        volume_surcharge += int(extra_kg * settings.WEIGHT_SURCHARGE_PER_KG)
+
+    # ─── 5. BULKY ITEM SURCHARGE ───
+    if bulky_count > 0:
+        volume_surcharge += bulky_count * settings.BULKY_ITEM_SURCHARGE
+
+    # ─── 6. ITEM SURCHARGE RULES (from database) ───
+    surcharge_rules = await get_item_surcharge_rules()
+    for rule in surcharge_rules:
+        min_items = rule.get("min_main_items")
+        max_items = rule.get("max_main_items")
+        if (min_items is None or main_count >= min_items) and (max_items is None or main_count <= max_items):
+            item_surcharge += rule.get("surcharge_amount", 0)
+            break
+    # Weight surcharge from database rules
+    for rule in surcharge_rules:
+        threshold = rule.get("weight_threshold_kg")
+        per_kg = rule.get("surcharge_per_kg")
+        if threshold is not None and per_kg is not None and total_weight > threshold:
+            extra_kg = total_weight - threshold
+            item_surcharge += int(extra_kg * per_kg)
             break
 
-    # 2. Item Surcharge (using database rules)
-    if items:
-        # Fetch product details
-        product_ids = [item.product_id for item in items]
-        db = get_supabase()
-        result = await execute_db(
-            db.table("products").select("id, is_main_item, weight_kg, is_bulky").in_("id", product_ids)
-        )
-        product_map = {p["id"]: p for p in result.data} if result.data else {}
-
-        main_count = 0
-        total_weight = 0.0
-        for item in items:
-            pid = item.product_id
-            prod = product_map.get(pid)
-            if prod:
-                if prod.get("is_main_item", True):
-                    main_count += item.qty
-                weight = prod.get("weight_kg", 0.5)
-                total_weight += weight * item.qty
-            else:
-                main_count += item.qty
-                total_weight += 0.5 * item.qty
-
-        # Get surcharge rules from DB
-        surcharge_rules = await get_item_surcharge_rules()
-        # Apply first matching rule for count
-        for rule in surcharge_rules:
-            min_items = rule.get("min_main_items")
-            max_items = rule.get("max_main_items")
-            if (min_items is None or main_count >= min_items) and (max_items is None or main_count <= max_items):
-                item_surcharge += rule.get("surcharge_amount", 0)
-                break  # apply first matching count rule
-        # Weight surcharge: apply first matching weight threshold
-        for rule in surcharge_rules:
-            threshold = rule.get("weight_threshold_kg")
-            per_kg = rule.get("surcharge_per_kg")
-            if threshold is not None and per_kg is not None and total_weight > threshold:
-                extra_kg = total_weight - threshold
-                item_surcharge += int(extra_kg * per_kg)
-                break  # apply first matching weight rule
-
-    fee += item_surcharge
-
-    # 3. Peak Time Surcharge
+    # ─── 7. PEAK SURCHARGE ───
     peak_settings = await get_peak_settings()
     if is_peak_hour(order_time or datetime.now(), peak_settings):
-        peak_surcharge = 200  # could be from settings
-        if fee > 0:
-            fee += peak_surcharge
+        peak_surcharge = settings.PEAK_SURCHARGE
 
-    # 4. Loyalty Discount
+    # ─── 8. LOYALTY DISCOUNT (capped at MAX_LOYALTY_DISCOUNT_PERCENT) ───
     if customer_email:
         loyalty_setting = await get_loyalty_setting()
         if loyalty_setting:
             min_orders = loyalty_setting.get("min_orders", 5)
-            discount_pct = loyalty_setting.get("discount_percentage", 20)
+            discount_pct = min(loyalty_setting.get("discount_percentage", 20), settings.MAX_LOYALTY_DISCOUNT_PERCENT)
             db = get_supabase()
             count_result = await execute_db(
                 db.table("orders")
@@ -992,14 +1019,44 @@ async def calculate_intelligent_delivery_fee(
                 .in_("status", ["paid", "confirmed", "completed"])
             )
             order_count = count_result.count or 0
-            if order_count >= min_orders and fee > 0:
+            if order_count >= min_orders:
+                # Discount applies to base fee only, not surcharges
                 loyalty_discount = int(fee * discount_pct / 100)
-                fee = max(0, fee - loyalty_discount)
+                fee = fee - loyalty_discount
 
+    # ─── 9. APPLY SURCHARGES ───
+    fee = fee + volume_surcharge + item_surcharge + peak_surcharge
+
+    # ─── 10. APPLY FREE DELIVERY RULES (promotional) ───
+    rules = await get_delivery_fee_rules()
+    for rule in rules:
+        min_val = rule.get("min_order_value", 0)
+        max_val = rule.get("max_order_value")
+        if order_value >= min_val and (max_val is None or order_value <= max_val):
+            if rule.get("free_delivery", False):
+                # Free delivery only for very large orders (promotional)
+                value_discount = fee
+                fee = 0
+            else:
+                # Apply multiplier and discount from rules
+                multiplier = rule.get("fee_multiplier", 1.0)
+                discount_amount = rule.get("fee_discount", 0)
+                new_fee = fee * multiplier - discount_amount
+                value_discount = fee - new_fee
+                fee = max(0, new_fee)
+            break
+
+    # ─── 11. ENSURE MINIMUM FEE ───
+    # Never go below minimum fee unless free delivery is explicitly set
+    if fee > 0 and fee < minimum_fee:
+        fee = minimum_fee
+
+    # ─── 12. ROUND AND RETURN ───
     final_fee = max(0, round(fee))
 
     return {
         "base_fee": base_fee,
+        "volume_surcharge": volume_surcharge,
         "value_discount": value_discount,
         "item_surcharge": item_surcharge,
         "peak_surcharge": peak_surcharge,
@@ -1007,10 +1064,11 @@ async def calculate_intelligent_delivery_fee(
         "final_fee": final_fee,
         "breakdown": {
             "base": base_fee,
-            "value_discount": -value_discount,
+            "volume_surcharge": volume_surcharge,
             "item_surcharge": item_surcharge,
             "peak_surcharge": peak_surcharge,
             "loyalty_discount": -loyalty_discount,
+            "value_discount": -value_discount,
             "final": final_fee
         }
     }
@@ -1665,6 +1723,7 @@ async def get_delivery_fee(request: DeliveryFeeRequest):
                     covered=True,
                     base_fee=base_fee,
                     area_name=area_name,
+                    volume_surcharge=calculation.get("volume_surcharge", 0),
                     value_discount=calculation["value_discount"],
                     item_surcharge=calculation["item_surcharge"],
                     peak_surcharge=calculation["peak_surcharge"],
