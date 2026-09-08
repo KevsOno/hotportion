@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Hot Portion Grill – Admin Panel</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
     <style>
         /* ─── ADMIN STYLES ─── */
         * {
@@ -383,6 +386,9 @@
             padding: 28px 32px;
             box-shadow: 0 30px 70px rgba(0, 0, 0, 0.30);
         }
+        .modal.map-modal {
+            max-width: 900px;
+        }
         .modal-header {
             display: flex;
             justify-content: space-between;
@@ -450,6 +456,75 @@
             justify-content: flex-end;
         }
 
+        /* ─── MAP STYLES ─── */
+        #delivery-area-map {
+            height: 400px;
+            width: 100%;
+            border-radius: var(--radius-sm);
+            border: 1px solid #e2e8e6;
+            margin-bottom: 12px;
+        }
+        #delivery-area-map-modal {
+            height: 450px;
+            width: 100%;
+            border-radius: var(--radius-sm);
+            border: 1px solid #e2e8e6;
+            margin-bottom: 12px;
+        }
+        .map-container {
+            position: relative;
+        }
+        .map-container .map-label {
+            position: absolute;
+            top: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255,255,255,0.9);
+            padding: 4px 16px;
+            border-radius: 50px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: var(--text-muted);
+            z-index: 1000;
+            pointer-events: none;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            border: 1px solid #e2e8e6;
+        }
+        .area-count-badge {
+            background: var(--gray-light);
+            padding: 4px 14px;
+            border-radius: 50px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+        .area-count-badge span {
+            color: var(--text-dark);
+            font-weight: 800;
+        }
+
+        /* ─── MAP LEGEND ─── */
+        .map-legend {
+            display: flex;
+            gap: 16px;
+            padding: 8px 0;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            flex-wrap: wrap;
+        }
+        .map-legend .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .map-legend .legend-color {
+            width: 20px;
+            height: 4px;
+            border-radius: 4px;
+            background: var(--primary);
+            opacity: 0.6;
+        }
+
         .toast-admin {
             position: fixed;
             top: 20px;
@@ -509,6 +584,9 @@
                 padding: 20px;
                 margin: 10px;
             }
+            .modal.map-modal {
+                max-width: 100%;
+            }
             .tabs button {
                 padding: 8px 14px;
                 font-size: 0.75rem;
@@ -523,6 +601,12 @@
             .actions-cell .btn {
                 font-size: 0.65rem;
                 padding: 3px 8px;
+            }
+            #delivery-area-map-modal {
+                height: 300px;
+            }
+            #delivery-area-map {
+                height: 300px;
             }
         }
         @media (max-width: 480px) {
@@ -823,6 +907,9 @@
             }
         }
     </style>
+    <!-- ─── LEAFTET CDN ─── -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
 </head>
 <body>
 
@@ -866,6 +953,8 @@
             <button data-tab="categories"><i class="fa-solid fa-tags"></i> Categories</button>
             <button data-tab="banners"><i class="fa-solid fa-images"></i> Banners</button>
             <button data-tab="topproducts"><i class="fa-solid fa-chart-simple"></i> Top Products</button>
+            <!-- NEW TAB: Areas Covered -->
+            <button data-tab="areas"><i class="fa-solid fa-map-location-dot"></i> Areas Covered</button>
         </div>
 
         <!-- ─── PRODUCTS PANEL ─── -->
@@ -1029,6 +1118,59 @@
                         <tr><td colspan="4" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        <!-- ─── AREAS COVERED PANEL ─── -->
+        <div class="panel" id="panel-areas">
+            <div class="panel-header">
+                <h2><i class="fa-solid fa-map-location-dot" style="color:var(--primary);"></i> Delivery Areas</h2>
+                <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                    <span class="area-count-badge">Total: <span id="area-count">0</span> areas</span>
+                    <button class="btn btn-primary btn-sm" id="add-area-btn">
+                        <i class="fa-solid fa-plus"></i> Add Area
+                    </button>
+                    <button class="btn btn-outline btn-sm" id="refresh-areas-btn">
+                        <i class="fa-solid fa-rotate"></i> Refresh
+                    </button>
+                </div>
+            </div>
+
+            <!-- Map -->
+            <div class="map-container">
+                <span class="map-label"><i class="fa-regular fa-compass"></i> Delivery Zones</span>
+                <div id="delivery-area-map"></div>
+            </div>
+            <div class="map-legend">
+                <span class="legend-item">
+                    <span class="legend-color" style="background:#E53935;"></span>
+                    Delivery Areas
+                </span>
+                <span class="legend-item">
+                    <i class="fa-regular fa-circle-dot" style="color:#E53935;"></i>
+                    Click an area on the map to view details
+                </span>
+            </div>
+
+            <!-- Table -->
+            <div style="margin-top:20px;">
+                <h3 style="font-size:1rem;font-weight:700;margin-bottom:12px;">All Delivery Areas</h3>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Name</th>
+                                <th>Fee (₦)</th>
+                                <th>Created</th>
+                                <th style="text-align:right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="areas-table-body">
+                            <tr><td colspan="5" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading areas...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
@@ -1291,7 +1433,48 @@
         </div>
     </div>
 
+    <!-- ─── AREA MODAL ─── -->
+    <div class="modal-overlay" id="area-modal">
+        <div class="modal map-modal">
+            <div class="modal-header">
+                <h3 id="area-modal-title">Add Delivery Area</h3>
+                <button class="modal-close" id="area-modal-close">&times;</button>
+            </div>
+            <form id="area-form">
+                <input type="hidden" id="area-id" />
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Area Name *</label>
+                        <input type="text" id="area-name" required placeholder="e.g. Main Town" />
+                    </div>
+                    <div class="form-group">
+                        <label>Delivery Fee (₦) *</label>
+                        <input type="number" id="area-fee" required placeholder="1500" min="0" step="100" />
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Draw the delivery area on the map below *</label>
+                    <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px;">
+                        <i class="fa-regular fa-circle-info"></i> Use the polygon tool (<i class="fa-regular fa-draw-polygon"></i>) to draw the area. Double-click to finish.
+                    </div>
+                    <div id="delivery-area-map-modal"></div>
+                    <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">
+                        <i class="fa-regular fa-pen"></i> Polygon drawn: <span id="polygon-status" style="font-weight:700;color:var(--text-dark);">None</span>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-outline" id="area-modal-cancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="area-modal-save">
+                        <i class="fa-solid fa-check"></i> Save Area
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- ─── SCRIPTS ─── -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
     <script>
         (function() {
             'use strict';
@@ -1304,6 +1487,7 @@
                 stats: '/api/stats',
                 banners: '/api/v1/banners',
                 topProducts: '/api/top-products',
+                deliveryAreas: '/api/delivery-areas',
             };
 
             // ─── TOAST ───
@@ -1334,6 +1518,16 @@
             let pollInterval = null;
             let lastPollTimestamp = null;
 
+            // ─── AREAS STATE ───
+            let deliveryAreas = [];
+            let areaMap = null;
+            let areaMapModal = null;
+            let areaDrawControl = null;
+            let areaDrawnPolygon = null;
+            let areaEditLayer = null;
+            let areaMapLayers = [];
+            let areaEditId = null;
+
             // ─── DOM REFS ───
             const tabs = document.querySelectorAll('#admin-tabs button');
             const panels = {
@@ -1343,6 +1537,7 @@
                 categories: document.getElementById('panel-categories'),
                 banners: document.getElementById('panel-banners'),
                 topproducts: document.getElementById('panel-topproducts'),
+                areas: document.getElementById('panel-areas'),
             };
             const productsBody = document.getElementById('products-table-body');
             const inventoryBody = document.getElementById('inventory-table-body');
@@ -1392,6 +1587,18 @@
             const bannerPreviewModal = document.getElementById('banner-preview-modal');
             const previewContent = document.getElementById('banner-preview-content');
 
+            // ─── AREAS DOM REFS ───
+            const areaModal = document.getElementById('area-modal');
+            const areaForm = document.getElementById('area-form');
+            const areaId = document.getElementById('area-id');
+            const areaName = document.getElementById('area-name');
+            const areaFee = document.getElementById('area-fee');
+            const areaModalTitle = document.getElementById('area-modal-title');
+            const areaModalSave = document.getElementById('area-modal-save');
+            const polygonStatus = document.getElementById('polygon-status');
+            const areaCount = document.getElementById('area-count');
+            const areasBody = document.getElementById('areas-table-body');
+
             // ─── FETCH HELPERS ───
             async function fetchJSON(url, options = {}) {
                 const res = await fetch(url, {
@@ -1419,7 +1626,14 @@
             // ─── LOAD DATA ───
             async function loadAllData() {
                 try {
-                    await Promise.all([loadProducts(), loadCategories(), loadOrders(), loadStats(), loadBanners(), loadTopProducts()]);
+                    await Promise.all([
+                        loadProducts(),
+                        loadCategories(),
+                        loadOrders(),
+                        loadStats(),
+                        loadBanners(),
+                        loadTopProducts()
+                    ]);
                 } catch (err) {
                     console.error('Load error:', err);
                     showToast('Error loading data: ' + err.message, 'fa-solid fa-exclamation-circle');
@@ -1478,414 +1692,433 @@
                 }
             }
 
-            function renderTopProducts() {
-                if (!topProductsBody) return;
-                if (topProducts.length === 0) {
-                    topProductsBody.innerHTML =
-                        `<tr><td colspan="4" class="empty-state"><i class="fa-regular fa-chart-simple"></i> No sales data yet</td></tr>`;
-                    return;
-                }
-                let html = '';
-                topProducts.forEach((item, index) => {
-                    const rank = index + 1;
-                    const revenue = item.revenue || 0;
-                    html += `
-                        <tr>
-                            <td><strong>${rank}</strong></td>
-                            <td>
-                                <div class="product-cell">
-                                    <span class="emoji">${item.emoji || '🍽️'}</span>
-                                    <div class="info">
-                                        <div class="name">${item.name}</div>
-                                    </div>
-                                </div>
-                            </td>
-                            <td>${item.quantity_sold}</td>
-                            <td>₦${Number(revenue).toLocaleString()}</td>
-                        </tr>
-                    `;
-                });
-                topProductsBody.innerHTML = html;
-            }
-
-            // ─── BANNER LOAD ───
-            async function loadBanners() {
+            // ─── DELIVERY AREAS ───
+            async function loadDeliveryAreas() {
                 try {
-                    const params = new URLSearchParams({
-                        limit: pageSize,
-                        offset: (currentPage - 1) * pageSize
-                    });
-                    if (currentView === 'active') params.append('is_active', 'true');
-                    else if (currentView === 'hero') params.append('is_hero', 'true');
-                    else if (currentView === 'featured') params.append('is_featured', 'true');
-
-                    const response = await fetch(`${API.banners}?${params}`);
-                    const data = await response.json();
-                    banners = data.banners || [];
-                    totalPages = Math.ceil((data.total || 0) / pageSize);
-                    renderBanners();
-                    updatePagination();
-                    updateBannerStats(data);
-                } catch (error) {
-                    console.error('Error loading banners:', error);
-                    showToast('Failed to load banners', 'fa-solid fa-exclamation-circle');
+                    const data = await fetchJSON(API.deliveryAreas);
+                    deliveryAreas = data || [];
+                    renderAreasTable();
+                    updateAreaMap();
+                    if (areaCount) areaCount.textContent = deliveryAreas.length;
+                } catch (err) {
+                    console.error('Error loading delivery areas:', err);
+                    showToast('Failed to load delivery areas: ' + err.message, 'fa-solid fa-exclamation-circle');
+                    deliveryAreas = [];
+                    renderAreasTable();
+                    if (areaCount) areaCount.textContent = '0';
                 }
             }
 
-            function renderBanners() {
-                if (!bannerGrid) return;
-                if (banners.length === 0) {
-                    bannerGrid.innerHTML = `
-                        <div class="empty-state" style="grid-column:1/-1;">
-                            <i class="fa-regular fa-images"></i>
-                            <p>No banners found. Create your first banner!</p>
-                        </div>
+            function renderAreasTable() {
+                if (!areasBody) return;
+                if (deliveryAreas.length === 0) {
+                    areasBody.innerHTML = `
+                        <tr><td colspan="5" class="empty-state">
+                            <i class="fa-regular fa-map-location-dot"></i>
+                            <p>No delivery areas defined yet. Click "Add Area" to create one.</p>
+                        </td></tr>
                     `;
                     return;
                 }
-
-                bannerGrid.innerHTML = banners.map((banner, index) => `
-                    <div class="banner-card" draggable="true" data-index="${index}" data-id="${banner.id}">
-                        <div class="banner-image" style="background-image: url('${banner.image_url || '/images/default-banner.jpg'}');">
-                            ${banner.badge_text ? `
-                                <span class="badge" style="background:${banner.badge_color || '#E53935'};">
-                                    ${banner.badge_text}
-                                </span>
-                            ` : ''}
-                            <span class="status-badge ${banner.is_active ? 'active' : 'inactive'}">
-                                ${banner.is_active ? 'Active' : 'Inactive'}
-                            </span>
-                            ${banner.is_hero ? '<span class="tag" style="position:absolute;bottom:12px;left:12px;background:#FFC107;padding:2px10px;border-radius:20px;font-size:0.6rem;font-weight:700;">⭐ Hero</span>' : ''}
-                            ${banner.is_featured ? '<span class="tag" style="position:absolute;bottom:12px;left:80px;background:#E53935;padding:2px10px;border-radius:20px;font-size:0.6rem;font-weight:700;color:white;">🔥 Featured</span>' : ''}
-                        </div>
-                        <div class="banner-content">
-                            <div class="title">${banner.title}</div>
-                            ${banner.subtitle ? `<div class="subtitle">${banner.subtitle}</div>` : ''}
-                            ${banner.description ? `<p style="font-size:0.85rem;color:var(--text-muted);margin:8px 0;">${banner.description}</p>` : ''}
-                            <div class="meta">
-                                <span class="tag">Position: ${banner.position || 0}</span>
-                                <span class="tag">Order: ${banner.display_order || 0}</span>
-                                ${banner.discount_value ? `<span class="tag" style="background:#dcfce7;color:#166534;">${banner.discount_value}% OFF</span>` : ''}
-                                ${banner.start_date ? `<span>From: ${new Date(banner.start_date).toLocaleDateString()}</span>` : ''}
-                                ${banner.end_date ? `<span>To: ${new Date(banner.end_date).toLocaleDateString()}</span>` : ''}
+                areasBody.innerHTML = deliveryAreas.map(area => `
+                    <tr>
+                        <td><code style="background:#f0f0f0;padding:2px 8px;border-radius:4px;font-size:0.75rem;">${area.id}</code></td>
+                        <td><strong>${area.name}</strong></td>
+                        <td>₦${Number(area.fee).toLocaleString()}</td>
+                        <td style="font-size:0.75rem;color:var(--text-muted);">${area.created_at ? new Date(area.created_at).toLocaleDateString() : '-'}</td>
+                        <td style="text-align:right;">
+                            <div class="actions-cell" style="justify-content:flex-end;">
+                                <button class="btn btn-primary btn-sm edit-area" data-id="${area.id}"><i class="fa-regular fa-pen-to-square"></i></button>
+                                <button class="btn btn-danger btn-sm delete-area" data-id="${area.id}"><i class="fa-regular fa-trash-can"></i></button>
                             </div>
-                        </div>
-                        <div class="banner-actions">
-                            <button class="btn btn-primary btn-sm edit-banner" data-id="${banner.id}">
-                                <i class="fa-regular fa-pen-to-square"></i>
-                            </button>
-                            <button class="btn btn-outline btn-sm preview-banner" data-id="${banner.id}">
-                                <i class="fa-regular fa-eye"></i>
-                            </button>
-                            <button class="btn btn-success btn-sm toggle-banner" data-id="${banner.id}">
-                                <i class="fa-solid ${banner.is_active ? 'fa-pause' : 'fa-play'}"></i>
-                            </button>
-                            <button class="btn btn-outline btn-sm duplicate-banner" data-id="${banner.id}">
-                                <i class="fa-regular fa-copy"></i>
-                            </button>
-                            <button class="btn btn-danger btn-sm delete-banner" data-id="${banner.id}">
-                                <i class="fa-regular fa-trash-can"></i>
-                            </button>
-                            <span class="drag-handle" style="margin-left:auto;">
-                                <i class="fa-solid fa-grip-vertical"></i>
-                            </span>
-                        </div>
-                    </div>
+                        </td>
+                    </tr>
                 `).join('');
 
-                setupBannerDragDrop();
-
-                document.querySelectorAll('.edit-banner').forEach(btn => {
-                    btn.addEventListener('click', () => openBannerModal(btn.dataset.id));
+                document.querySelectorAll('.edit-area').forEach(btn => {
+                    btn.addEventListener('click', () => openAreaModal(btn.dataset.id));
                 });
-                document.querySelectorAll('.preview-banner').forEach(btn => {
-                    btn.addEventListener('click', () => previewBanner(btn.dataset.id));
-                });
-                document.querySelectorAll('.toggle-banner').forEach(btn => {
-                    btn.addEventListener('click', () => toggleBanner(btn.dataset.id));
-                });
-                document.querySelectorAll('.duplicate-banner').forEach(btn => {
-                    btn.addEventListener('click', () => duplicateBanner(btn.dataset.id));
-                });
-                document.querySelectorAll('.delete-banner').forEach(btn => {
-                    btn.addEventListener('click', () => deleteBanner(btn.dataset.id));
+                document.querySelectorAll('.delete-area').forEach(btn => {
+                    btn.addEventListener('click', () => deleteArea(btn.dataset.id));
                 });
             }
 
-            function setupBannerDragDrop() {
-                let dragStartIndex = null;
-                let dragEndIndex = null;
-                const grid = bannerGrid;
+            // ─── AREA MAP ───
+            function initAreaMap() {
+                const mapContainer = document.getElementById('delivery-area-map');
+                if (!mapContainer) return;
 
-                grid.querySelectorAll('.banner-card').forEach(card => {
-                    card.addEventListener('dragstart', (e) => {
-                        dragStartIndex = parseInt(card.dataset.index);
-                        card.classList.add('dragging');
-                        e.dataTransfer.effectAllowed = 'move';
+                // Default center: Lagos, Nigeria
+                const center = [6.5244, 3.3792];
+                const zoom = 12;
+
+                if (!areaMap) {
+                    areaMap = L.map(mapContainer, {
+                        center: center,
+                        zoom: zoom,
+                        zoomControl: true,
                     });
-
-                    card.addEventListener('dragend', () => {
-                        card.classList.remove('dragging');
-                        if (dragStartIndex !== null && dragEndIndex !== null && dragStartIndex !== dragEndIndex) {
-                            reorderBanners(dragStartIndex, dragEndIndex);
-                        }
-                        dragStartIndex = null;
-                        dragEndIndex = null;
-                        grid.querySelectorAll('.banner-card').forEach(c => c.classList.remove('drag-over'));
-                    });
-
-                    card.addEventListener('dragover', (e) => {
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = 'move';
-                        card.classList.add('drag-over');
-                        dragEndIndex = parseInt(card.dataset.index);
-                    });
-
-                    card.addEventListener('dragleave', () => {
-                        card.classList.remove('drag-over');
-                    });
-                });
-            }
-
-            async function reorderBanners(fromIndex, toIndex) {
-                const bannerIds = banners.map(b => b.id);
-                const [removed] = bannerIds.splice(fromIndex, 1);
-                bannerIds.splice(toIndex, 0, removed);
-
-                try {
-                    await fetch(`${API.banners}/reorder`, {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(bannerIds)
-                    });
-                    showToast('Banners reordered successfully!');
-                    loadBanners();
-                } catch (error) {
-                    console.error('Error reordering banners:', error);
-                    showToast('Failed to reorder banners', 'fa-solid fa-exclamation-circle');
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                        maxZoom: 19,
+                    }).addTo(areaMap);
+                } else {
+                    areaMap.setView(center, zoom);
                 }
             }
 
-            function updatePagination() {
-                pageInfo.textContent = `Page ${currentPage} of ${totalPages || 1}`;
-                document.getElementById('prev-page').disabled = currentPage <= 1;
-                document.getElementById('next-page').disabled = currentPage >= totalPages;
+            function updateAreaMap() {
+                if (!areaMap) return;
+
+                // Clear existing layers
+                areaMapLayers.forEach(layer => {
+                    if (areaMap.hasLayer(layer)) {
+                        areaMap.removeLayer(layer);
+                    }
+                });
+                areaMapLayers = [];
+
+                // Add each area as a polygon
+                deliveryAreas.forEach(area => {
+                    try {
+                        if (!area.polygon) return;
+                        const geojson = typeof area.polygon === 'string' ? JSON.parse(area.polygon) : area.polygon;
+                        const layer = L.geoJSON(geojson, {
+                            style: {
+                                color: '#E53935',
+                                weight: 3,
+                                opacity: 0.8,
+                                fillColor: '#E53935',
+                                fillOpacity: 0.15,
+                            },
+                            onEachFeature: function(feature, layer) {
+                                layer.bindPopup(`
+                                    <strong>${area.name}</strong><br>
+                                    Fee: ₦${Number(area.fee).toLocaleString()}<br>
+                                    ID: ${area.id}
+                                `);
+                            }
+                        });
+                        areaMap.addLayer(layer);
+                        areaMapLayers.push(layer);
+                    } catch (err) {
+                        console.warn('Error rendering area:', area.id, err);
+                    }
+                });
+
+                // Fit map to show all areas
+                if (areaMapLayers.length > 0) {
+                    const group = L.featureGroup(areaMapLayers);
+                    areaMap.fitBounds(group.getBounds().pad(0.1));
+                } else {
+                    areaMap.setView([6.5244, 3.3792], 12);
+                }
             }
 
-            function updateBannerStats(data) {}
+            // ─── AREA MODAL MAP ───
+            function initAreaModalMap() {
+                const mapContainer = document.getElementById('delivery-area-map-modal');
+                if (!mapContainer) return;
 
-            // ─── BANNER CRUD ───
-            function openBannerModal(bannerId = null) {
-                const modal = document.getElementById('banner-modal');
-                const form = document.getElementById('banner-form');
+                const center = [6.5244, 3.3792];
+                const zoom = 12;
+
+                if (!areaMapModal) {
+                    areaMapModal = L.map(mapContainer, {
+                        center: center,
+                        zoom: zoom,
+                        zoomControl: true,
+                    });
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                        maxZoom: 19,
+                    }).addTo(areaMapModal);
+
+                    // Add draw control
+                    areaDrawControl = new L.Control.Draw({
+                        draw: {
+                            polygon: {
+                                allowIntersection: false,
+                                showArea: true,
+                                shapeOptions: {
+                                    color: '#E53935',
+                                    weight: 3,
+                                    opacity: 0.8,
+                                    fillColor: '#E53935',
+                                    fillOpacity: 0.2,
+                                }
+                            },
+                            polyline: false,
+                            rectangle: false,
+                            circle: false,
+                            circlemarker: false,
+                            marker: false,
+                        },
+                        edit: {
+                            featureGroup: new L.FeatureGroup(),
+                            remove: true,
+                        }
+                    });
+                    areaMapModal.addControl(areaDrawControl);
+
+                    // Handle draw events
+                    areaMapModal.on(L.Draw.Event.CREATED, function(event) {
+                        const layer = event.layer;
+                        // Remove existing polygon if any
+                        if (areaDrawnPolygon) {
+                            areaMapModal.removeLayer(areaDrawnPolygon);
+                            areaDrawnPolygon = null;
+                        }
+                        areaDrawnPolygon = layer;
+                        areaMapModal.addLayer(layer);
+
+                        // Update status
+                        const coords = layer.getLatLngs()[0];
+                        if (coords && coords.length >= 4) {
+                            polygonStatus.textContent = `Polygon drawn (${coords.length} points)`;
+                            polygonStatus.style.color = '#22c55e';
+                        }
+                    });
+
+                    areaMapModal.on(L.Draw.Event.DELETED, function() {
+                        if (areaDrawnPolygon) {
+                            areaMapModal.removeLayer(areaDrawnPolygon);
+                            areaDrawnPolygon = null;
+                        }
+                        polygonStatus.textContent = 'None';
+                        polygonStatus.style.color = 'var(--text-dark)';
+                    });
+
+                    areaMapModal.on(L.Draw.Event.EDITED, function(event) {
+                        const layers = event.layers;
+                        layers.eachLayer(function(layer) {
+                            if (areaDrawnPolygon) {
+                                areaMapModal.removeLayer(areaDrawnPolygon);
+                            }
+                            areaDrawnPolygon = layer;
+                            areaMapModal.addLayer(layer);
+                            const coords = layer.getLatLngs()[0];
+                            if (coords && coords.length >= 4) {
+                                polygonStatus.textContent = `Polygon edited (${coords.length} points)`;
+                                polygonStatus.style.color = '#22c55e';
+                            }
+                        });
+                    });
+                } else {
+                    areaMapModal.setView(center, zoom);
+                    // Clear any existing drawn layers
+                    if (areaDrawnPolygon) {
+                        areaMapModal.removeLayer(areaDrawnPolygon);
+                        areaDrawnPolygon = null;
+                    }
+                    if (areaEditLayer) {
+                        areaMapModal.removeLayer(areaEditLayer);
+                        areaEditLayer = null;
+                    }
+                    polygonStatus.textContent = 'None';
+                    polygonStatus.style.color = 'var(--text-dark)';
+                }
+            }
+
+            function getPolygonGeoJSON() {
+                if (!areaDrawnPolygon) return null;
+                try {
+                    const geojson = areaDrawnPolygon.toGeoJSON();
+                    // Ensure it's a valid Polygon
+                    if (geojson.geometry.type === 'Polygon') {
+                        return geojson;
+                    }
+                    return null;
+                } catch (err) {
+                    console.error('Error converting polygon to GeoJSON:', err);
+                    return null;
+                }
+            }
+
+            function setPolygonFromGeoJSON(geojson) {
+                if (!areaMapModal || !geojson) return;
+                try {
+                    const layer = L.geoJSON(geojson, {
+                        style: {
+                            color: '#E53935',
+                            weight: 3,
+                            opacity: 0.8,
+                            fillColor: '#E53935',
+                            fillOpacity: 0.2,
+                        }
+                    });
+                    areaEditLayer = layer;
+                    areaMapModal.addLayer(layer);
+                    areaMapModal.fitBounds(layer.getBounds().pad(0.1));
+
+                    // Also set as drawn polygon
+                    if (areaDrawnPolygon) {
+                        areaMapModal.removeLayer(areaDrawnPolygon);
+                    }
+                    // Get the polygon layer from the geoJSON
+                    layer.eachLayer(function(l) {
+                        areaDrawnPolygon = l;
+                        const coords = l.getLatLngs()[0];
+                        if (coords && coords.length >= 4) {
+                            polygonStatus.textContent = `Polygon loaded (${coords.length} points)`;
+                            polygonStatus.style.color = '#22c55e';
+                        }
+                    });
+                } catch (err) {
+                    console.error('Error loading polygon:', err);
+                }
+            }
+
+            // ─── AREA CRUD ───
+            function openAreaModal(areaIdToEdit = null) {
+                areaEditId = areaIdToEdit;
+                const modal = areaModal;
+                const form = areaForm;
                 form.reset();
+                polygonStatus.textContent = 'None';
+                polygonStatus.style.color = 'var(--text-dark)';
 
-                if (bannerId) {
-                    const banner = banners.find(b => b.id == bannerId);
-                    if (banner) {
-                        bannerModalTitle.textContent = 'Edit Banner';
-                        bannerIdEl.value = banner.id;
-                        document.getElementById('b-title').value = banner.title || '';
-                        document.getElementById('b-subtitle').value = banner.subtitle || '';
-                        document.getElementById('b-description').value = banner.description || '';
-                        document.getElementById('b-badge').value = banner.badge_text || '';
-                        document.getElementById('b-badge-color').value = banner.badge_color || '#E53935';
-                        document.getElementById('b-bg-color').value = banner.background_color || '#fff3ed';
-                        document.getElementById('b-text-color').value = banner.text_color || '#1e1e1e';
-                        document.getElementById('b-image').value = banner.image_url || '';
-                        document.getElementById('b-cta-text').value = banner.cta_text || '';
-                        document.getElementById('b-cta-link').value = banner.cta_link || '';
-                        document.getElementById('b-cta-type').value = banner.cta_type || 'button';
-                        document.getElementById('b-product-id').value = banner.product_id || '';
-                        document.getElementById('b-discount-type').value = banner.discount_type || '';
-                        document.getElementById('b-discount-value').value = banner.discount_value || '';
-                        document.getElementById('b-position').value = banner.position || 0;
-                        document.getElementById('b-display-order').value = banner.display_order || 0;
-                        document.getElementById('b-is-active').checked = banner.is_active;
-                        document.getElementById('b-is-hero').checked = banner.is_hero;
-                        document.getElementById('b-is-featured').checked = banner.is_featured;
-                        document.getElementById('b-meta').value = JSON.stringify(banner.meta_data || {}, null, 2);
+                // Reset map
+                if (areaMapModal) {
+                    if (areaDrawnPolygon) {
+                        areaMapModal.removeLayer(areaDrawnPolygon);
+                        areaDrawnPolygon = null;
+                    }
+                    if (areaEditLayer) {
+                        areaMapModal.removeLayer(areaEditLayer);
+                        areaEditLayer = null;
+                    }
+                    areaMapModal.setView([6.5244, 3.3792], 12);
+                }
 
-                        if (banner.start_date) {
-                            document.getElementById('b-start-date').value = banner.start_date.slice(0, 16);
+                if (areaIdToEdit) {
+                    const area = deliveryAreas.find(a => a.id == areaIdToEdit);
+                    if (area) {
+                        areaModalTitle.textContent = 'Edit Delivery Area';
+                        areaModalSave.textContent = 'Update Area';
+                        areaId.value = area.id;
+                        areaName.value = area.name;
+                        areaFee.value = area.fee;
+                        // Load polygon
+                        if (area.polygon) {
+                            const geojson = typeof area.polygon === 'string' ? JSON.parse(area.polygon) : area.polygon;
+                            // Need to wait for map to be ready
+                            setTimeout(() => {
+                                if (areaMapModal) {
+                                    setPolygonFromGeoJSON(geojson);
+                                }
+                            }, 300);
                         }
-                        if (banner.end_date) {
-                            document.getElementById('b-end-date').value = banner.end_date.slice(0, 16);
-                        }
-
-                        const categorySelect = document.getElementById('b-categories');
-                        if (banner.categories) {
-                            Array.from(categorySelect.options).forEach(opt => {
-                                opt.selected = banner.categories.includes(parseInt(opt.value));
-                            });
-                        }
-
-                        const productSelect = document.getElementById('b-product-id');
-                        if (banner.product_id) {
-                            productSelect.value = banner.product_id;
-                        }
-
-                        bannerModalSave.textContent = 'Update Banner';
                     }
                 } else {
-                    bannerModalTitle.textContent = 'Add Banner';
-                    bannerIdEl.value = '';
-                    document.getElementById('b-is-active').checked = true;
-                    bannerModalSave.textContent = 'Create Banner';
+                    areaModalTitle.textContent = 'Add Delivery Area';
+                    areaModalSave.textContent = 'Create Area';
+                    areaId.value = '';
+                    areaName.value = '';
+                    areaFee.value = '';
                 }
 
                 modal.classList.add('open');
+                // Re-initialize modal map if needed
+                setTimeout(() => {
+                    initAreaModalMap();
+                    if (areaMapModal) {
+                        areaMapModal.invalidateSize();
+                    }
+                }, 100);
             }
 
-            function closeBannerModal() {
-                document.getElementById('banner-modal').classList.remove('open');
-                document.getElementById('banner-form').reset();
+            function closeAreaModal() {
+                areaModal.classList.remove('open');
+                if (areaDrawnPolygon) {
+                    areaMapModal?.removeLayer(areaDrawnPolygon);
+                    areaDrawnPolygon = null;
+                }
+                if (areaEditLayer) {
+                    areaMapModal?.removeLayer(areaEditLayer);
+                    areaEditLayer = null;
+                }
+                areaEditId = null;
             }
 
-            async function saveBanner(e) {
+            async function saveArea(e) {
                 e.preventDefault();
-                const id = bannerIdEl.value;
-                const categories = Array.from(document.getElementById('b-categories').selectedOptions)
-                    .map(opt => parseInt(opt.value));
+                const id = areaId.value;
+                const name = areaName.value.trim();
+                const fee = parseInt(areaFee.value);
+
+                if (!name) {
+                    showToast('Please enter an area name.', 'fa-solid fa-exclamation-circle');
+                    return;
+                }
+                if (isNaN(fee) || fee < 0) {
+                    showToast('Please enter a valid fee.', 'fa-solid fa-exclamation-circle');
+                    return;
+                }
+
+                const polygon = getPolygonGeoJSON();
+                if (!polygon) {
+                    showToast('Please draw a polygon on the map.', 'fa-solid fa-exclamation-circle');
+                    return;
+                }
 
                 const data = {
-                    title: document.getElementById('b-title').value,
-                    subtitle: document.getElementById('b-subtitle').value,
-                    description: document.getElementById('b-description').value,
-                    image_url: document.getElementById('b-image').value,
-                    badge_text: document.getElementById('b-badge').value,
-                    badge_color: document.getElementById('b-badge-color').value,
-                    background_color: document.getElementById('b-bg-color').value,
-                    text_color: document.getElementById('b-text-color').value,
-                    cta_text: document.getElementById('b-cta-text').value,
-                    cta_link: document.getElementById('b-cta-link').value,
-                    cta_type: document.getElementById('b-cta-type').value,
-                    product_id: parseInt(document.getElementById('b-product-id').value) || null,
-                    discount_type: document.getElementById('b-discount-type').value || null,
-                    discount_value: parseInt(document.getElementById('b-discount-value').value) || null,
-                    position: parseInt(document.getElementById('b-position').value) || 0,
-                    display_order: parseInt(document.getElementById('b-display-order').value) || 0,
-                    is_active: document.getElementById('b-is-active').checked,
-                    is_hero: document.getElementById('b-is-hero').checked,
-                    is_featured: document.getElementById('b-is-featured').checked,
-                    start_date: document.getElementById('b-start-date').value || null,
-                    end_date: document.getElementById('b-end-date').value || null,
-                    meta_data: JSON.parse(document.getElementById('b-meta').value || '{}'),
-                    categories: categories
+                    name: name,
+                    fee: fee,
+                    polygon: polygon
                 };
 
                 try {
-                    const url = id ? `${API.banners}/${id}` : API.banners;
-                    const method = id ? 'PUT' : 'POST';
-
-                    const response = await fetch(url, {
-                        method: method,
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(data)
-                    });
-
-                    if (response.ok) {
-                        showToast(id ? 'Banner updated successfully!' : 'Banner created successfully!');
-                        closeBannerModal();
-                        loadBanners();
+                    let response;
+                    if (id) {
+                        response = await fetch(`${API.deliveryAreas}/${id}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(data)
+                        });
                     } else {
-                        const error = await response.json();
-                        showToast('Error: ' + (error.message || 'Failed to save banner'), 'fa-solid fa-exclamation-circle');
+                        response = await fetch(API.deliveryAreas, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(data)
+                        });
                     }
-                } catch (error) {
-                    console.error('Error saving banner:', error);
-                    showToast('Failed to save banner', 'fa-solid fa-exclamation-circle');
-                }
-            }
 
-            async function toggleBanner(id) {
-                try {
-                    const response = await fetch(`${API.banners}/${id}/toggle`, { method: 'PATCH' });
-                    if (response.ok) {
-                        showToast('Banner toggled successfully!');
-                        loadBanners();
+                    if (!response.ok) {
+                        const err = await response.json();
+                        throw new Error(err.message || 'Failed to save area');
                     }
-                } catch (error) {
-                    console.error('Error toggling banner:', error);
-                    showToast('Failed to toggle banner', 'fa-solid fa-exclamation-circle');
+
+                    showToast(id ? 'Area updated successfully!' : 'Area created successfully!');
+                    closeAreaModal();
+                    await loadDeliveryAreas();
+                } catch (err) {
+                    console.error('Error saving area:', err);
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
                 }
             }
 
-            async function duplicateBanner(id) {
+            async function deleteArea(id) {
+                const area = deliveryAreas.find(a => a.id == id);
+                if (!area) return;
+                if (!confirm(`Delete delivery area "${area.name}"? This action cannot be undone.`)) return;
+
                 try {
-                    const response = await fetch(`${API.banners}/${id}/duplicate`, { method: 'POST' });
-                    if (response.ok) {
-                        showToast('Banner duplicated successfully!');
-                        loadBanners();
+                    const response = await fetch(`${API.deliveryAreas}/${id}`, {
+                        method: 'DELETE'
+                    });
+                    if (!response.ok) {
+                        throw new Error('Failed to delete area');
                     }
-                } catch (error) {
-                    console.error('Error duplicating banner:', error);
-                    showToast('Failed to duplicate banner', 'fa-solid fa-exclamation-circle');
+                    showToast('Area deleted successfully!');
+                    await loadDeliveryAreas();
+                } catch (err) {
+                    console.error('Error deleting area:', err);
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
                 }
             }
 
-            async function deleteBanner(id) {
-                if (!confirm('Are you sure you want to delete this banner?')) return;
-                try {
-                    await fetch(`${API.banners}/${id}`, { method: 'DELETE' });
-                    showToast('Banner deleted successfully!');
-                    loadBanners();
-                } catch (error) {
-                    console.error('Error deleting banner:', error);
-                    showToast('Failed to delete banner', 'fa-solid fa-exclamation-circle');
-                }
-            }
-
-            async function previewBanner(id) {
-                const banner = banners.find(b => b.id == id);
-                if (!banner) return;
-
-                previewContent.innerHTML = `
-                    <div class="banner-preview" style="background:${banner.background_color || '#fff3ed'};color:${banner.text_color || '#1e1e1e'};">
-                        ${banner.badge_text ? `
-                            <span class="preview-badge" style="background:${banner.badge_color || '#E53935'};color:white;">
-                                ${banner.badge_text}
-                            </span>
-                        ` : ''}
-                        <h1>${banner.title}</h1>
-                        ${banner.subtitle ? `<p style="font-weight:700;font-size:1.2rem;">${banner.subtitle}</p>` : ''}
-                        ${banner.description ? `<p>${banner.description}</p>` : ''}
-                        ${banner.cta_text ? `
-                            <div class="preview-cta" style="background:${banner.badge_color || '#E53935'};color:white;">
-                                ${banner.cta_text}
-                                ${banner.discount_value ? ` ${banner.discount_type === 'percentage' ? `(${banner.discount_value}% OFF)` : `(₦${banner.discount_value} OFF)`}` : ''}
-                            </div>
-                        ` : ''}
-                        ${banner.image_url ? `<div style="margin-top:20px;opacity:0.1;font-size:6rem;text-align:right;">🖼️</div>` : ''}
-                    </div>
-                `;
-                bannerPreviewModal.classList.add('open');
-            }
-
-            function populateBannerCategorySelect() {
-                const select = document.getElementById('b-categories');
-                select.innerHTML = categories.map(c => `
-                    <option value="${c.id}">${c.name}</option>
-                `).join('');
-            }
-
-            async function loadBannerProductOptions() {
-                try {
-                    const response = await fetch(API.products);
-                    const products = await response.json();
-                    const select = document.getElementById('b-product-id');
-                    select.innerHTML = `
-                        <option value="">Select product...</option>
-                        ${products.map(p => `
-                            <option value="${p.id}">${p.name} (₦${p.price})</option>
-                        `).join('')}
-                    `;
-                } catch (error) {
-                    console.error('Error loading products for banner:', error);
-                }
-            }
-
-            // ─── RENDER PRODUCTS (with thumbnail images) ───
+            // ─── RENDER PRODUCTS ───
             function renderProducts() {
                 const search = productSearch.value.toLowerCase().trim();
                 let filtered = products;
@@ -1937,7 +2170,7 @@
                 });
             }
 
-            // ─── RENDER INVENTORY (with thumbnail images) ───
+            // ─── RENDER INVENTORY ───
             function renderInventory() {
                 const view = document.querySelector('#inventory-view-toggle .active')?.dataset.view || 'all';
                 let filtered = [...products];
@@ -2036,6 +2269,36 @@
                 document.querySelectorAll('.update-order-status').forEach(btn => {
                     btn.addEventListener('click', () => updateOrderStatus(btn.dataset.id, btn.dataset.status));
                 });
+            }
+
+            function renderTopProducts() {
+                if (!topProductsBody) return;
+                if (topProducts.length === 0) {
+                    topProductsBody.innerHTML =
+                        `<tr><td colspan="4" class="empty-state"><i class="fa-regular fa-chart-simple"></i> No sales data yet</td></tr>`;
+                    return;
+                }
+                let html = '';
+                topProducts.forEach((item, index) => {
+                    const rank = index + 1;
+                    const revenue = item.revenue || 0;
+                    html += `
+                        <tr>
+                            <td><strong>${rank}</strong></td>
+                            <td>
+                                <div class="product-cell">
+                                    <span class="emoji">${item.emoji || '🍽️'}</span>
+                                    <div class="info">
+                                        <div class="name">${item.name}</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td>${item.quantity_sold}</td>
+                            <td>₦${Number(revenue).toLocaleString()}</td>
+                        </tr>
+                    `;
+                });
+                topProductsBody.innerHTML = html;
             }
 
             // ─── RENDER CATEGORIES ───
@@ -2257,6 +2520,7 @@
                             ${data.preferred_time ? `<p><strong>Preferred Time:</strong> ${data.preferred_time}</p>` : ''}
                             ${data.order_notes ? `<p><strong>Notes:</strong> ${data.order_notes}</p>` : ''}
                             ${data.monnify_transaction_ref ? `<p><strong>Monnify Ref:</strong> ${data.monnify_transaction_ref}</p>` : ''}
+                            ${data.delivery_fee ? `<p><strong>Delivery Fee:</strong> ₦${Number(data.delivery_fee).toLocaleString()}</p>` : ''}
                         </div>
                         <hr style="border-color:#f0f0f0;margin:12px 0;">
                         <div style="margin:12px 0;">
@@ -2364,6 +2628,380 @@
                 }
             }
 
+            // ─── BANNER LOAD ───
+            async function loadBanners() {
+                try {
+                    const params = new URLSearchParams({
+                        limit: pageSize,
+                        offset: (currentPage - 1) * pageSize
+                    });
+                    if (currentView === 'active') params.append('is_active', 'true');
+                    else if (currentView === 'hero') params.append('is_hero', 'true');
+                    else if (currentView === 'featured') params.append('is_featured', 'true');
+
+                    const response = await fetch(`${API.banners}?${params}`);
+                    const data = await response.json();
+                    banners = data.banners || [];
+                    totalPages = Math.ceil((data.total || 0) / pageSize);
+                    renderBanners();
+                    updatePagination();
+                } catch (error) {
+                    console.error('Error loading banners:', error);
+                    showToast('Failed to load banners', 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            function renderBanners() {
+                if (!bannerGrid) return;
+                if (banners.length === 0) {
+                    bannerGrid.innerHTML = `
+                        <div class="empty-state" style="grid-column:1/-1;">
+                            <i class="fa-regular fa-images"></i>
+                            <p>No banners found. Create your first banner!</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                bannerGrid.innerHTML = banners.map((banner, index) => `
+                    <div class="banner-card" draggable="true" data-index="${index}" data-id="${banner.id}">
+                        <div class="banner-image" style="background-image: url('${banner.image_url || '/images/default-banner.jpg'}');">
+                            ${banner.badge_text ? `
+                                <span class="badge" style="background:${banner.badge_color || '#E53935'};">
+                                    ${banner.badge_text}
+                                </span>
+                            ` : ''}
+                            <span class="status-badge ${banner.is_active ? 'active' : 'inactive'}">
+                                ${banner.is_active ? 'Active' : 'Inactive'}
+                            </span>
+                            ${banner.is_hero ? '<span class="tag" style="position:absolute;bottom:12px;left:12px;background:#FFC107;padding:2px10px;border-radius:20px;font-size:0.6rem;font-weight:700;">⭐ Hero</span>' : ''}
+                            ${banner.is_featured ? '<span class="tag" style="position:absolute;bottom:12px;left:80px;background:#E53935;padding:2px10px;border-radius:20px;font-size:0.6rem;font-weight:700;color:white;">🔥 Featured</span>' : ''}
+                        </div>
+                        <div class="banner-content">
+                            <div class="title">${banner.title}</div>
+                            ${banner.subtitle ? `<div class="subtitle">${banner.subtitle}</div>` : ''}
+                            ${banner.description ? `<p style="font-size:0.85rem;color:var(--text-muted);margin:8px 0;">${banner.description}</p>` : ''}
+                            <div class="meta">
+                                <span class="tag">Position: ${banner.position || 0}</span>
+                                <span class="tag">Order: ${banner.display_order || 0}</span>
+                                ${banner.discount_value ? `<span class="tag" style="background:#dcfce7;color:#166534;">${banner.discount_value}% OFF</span>` : ''}
+                                ${banner.start_date ? `<span>From: ${new Date(banner.start_date).toLocaleDateString()}</span>` : ''}
+                                ${banner.end_date ? `<span>To: ${new Date(banner.end_date).toLocaleDateString()}</span>` : ''}
+                            </div>
+                        </div>
+                        <div class="banner-actions">
+                            <button class="btn btn-primary btn-sm edit-banner" data-id="${banner.id}">
+                                <i class="fa-regular fa-pen-to-square"></i>
+                            </button>
+                            <button class="btn btn-outline btn-sm preview-banner" data-id="${banner.id}">
+                                <i class="fa-regular fa-eye"></i>
+                            </button>
+                            <button class="btn btn-success btn-sm toggle-banner" data-id="${banner.id}">
+                                <i class="fa-solid ${banner.is_active ? 'fa-pause' : 'fa-play'}"></i>
+                            </button>
+                            <button class="btn btn-outline btn-sm duplicate-banner" data-id="${banner.id}">
+                                <i class="fa-regular fa-copy"></i>
+                            </button>
+                            <button class="btn btn-danger btn-sm delete-banner" data-id="${banner.id}">
+                                <i class="fa-regular fa-trash-can"></i>
+                            </button>
+                            <span class="drag-handle" style="margin-left:auto;">
+                                <i class="fa-solid fa-grip-vertical"></i>
+                            </span>
+                        </div>
+                    </div>
+                `).join('');
+
+                setupBannerDragDrop();
+
+                document.querySelectorAll('.edit-banner').forEach(btn => {
+                    btn.addEventListener('click', () => openBannerModal(btn.dataset.id));
+                });
+                document.querySelectorAll('.preview-banner').forEach(btn => {
+                    btn.addEventListener('click', () => previewBanner(btn.dataset.id));
+                });
+                document.querySelectorAll('.toggle-banner').forEach(btn => {
+                    btn.addEventListener('click', () => toggleBanner(btn.dataset.id));
+                });
+                document.querySelectorAll('.duplicate-banner').forEach(btn => {
+                    btn.addEventListener('click', () => duplicateBanner(btn.dataset.id));
+                });
+                document.querySelectorAll('.delete-banner').forEach(btn => {
+                    btn.addEventListener('click', () => deleteBanner(btn.dataset.id));
+                });
+            }
+
+            function setupBannerDragDrop() {
+                let dragStartIndex = null;
+                let dragEndIndex = null;
+                const grid = bannerGrid;
+
+                grid.querySelectorAll('.banner-card').forEach(card => {
+                    card.addEventListener('dragstart', (e) => {
+                        dragStartIndex = parseInt(card.dataset.index);
+                        card.classList.add('dragging');
+                        e.dataTransfer.effectAllowed = 'move';
+                    });
+
+                    card.addEventListener('dragend', () => {
+                        card.classList.remove('dragging');
+                        if (dragStartIndex !== null && dragEndIndex !== null && dragStartIndex !== dragEndIndex) {
+                            reorderBanners(dragStartIndex, dragEndIndex);
+                        }
+                        dragStartIndex = null;
+                        dragEndIndex = null;
+                        grid.querySelectorAll('.banner-card').forEach(c => c.classList.remove('drag-over'));
+                    });
+
+                    card.addEventListener('dragover', (e) => {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'move';
+                        card.classList.add('drag-over');
+                        dragEndIndex = parseInt(card.dataset.index);
+                    });
+
+                    card.addEventListener('dragleave', () => {
+                        card.classList.remove('drag-over');
+                    });
+                });
+            }
+
+            async function reorderBanners(fromIndex, toIndex) {
+                const bannerIds = banners.map(b => b.id);
+                const [removed] = bannerIds.splice(fromIndex, 1);
+                bannerIds.splice(toIndex, 0, removed);
+
+                try {
+                    await fetch(`${API.banners}/reorder`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(bannerIds)
+                    });
+                    showToast('Banners reordered successfully!');
+                    loadBanners();
+                } catch (error) {
+                    console.error('Error reordering banners:', error);
+                    showToast('Failed to reorder banners', 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            function updatePagination() {
+                pageInfo.textContent = `Page ${currentPage} of ${totalPages || 1}`;
+                document.getElementById('prev-page').disabled = currentPage <= 1;
+                document.getElementById('next-page').disabled = currentPage >= totalPages;
+            }
+
+            // ─── BANNER CRUD ───
+            function openBannerModal(bannerId = null) {
+                const modal = document.getElementById('banner-modal');
+                const form = document.getElementById('banner-form');
+                form.reset();
+
+                if (bannerId) {
+                    const banner = banners.find(b => b.id == bannerId);
+                    if (banner) {
+                        bannerModalTitle.textContent = 'Edit Banner';
+                        bannerIdEl.value = banner.id;
+                        document.getElementById('b-title').value = banner.title || '';
+                        document.getElementById('b-subtitle').value = banner.subtitle || '';
+                        document.getElementById('b-description').value = banner.description || '';
+                        document.getElementById('b-badge').value = banner.badge_text || '';
+                        document.getElementById('b-badge-color').value = banner.badge_color || '#E53935';
+                        document.getElementById('b-bg-color').value = banner.background_color || '#fff3ed';
+                        document.getElementById('b-text-color').value = banner.text_color || '#1e1e1e';
+                        document.getElementById('b-image').value = banner.image_url || '';
+                        document.getElementById('b-cta-text').value = banner.cta_text || '';
+                        document.getElementById('b-cta-link').value = banner.cta_link || '';
+                        document.getElementById('b-cta-type').value = banner.cta_type || 'button';
+                        document.getElementById('b-product-id').value = banner.product_id || '';
+                        document.getElementById('b-discount-type').value = banner.discount_type || '';
+                        document.getElementById('b-discount-value').value = banner.discount_value || '';
+                        document.getElementById('b-position').value = banner.position || 0;
+                        document.getElementById('b-display-order').value = banner.display_order || 0;
+                        document.getElementById('b-is-active').checked = banner.is_active;
+                        document.getElementById('b-is-hero').checked = banner.is_hero;
+                        document.getElementById('b-is-featured').checked = banner.is_featured;
+                        document.getElementById('b-meta').value = JSON.stringify(banner.meta_data || {}, null, 2);
+
+                        if (banner.start_date) {
+                            document.getElementById('b-start-date').value = banner.start_date.slice(0, 16);
+                        }
+                        if (banner.end_date) {
+                            document.getElementById('b-end-date').value = banner.end_date.slice(0, 16);
+                        }
+
+                        const categorySelect = document.getElementById('b-categories');
+                        if (banner.categories) {
+                            Array.from(categorySelect.options).forEach(opt => {
+                                opt.selected = banner.categories.includes(parseInt(opt.value));
+                            });
+                        }
+
+                        const productSelect = document.getElementById('b-product-id');
+                        if (banner.product_id) {
+                            productSelect.value = banner.product_id;
+                        }
+
+                        bannerModalSave.textContent = 'Update Banner';
+                    }
+                } else {
+                    bannerModalTitle.textContent = 'Add Banner';
+                    bannerIdEl.value = '';
+                    document.getElementById('b-is-active').checked = true;
+                    bannerModalSave.textContent = 'Create Banner';
+                }
+
+                modal.classList.add('open');
+            }
+
+            function closeBannerModal() {
+                document.getElementById('banner-modal').classList.remove('open');
+                document.getElementById('banner-form').reset();
+            }
+
+            async function saveBanner(e) {
+                e.preventDefault();
+                const id = bannerIdEl.value;
+                const categories = Array.from(document.getElementById('b-categories').selectedOptions)
+                    .map(opt => parseInt(opt.value));
+
+                const data = {
+                    title: document.getElementById('b-title').value,
+                    subtitle: document.getElementById('b-subtitle').value,
+                    description: document.getElementById('b-description').value,
+                    image_url: document.getElementById('b-image').value,
+                    badge_text: document.getElementById('b-badge').value,
+                    badge_color: document.getElementById('b-badge-color').value,
+                    background_color: document.getElementById('b-bg-color').value,
+                    text_color: document.getElementById('b-text-color').value,
+                    cta_text: document.getElementById('b-cta-text').value,
+                    cta_link: document.getElementById('b-cta-link').value,
+                    cta_type: document.getElementById('b-cta-type').value,
+                    product_id: parseInt(document.getElementById('b-product-id').value) || null,
+                    discount_type: document.getElementById('b-discount-type').value || null,
+                    discount_value: parseInt(document.getElementById('b-discount-value').value) || null,
+                    position: parseInt(document.getElementById('b-position').value) || 0,
+                    display_order: parseInt(document.getElementById('b-display-order').value) || 0,
+                    is_active: document.getElementById('b-is-active').checked,
+                    is_hero: document.getElementById('b-is-hero').checked,
+                    is_featured: document.getElementById('b-is-featured').checked,
+                    start_date: document.getElementById('b-start-date').value || null,
+                    end_date: document.getElementById('b-end-date').value || null,
+                    meta_data: JSON.parse(document.getElementById('b-meta').value || '{}'),
+                    categories: categories
+                };
+
+                try {
+                    const url = id ? `${API.banners}/${id}` : API.banners;
+                    const method = id ? 'PUT' : 'POST';
+
+                    const response = await fetch(url, {
+                        method: method,
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(data)
+                    });
+
+                    if (response.ok) {
+                        showToast(id ? 'Banner updated successfully!' : 'Banner created successfully!');
+                        closeBannerModal();
+                        loadBanners();
+                    } else {
+                        const error = await response.json();
+                        showToast('Error: ' + (error.message || 'Failed to save banner'), 'fa-solid fa-exclamation-circle');
+                    }
+                } catch (error) {
+                    console.error('Error saving banner:', error);
+                    showToast('Failed to save banner', 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            async function toggleBanner(id) {
+                try {
+                    const response = await fetch(`${API.banners}/${id}/toggle`, { method: 'PATCH' });
+                    if (response.ok) {
+                        showToast('Banner toggled successfully!');
+                        loadBanners();
+                    }
+                } catch (error) {
+                    console.error('Error toggling banner:', error);
+                    showToast('Failed to toggle banner', 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            async function duplicateBanner(id) {
+                try {
+                    const response = await fetch(`${API.banners}/${id}/duplicate`, { method: 'POST' });
+                    if (response.ok) {
+                        showToast('Banner duplicated successfully!');
+                        loadBanners();
+                    }
+                } catch (error) {
+                    console.error('Error duplicating banner:', error);
+                    showToast('Failed to duplicate banner', 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            async function deleteBanner(id) {
+                if (!confirm('Are you sure you want to delete this banner?')) return;
+                try {
+                    await fetch(`${API.banners}/${id}`, { method: 'DELETE' });
+                    showToast('Banner deleted successfully!');
+                    loadBanners();
+                } catch (error) {
+                    console.error('Error deleting banner:', error);
+                    showToast('Failed to delete banner', 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            async function previewBanner(id) {
+                const banner = banners.find(b => b.id == id);
+                if (!banner) return;
+
+                previewContent.innerHTML = `
+                    <div class="banner-preview" style="background:${banner.background_color || '#fff3ed'};color:${banner.text_color || '#1e1e1e'};">
+                        ${banner.badge_text ? `
+                            <span class="preview-badge" style="background:${banner.badge_color || '#E53935'};color:white;">
+                                ${banner.badge_text}
+                            </span>
+                        ` : ''}
+                        <h1>${banner.title}</h1>
+                        ${banner.subtitle ? `<p style="font-weight:700;font-size:1.2rem;">${banner.subtitle}</p>` : ''}
+                        ${banner.description ? `<p>${banner.description}</p>` : ''}
+                        ${banner.cta_text ? `
+                            <div class="preview-cta" style="background:${banner.badge_color || '#E53935'};color:white;">
+                                ${banner.cta_text}
+                                ${banner.discount_value ? ` ${banner.discount_type === 'percentage' ? `(${banner.discount_value}% OFF)` : `(₦${banner.discount_value} OFF)`}` : ''}
+                            </div>
+                        ` : ''}
+                        ${banner.image_url ? `<div style="margin-top:20px;opacity:0.1;font-size:6rem;text-align:right;">🖼️</div>` : ''}
+                    </div>
+                `;
+                bannerPreviewModal.classList.add('open');
+            }
+
+            function populateBannerCategorySelect() {
+                const select = document.getElementById('b-categories');
+                select.innerHTML = categories.map(c => `
+                    <option value="${c.id}">${c.name}</option>
+                `).join('');
+            }
+
+            async function loadBannerProductOptions() {
+                try {
+                    const response = await fetch(API.products);
+                    const products = await response.json();
+                    const select = document.getElementById('b-product-id');
+                    select.innerHTML = `
+                        <option value="">Select product...</option>
+                        ${products.map(p => `
+                            <option value="${p.id}">${p.name} (₦${p.price})</option>
+                        `).join('')}
+                    `;
+                } catch (error) {
+                    console.error('Error loading products for banner:', error);
+                }
+            }
+
             // ─── TAB SWITCHING ───
             function switchTab(tab) {
                 currentTab = tab;
@@ -2383,6 +3021,13 @@
                     } else {
                         renderTopProducts();
                     }
+                }
+                if (tab === 'areas') {
+                    // Initialize map and load areas
+                    setTimeout(() => {
+                        initAreaMap();
+                        loadDeliveryAreas();
+                    }, 100);
                 }
             }
 
@@ -2480,6 +3125,18 @@
                 }
             });
 
+            // ─── AREAS EVENT LISTENERS ───
+            document.getElementById('add-area-btn').addEventListener('click', () => openAreaModal(null));
+            document.getElementById('refresh-areas-btn').addEventListener('click', () => {
+                loadDeliveryAreas();
+                showToast('Areas refreshed!');
+            });
+            document.getElementById('area-modal-close').addEventListener('click', closeAreaModal);
+            document.getElementById('area-modal-cancel').addEventListener('click', closeAreaModal);
+            areaForm.addEventListener('submit', saveArea);
+            areaModal.addEventListener('click', (e) => { if (e.target === areaModal) closeAreaModal(); });
+
+            // ─── KEYBOARD SHORTCUTS ───
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
                     if (productModal.classList.contains('open')) closeProductModal();
@@ -2487,22 +3144,30 @@
                     if (orderModal.classList.contains('open')) closeOrderModal();
                     if (bannerModal.classList.contains('open')) closeBannerModal();
                     if (bannerPreviewModal.classList.contains('open')) bannerPreviewModal.classList.remove('open');
+                    if (areaModal.classList.contains('open')) closeAreaModal();
                 }
             });
 
+            // ─── BOOT ───
             loadBannerProductOptions();
 
+            // Load initial data
             loadAllData().then(() => {
                 startPolling();
+                // Pre-initialize area map
+                setTimeout(() => {
+                    initAreaMap();
+                }, 500);
             });
 
             window.addEventListener('beforeunload', function() {
                 stopPolling();
             });
 
-            console.log('📦 Hot Portion Admin Panel loaded (with product images)');
-            console.log('🔧 API endpoints: /api/products, /api/categories, /api/orders, /api/stats, /api/v1/banners, /api/top-products');
+            console.log('📦 Hot Portion Admin Panel loaded');
+            console.log('🔧 API endpoints: /api/products, /api/categories, /api/orders, /api/stats, /api/v1/banners, /api/top-products, /api/delivery-areas');
             console.log('🔄 Optimized order polling active (every 30s)');
+            console.log('🗺️ Delivery Areas management with Leaflet map loaded');
 
         })();
     </script>
