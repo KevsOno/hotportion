@@ -8,7 +8,7 @@ import logging
 import time
 import re
 import contextvars
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
@@ -22,9 +22,6 @@ from pydantic_settings import BaseSettings
 from supabase import create_client, Client
 from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from datetime import date, datetime
-
-
 
 # ---------- AI Libraries ----------
 try:
@@ -153,6 +150,10 @@ class ProductBase(BaseModel):
     emoji: str = "🍽️"
     image: Optional[str] = None
     tagColor: str = "primary"
+    # New fields for intelligent delivery
+    is_main_item: bool = True
+    weight_kg: float = 0.5
+    is_bulky: bool = False
 
 class ProductCreate(ProductBase): pass
 class ProductUpdate(ProductBase): pass
@@ -244,7 +245,7 @@ class AIChatResponse(BaseModel):
     model: str
 
 # =============================================
-# DELIVERY AREA MODELS
+# DELIVERY AREA MODELS (Existing + Extended)
 # =============================================
 
 class DeliveryAreaBase(BaseModel):
@@ -263,13 +264,71 @@ class DeliveryArea(DeliveryAreaBase):
     created_at: datetime
     updated_at: datetime
 
+# -------- New Intelligent Delivery Models --------
+class DeliveryFeeRule(BaseModel):
+    id: Optional[int] = None
+    min_order_value: int
+    max_order_value: Optional[int] = None
+    fee_multiplier: float = 1.0
+    fee_discount: int = 0
+    free_delivery: bool = False
+    description: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+class DeliveryFeeRuleCreate(DeliveryFeeRule):
+    pass
+
+class DeliveryFeeRuleUpdate(DeliveryFeeRule):
+    pass
+
+class DeliveryPeakSetting(BaseModel):
+    id: Optional[int] = None
+    day_of_week: Optional[int] = None  # 0=Sunday, 1=Monday...
+    start_time: Optional[str] = None   # 'HH:MM'
+    end_time: Optional[str] = None
+    surcharge_amount: int = 200
+    is_active: bool = True
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+class DeliveryPeakSettingCreate(DeliveryPeakSetting):
+    pass
+
+class DeliveryPeakSettingUpdate(DeliveryPeakSetting):
+    pass
+
+class DeliveryLoyaltySetting(BaseModel):
+    id: Optional[int] = None
+    min_orders: int = 5
+    discount_percentage: int = 20
+    is_active: bool = True
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+class DeliveryLoyaltySettingCreate(DeliveryLoyaltySetting):
+    pass
+
+class DeliveryLoyaltySettingUpdate(DeliveryLoyaltySetting):
+    pass
+
 class DeliveryFeeRequest(BaseModel):
     address: str
+    items: List[OrderItem]  # Items with product_id and qty
+    order_total: int
+    order_time: Optional[datetime] = None
+    customer_email: Optional[str] = None  # to check loyalty
 
 class DeliveryFeeResponse(BaseModel):
     covered: bool
-    fee: Optional[int] = None
+    base_fee: Optional[int] = None
     area_name: Optional[str] = None
+    value_discount: int = 0
+    item_surcharge: int = 0
+    peak_surcharge: int = 0
+    loyalty_discount: int = 0
+    total_fee: int = 0
+    breakdown: Optional[Dict[str, Any]] = None
     message: Optional[str] = None
 
 # ---------- AI SERVICE ----------
@@ -739,21 +798,266 @@ async def get_cached_stats():
 def invalidate_stats_cache():
     _stats_cache["timestamp"] = 0
 
+# =============================================
+# INTELLIGENT DELIVERY FEE ENGINE
+# =============================================
+
+# Caches for rules (TTL 60 seconds)
+_rules_cache = {"data": None, "timestamp": 0}
+_peak_cache = {"data": None, "timestamp": 0}
+_loyalty_cache = {"data": None, "timestamp": 0}
+
+async def get_delivery_fee_rules() -> List[Dict]:
+    """Fetch active value‑discount rules from DB."""
+    now = time.time()
+    if now - _rules_cache["timestamp"] < 60 and _rules_cache["data"] is not None:
+        return _rules_cache["data"]
+    db = get_supabase()
+    # Order by min_order_value ascending so we can apply the first matching rule
+    result = await execute_db(
+        db.table("delivery_fee_rules").select("*").order("min_order_value")
+    )
+    rules = result.data or []
+    _rules_cache["data"] = rules
+    _rules_cache["timestamp"] = now
+    return rules
+
+async def get_peak_settings() -> List[Dict]:
+    """Fetch active peak hour settings."""
+    now = time.time()
+    if now - _peak_cache["timestamp"] < 60 and _peak_cache["data"] is not None:
+        return _peak_cache["data"]
+    db = get_supabase()
+    result = await execute_db(
+        db.table("delivery_peak_settings").select("*").eq("is_active", True)
+    )
+    settings_list = result.data or []
+    _peak_cache["data"] = settings_list
+    _peak_cache["timestamp"] = now
+    return settings_list
+
+async def get_loyalty_setting() -> Optional[Dict]:
+    """Fetch the active loyalty discount setting."""
+    now = time.time()
+    if now - _loyalty_cache["timestamp"] < 60 and _loyalty_cache["data"] is not None:
+        return _loyalty_cache["data"]
+    db = get_supabase()
+    result = await execute_db(
+        db.table("delivery_loyalty_settings").select("*").eq("is_active", True).limit(1)
+    )
+    setting = result.data[0] if result.data else None
+    _loyalty_cache["data"] = setting
+    _loyalty_cache["timestamp"] = now
+    return setting
+
+def is_peak_hour(order_time: datetime, peak_settings: List[Dict]) -> bool:
+    """
+    Check if the given order_time falls into any active peak period.
+    If no order_time provided, use current time.
+    """
+    if not order_time:
+        order_time = datetime.now()
+    # Use local time without timezone – assume server time is Lagos time
+    # If you have timezone info, convert accordingly.
+    dow = order_time.weekday()  # Monday=0, Sunday=6
+    hour_min = order_time.strftime("%H:%M")
+    for setting in peak_settings:
+        # If day_of_week is None, it applies to all days
+        if setting.get("day_of_week") is not None and setting["day_of_week"] != dow:
+            continue
+        start = setting.get("start_time")
+        end = setting.get("end_time")
+        if start and end:
+            if start <= hour_min <= end:
+                return True
+    return False
+
+async def calculate_intelligent_delivery_fee(
+    base_fee: int,
+    order_value: int,
+    items: List[OrderItem],
+    order_time: Optional[datetime] = None,
+    customer_email: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Calculate the final delivery fee with all modifiers.
+    Returns a dict with breakdown and final fee.
+    """
+    fee = base_fee
+    value_discount = 0
+    item_surcharge = 0
+    peak_surcharge = 0
+    loyalty_discount = 0
+
+    # 1. Value Discount (based on order total)
+    rules = await get_delivery_fee_rules()
+    for rule in rules:
+        min_val = rule.get("min_order_value", 0)
+        max_val = rule.get("max_order_value")
+        if order_value >= min_val and (max_val is None or order_value <= max_val):
+            if rule.get("free_delivery", False):
+                value_discount = fee
+                fee = 0
+            else:
+                multiplier = rule.get("fee_multiplier", 1.0)
+                discount_amount = rule.get("fee_discount", 0)
+                # Apply multiplier first, then subtract fixed discount
+                new_fee = fee * multiplier - discount_amount
+                value_discount = fee - new_fee
+                fee = max(0, new_fee)
+            break  # apply first matching rule
+
+    # 2. Item Surcharge (bulk / weight)
+    if items:
+        # Fetch product details to get is_main_item, weight_kg, is_bulky
+        product_ids = [item.product_id for item in items]
+        db = get_supabase()
+        # We need to get product fields: is_main_item, weight_kg, is_bulky
+        # Use a select with in_ clause
+        result = await execute_db(
+            db.table("products").select("id, is_main_item, weight_kg, is_bulky").in_("id", product_ids)
+        )
+        product_map = {p["id"]: p for p in result.data} if result.data else {}
+
+        main_count = 0
+        total_weight = 0.0
+        for item in items:
+            pid = item.product_id
+            prod = product_map.get(pid)
+            if prod:
+                if prod.get("is_main_item", True):
+                    main_count += item.qty
+                weight = prod.get("weight_kg", 0.5)
+                total_weight += weight * item.qty
+            else:
+                # fallback: treat as main item with default weight
+                main_count += item.qty
+                total_weight += 0.5 * item.qty
+
+        # Surcharge based on main item count
+        if main_count > 10:
+            item_surcharge += 500
+        elif main_count > 6:
+            item_surcharge += 300
+
+        # Weight-based surcharge
+        if total_weight > 5.0:
+            extra_kg = total_weight - 5.0
+            item_surcharge += int(extra_kg * 50)  # ₦50 per kg over 5kg
+
+    fee += item_surcharge
+
+    # 3. Peak Time Surcharge
+    peak_settings = await get_peak_settings()
+    if is_peak_hour(order_time or datetime.now(), peak_settings):
+        peak_surcharge = 200  # Could also fetch from settings
+        if fee > 0:
+            fee += peak_surcharge
+
+    # 4. Loyalty Discount
+    # Check if customer has placed enough orders (if email provided)
+    if customer_email:
+        loyalty_setting = await get_loyalty_setting()
+        if loyalty_setting:
+            min_orders = loyalty_setting.get("min_orders", 5)
+            discount_pct = loyalty_setting.get("discount_percentage", 20)
+            # Count orders for this customer with status in ('paid','confirmed','completed')
+            db = get_supabase()
+            count_result = await execute_db(
+                db.table("orders")
+                .select("id", count="exact")
+                .eq("customer_email", customer_email)
+                .in_("status", ["paid", "confirmed", "completed"])
+            )
+            order_count = count_result.count or 0
+            if order_count >= min_orders and fee > 0:
+                loyalty_discount = int(fee * discount_pct / 100)
+                fee = max(0, fee - loyalty_discount)
+
+    final_fee = max(0, round(fee))
+
+    return {
+        "base_fee": base_fee,
+        "value_discount": value_discount,
+        "item_surcharge": item_surcharge,
+        "peak_surcharge": peak_surcharge,
+        "loyalty_discount": loyalty_discount,
+        "final_fee": final_fee,
+        "breakdown": {
+            "base": base_fee,
+            "value_discount": -value_discount,
+            "item_surcharge": item_surcharge,
+            "peak_surcharge": peak_surcharge,
+            "loyalty_discount": -loyalty_discount,
+            "final": final_fee
+        }
+    }
+
 # ---------- DATABASE SETUP ----------
 async def setup_database():
     db = get_supabase()
     try:
-        queries = [
-            "CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at DESC);",
-            "CREATE INDEX IF NOT EXISTS idx_banners_active_display ON banners(is_active, display_order);",
-            "CREATE INDEX IF NOT EXISTS idx_banners_dates ON banners(start_date, end_date);",
+        # Add columns to products if they don't exist (for safety)
+        # We'll use raw SQL via RPC if available, else log warning.
+        alter_queries = [
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS is_main_item BOOLEAN DEFAULT TRUE;",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS weight_kg DECIMAL(4,2) DEFAULT 0.5;",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS is_bulky BOOLEAN DEFAULT FALSE;",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee INTEGER DEFAULT 0;"
         ]
-        for q in queries:
-            await execute_db(db.rpc("exec_sql", {"query": q}))
-        logger.info("Database indexes and columns ensured.")
+        for q in alter_queries:
+            try:
+                await execute_db(db.rpc("exec_sql", {"query": q}))
+            except Exception as e:
+                logger.warning(f"Could not run alter (may already exist): {e}")
+
+        # Create new tables if they don't exist
+        create_tables = [
+            """
+            CREATE TABLE IF NOT EXISTS delivery_fee_rules (
+                id SERIAL PRIMARY KEY,
+                min_order_value INTEGER NOT NULL,
+                max_order_value INTEGER,
+                fee_multiplier DECIMAL(3,2) DEFAULT 1.0,
+                fee_discount INTEGER DEFAULT 0,
+                free_delivery BOOLEAN DEFAULT FALSE,
+                description TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS delivery_peak_settings (
+                id SERIAL PRIMARY KEY,
+                day_of_week INTEGER,  -- 0=Sunday, 1=Monday, etc.
+                start_time TIME,
+                end_time TIME,
+                surcharge_amount INTEGER DEFAULT 200,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS delivery_loyalty_settings (
+                id SERIAL PRIMARY KEY,
+                min_orders INTEGER DEFAULT 5,
+                discount_percentage INTEGER DEFAULT 20,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """
+        ]
+        for sql in create_tables:
+            try:
+                await execute_db(db.rpc("exec_sql", {"query": sql}))
+            except Exception as e:
+                logger.warning(f"Could not create table: {e}")
+
+        logger.info("Database indexes, columns, and tables ensured.")
     except Exception as e:
-        logger.warning(f"Could not create indexes (RPC may be disabled): {e}")
+        logger.warning(f"Could not create tables/columns (RPC may be disabled): {e}")
 
 # ---------- LIFESPAN ----------
 @asynccontextmanager
@@ -1280,13 +1584,13 @@ async def monnify_webhook(
     return {"status": "received"}
 
 # =============================================
-# DELIVERY AREA ENDPOINTS
+# DELIVERY AREA ENDPOINTS (UPDATED WITH INTELLIGENCE)
 # =============================================
 
 @app.post("/api/delivery-fee", response_model=DeliveryFeeResponse)
 async def get_delivery_fee(request: DeliveryFeeRequest):
     """
-    Geocode an address and find the delivery area containing it.
+    Calculate the intelligent delivery fee for a given address and order details.
     """
     try:
         # Geocode address using Nominatim
@@ -1317,7 +1621,6 @@ async def get_delivery_fee(request: DeliveryFeeRequest):
                         message="Address not found. Please check the address and try again."
                     )
                 
-                # Extract lat/lng from first result
                 lat = float(data[0].get("lat", 0))
                 lng = float(data[0].get("lon", 0))
                 
@@ -1325,24 +1628,41 @@ async def get_delivery_fee(request: DeliveryFeeRequest):
                 
                 # Find delivery area using Supabase RPC
                 db = get_supabase()
-                # Call the RPC function with lat/lng
-                rpc_params = {"lat": lat, "lng": lng}
                 result = await execute_db(
-                    db.rpc("find_delivery_area", rpc_params)
+                    db.rpc("find_delivery_area", {"lat": lat, "lng": lng})
                 )
                 
-                if result.data and len(result.data) > 0:
-                    area = result.data[0]
-                    return DeliveryFeeResponse(
-                        covered=True,
-                        fee=area.get("fee", 0),
-                        area_name=area.get("name", "Unknown Area")
-                    )
-                else:
+                if not result.data or len(result.data) == 0:
                     return DeliveryFeeResponse(
                         covered=False,
                         message="Address not in any delivery area."
                     )
+                
+                area = result.data[0]
+                base_fee = area.get("fee", 0)
+                area_name = area.get("name", "Unknown Area")
+
+                # Now calculate intelligent fee
+                order_time = request.order_time or datetime.now()
+                calculation = await calculate_intelligent_delivery_fee(
+                    base_fee=base_fee,
+                    order_value=request.order_total,
+                    items=request.items,
+                    order_time=order_time,
+                    customer_email=request.customer_email
+                )
+
+                return DeliveryFeeResponse(
+                    covered=True,
+                    base_fee=base_fee,
+                    area_name=area_name,
+                    value_discount=calculation["value_discount"],
+                    item_surcharge=calculation["item_surcharge"],
+                    peak_surcharge=calculation["peak_surcharge"],
+                    loyalty_discount=calculation["loyalty_discount"],
+                    total_fee=calculation["final_fee"],
+                    breakdown=calculation["breakdown"]
+                )
                     
     except HTTPException:
         raise
@@ -1361,22 +1681,18 @@ async def get_all_delivery_areas():
     """
     try:
         db = get_supabase()
-        # FIXED: Added empty params dict {} to the RPC call
         result = await execute_db(
             db.rpc("get_delivery_areas_geojson", {})
         )
         
-        # Convert datetime objects to ISO strings
         areas = []
         for area_data in result.data:
-            # Convert datetime fields
             area_dict = dict(area_data)
             if "created_at" in area_dict and isinstance(area_dict["created_at"], (datetime, date)):
                 area_dict["created_at"] = area_dict["created_at"].isoformat()
             if "updated_at" in area_dict and isinstance(area_dict["updated_at"], (datetime, date)):
                 area_dict["updated_at"] = area_dict["updated_at"].isoformat()
             
-            # Parse polygon JSON if it's a string
             if "polygon" in area_dict and isinstance(area_dict["polygon"], str):
                 area_dict["polygon"] = json.loads(area_dict["polygon"])
             
@@ -1398,7 +1714,6 @@ async def create_delivery_area(area: DeliveryAreaCreate):
     Create a new delivery area.
     """
     try:
-        # Validate GeoJSON polygon
         if "type" not in area.polygon or area.polygon["type"] != "Polygon":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1411,7 +1726,6 @@ async def create_delivery_area(area: DeliveryAreaCreate):
                 detail="Invalid polygon: missing coordinates"
             )
         
-        # Validate polygon has at least 4 points (first = last)
         coords = area.polygon["coordinates"][0]
         if len(coords) < 4:
             raise HTTPException(
@@ -1426,7 +1740,7 @@ async def create_delivery_area(area: DeliveryAreaCreate):
                 {
                     "_name": area.name,
                     "_fee": area.fee,
-                    "_geojson": json.dumps(area.polygon)  # Convert dict to JSON string
+                    "_geojson": json.dumps(area.polygon)
                 }
             )
         )
@@ -1437,11 +1751,9 @@ async def create_delivery_area(area: DeliveryAreaCreate):
                 detail="Failed to create delivery area. Check that the polygon is valid."
             )
         
-        # Convert the returned row to the response format
         created = dict(result.data[0])
-        created["polygon"] = area.polygon  # Use the original GeoJSON
+        created["polygon"] = area.polygon
         
-        # Convert datetime objects
         if "created_at" in created and isinstance(created["created_at"], (datetime, date)):
             created["created_at"] = created["created_at"].isoformat()
         if "updated_at" in created and isinstance(created["updated_at"], (datetime, date)):
@@ -1465,7 +1777,6 @@ async def update_delivery_area(area_id: int, area: DeliveryAreaUpdate):
     Update an existing delivery area.
     """
     try:
-        # Validate GeoJSON polygon
         if "type" not in area.polygon or area.polygon["type"] != "Polygon":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1478,7 +1789,6 @@ async def update_delivery_area(area_id: int, area: DeliveryAreaUpdate):
                 detail="Invalid polygon: missing coordinates"
             )
         
-        # Validate polygon has at least 4 points (first = last)
         coords = area.polygon["coordinates"][0]
         if len(coords) < 4:
             raise HTTPException(
@@ -1494,7 +1804,7 @@ async def update_delivery_area(area_id: int, area: DeliveryAreaUpdate):
                     "_id": area_id,
                     "_name": area.name,
                     "_fee": area.fee,
-                    "_geojson": json.dumps(area.polygon)  # Convert dict to JSON string
+                    "_geojson": json.dumps(area.polygon)
                 }
             )
         )
@@ -1505,11 +1815,9 @@ async def update_delivery_area(area_id: int, area: DeliveryAreaUpdate):
                 detail=f"Delivery area with ID {area_id} not found"
             )
         
-        # Convert the returned row to the response format
         updated = dict(result.data[0])
-        updated["polygon"] = area.polygon  # Use the original GeoJSON
+        updated["polygon"] = area.polygon
         
-        # Convert datetime objects
         if "created_at" in updated and isinstance(updated["created_at"], (datetime, date)):
             updated["created_at"] = updated["created_at"].isoformat()
         if "updated_at" in updated and isinstance(updated["updated_at"], (datetime, date)):
@@ -1529,12 +1837,8 @@ async def update_delivery_area(area_id: int, area: DeliveryAreaUpdate):
 
 @app.delete("/api/delivery-areas/{area_id}", status_code=204)
 async def delete_delivery_area(area_id: int):
-    """
-    Delete a delivery area.
-    """
     try:
         db = get_supabase()
-        # Check if area exists
         check_result = await execute_db(
             db.table("delivery_areas").select("id").eq("id", area_id)
         )
@@ -1544,12 +1848,11 @@ async def delete_delivery_area(area_id: int):
                 detail=f"Delivery area with ID {area_id} not found"
             )
         
-        # Delete the area
         await execute_db(
             db.table("delivery_areas").delete().eq("id", area_id)
         )
         
-        return None  # 204 No Content
+        return None
         
     except HTTPException:
         raise
@@ -1563,10 +1866,6 @@ async def delete_delivery_area(area_id: int):
 
 @app.get("/api/delivery-areas/point")
 async def get_area_by_point(lat: float, lng: float):
-    """
-    Get the delivery area containing a specific point.
-    Useful for debugging or checking coverage.
-    """
     try:
         db = get_supabase()
         result = await execute_db(
@@ -1590,6 +1889,109 @@ async def get_area_by_point(lat: float, lng: float):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error checking delivery area coverage"
         )
+
+# =============================================
+# ADMIN ENDPOINTS FOR DELIVERY RULES & SETTINGS
+# =============================================
+
+@app.get("/api/admin/delivery-rules", response_model=List[DeliveryFeeRule])
+async def get_delivery_rules():
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_fee_rules").select("*").order("min_order_value"))
+    return result.data
+
+@app.post("/api/admin/delivery-rules", response_model=DeliveryFeeRule, status_code=201)
+async def create_delivery_rule(rule: DeliveryFeeRuleCreate):
+    db = get_supabase()
+    data = rule.dict(exclude={'id', 'created_at', 'updated_at'})
+    data["created_at"] = data["updated_at"] = datetime.now().isoformat()
+    result = await execute_db(db.table("delivery_fee_rules").insert(data))
+    if not result.data:
+        raise HTTPException(400, "Failed to create rule")
+    return result.data[0]
+
+@app.put("/api/admin/delivery-rules/{rule_id}", response_model=DeliveryFeeRule)
+async def update_delivery_rule(rule_id: int, rule: DeliveryFeeRuleUpdate):
+    db = get_supabase()
+    data = rule.dict(exclude={'id', 'created_at', 'updated_at'}, exclude_unset=True)
+    data["updated_at"] = datetime.now().isoformat()
+    result = await execute_db(db.table("delivery_fee_rules").update(data).eq("id", rule_id))
+    if not result.data:
+        raise HTTPException(404, "Rule not found")
+    return result.data[0]
+
+@app.delete("/api/admin/delivery-rules/{rule_id}", status_code=204)
+async def delete_delivery_rule(rule_id: int):
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_fee_rules").delete().eq("id", rule_id))
+    if not result.data:
+        raise HTTPException(404, "Rule not found")
+
+@app.get("/api/admin/peak-settings", response_model=List[DeliveryPeakSetting])
+async def get_peak_settings():
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_peak_settings").select("*").order("day_of_week", nulls_last=True))
+    return result.data
+
+@app.post("/api/admin/peak-settings", response_model=DeliveryPeakSetting, status_code=201)
+async def create_peak_setting(setting: DeliveryPeakSettingCreate):
+    db = get_supabase()
+    data = setting.dict(exclude={'id', 'created_at', 'updated_at'})
+    data["created_at"] = data["updated_at"] = datetime.now().isoformat()
+    result = await execute_db(db.table("delivery_peak_settings").insert(data))
+    if not result.data:
+        raise HTTPException(400, "Failed to create peak setting")
+    return result.data[0]
+
+@app.put("/api/admin/peak-settings/{setting_id}", response_model=DeliveryPeakSetting)
+async def update_peak_setting(setting_id: int, setting: DeliveryPeakSettingUpdate):
+    db = get_supabase()
+    data = setting.dict(exclude={'id', 'created_at', 'updated_at'}, exclude_unset=True)
+    data["updated_at"] = datetime.now().isoformat()
+    result = await execute_db(db.table("delivery_peak_settings").update(data).eq("id", setting_id))
+    if not result.data:
+        raise HTTPException(404, "Peak setting not found")
+    return result.data[0]
+
+@app.delete("/api/admin/peak-settings/{setting_id}", status_code=204)
+async def delete_peak_setting(setting_id: int):
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_peak_settings").delete().eq("id", setting_id))
+    if not result.data:
+        raise HTTPException(404, "Peak setting not found")
+
+@app.get("/api/admin/loyalty-settings", response_model=List[DeliveryLoyaltySetting])
+async def get_loyalty_settings():
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_loyalty_settings").select("*"))
+    return result.data
+
+@app.post("/api/admin/loyalty-settings", response_model=DeliveryLoyaltySetting, status_code=201)
+async def create_loyalty_setting(setting: DeliveryLoyaltySettingCreate):
+    db = get_supabase()
+    data = setting.dict(exclude={'id', 'created_at', 'updated_at'})
+    data["created_at"] = data["updated_at"] = datetime.now().isoformat()
+    result = await execute_db(db.table("delivery_loyalty_settings").insert(data))
+    if not result.data:
+        raise HTTPException(400, "Failed to create loyalty setting")
+    return result.data[0]
+
+@app.put("/api/admin/loyalty-settings/{setting_id}", response_model=DeliveryLoyaltySetting)
+async def update_loyalty_setting(setting_id: int, setting: DeliveryLoyaltySettingUpdate):
+    db = get_supabase()
+    data = setting.dict(exclude={'id', 'created_at', 'updated_at'}, exclude_unset=True)
+    data["updated_at"] = datetime.now().isoformat()
+    result = await execute_db(db.table("delivery_loyalty_settings").update(data).eq("id", setting_id))
+    if not result.data:
+        raise HTTPException(404, "Loyalty setting not found")
+    return result.data[0]
+
+@app.delete("/api/admin/loyalty-settings/{setting_id}", status_code=204)
+async def delete_loyalty_setting(setting_id: int):
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_loyalty_settings").delete().eq("id", setting_id))
+    if not result.data:
+        raise HTTPException(404, "Loyalty setting not found")
 
 # ---------- AI ENDPOINTS ----------
 @app.post("/api/ai/chat", response_model=AIChatResponse)
