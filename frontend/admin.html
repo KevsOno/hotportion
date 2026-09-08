@@ -1833,20 +1833,28 @@
                     `;
                     return;
                 }
-                areasBody.innerHTML = deliveryAreas.map(area => `
-                    <tr>
-                        <td><code style="background:#f0f0f0;padding:2px 8px;border-radius:4px;font-size:0.75rem;">${area.id}</code></td>
-                        <td><strong>${area.name}</strong></td>
-                        <td>₦${Number(area.fee).toLocaleString()}</td>
-                        <td style="font-size:0.75rem;color:var(--text-muted);">${area.created_at ? new Date(area.created_at).toLocaleDateString() : '-'}</td>
-                        <td style="text-align:right;">
-                            <div class="actions-cell" style="justify-content:flex-end;">
-                                <button class="btn btn-primary btn-sm edit-area" data-id="${area.id}"><i class="fa-regular fa-pen-to-square"></i></button>
-                                <button class="btn btn-danger btn-sm delete-area" data-id="${area.id}"><i class="fa-regular fa-trash-can"></i></button>
-                            </div>
-                        </td>
-                    </tr>
-                `).join('');
+                areasBody.innerHTML = deliveryAreas.map(area => {
+                    // Handle both possible field names from the API
+                    const id = area.id || area.area_id;
+                    const name = area.name || area.area_name;
+                    const fee = area.fee || area.area_fee;
+                    const createdAt = area.created_at || area.area_created_at;
+                    
+                    return `
+                        <tr>
+                            <td><code style="background:#f0f0f0;padding:2px 8px;border-radius:4px;font-size:0.75rem;">${id}</code></td>
+                            <td><strong>${name}</strong></td>
+                            <td>₦${Number(fee).toLocaleString()}</td>
+                            <td style="font-size:0.75rem;color:var(--text-muted);">${createdAt ? new Date(createdAt).toLocaleDateString() : '-'}</td>
+                            <td style="text-align:right;">
+                                <div class="actions-cell" style="justify-content:flex-end;">
+                                    <button class="btn btn-primary btn-sm edit-area" data-id="${id}"><i class="fa-regular fa-pen-to-square"></i></button>
+                                    <button class="btn btn-danger btn-sm delete-area" data-id="${id}"><i class="fa-regular fa-trash-can"></i></button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
 
                 document.querySelectorAll('.edit-area').forEach(btn => {
                     btn.addEventListener('click', () => openAreaModal(btn.dataset.id));
@@ -1894,8 +1902,14 @@
                 // Add each area as a polygon
                 deliveryAreas.forEach(area => {
                     try {
-                        if (!area.polygon) return;
-                        const geojson = typeof area.polygon === 'string' ? JSON.parse(area.polygon) : area.polygon;
+                        // Handle polygon field - could be 'polygon' or 'area_polygon'
+                        const polygonData = area.polygon || area.area_polygon;
+                        if (!polygonData) return;
+                        
+                        const geojson = typeof polygonData === 'string' ? JSON.parse(polygonData) : polygonData;
+                        const name = area.name || area.area_name;
+                        const fee = area.fee || area.area_fee;
+                        
                         const layer = L.geoJSON(geojson, {
                             style: {
                                 color: '#E53935',
@@ -1906,8 +1920,8 @@
                             },
                             onEachFeature: function(feature, layer) {
                                 layer.bindPopup(`
-                                    <strong>${area.name}</strong><br>
-                                    Fee: ₦${Number(area.fee).toLocaleString()}<br>
+                                    <strong>${name}</strong><br>
+                                    Fee: ₦${Number(fee).toLocaleString()}<br>
                                     ID: ${area.id}
                                 `);
                             }
@@ -2033,7 +2047,7 @@
                 }
             }
 
-            // ─── FIXED: Get Polygon GeoJSON ───
+            // ─── Get Polygon GeoJSON ───
             function getPolygonGeoJSON() {
                 if (!areaDrawnPolygon) return null;
                 try {
@@ -2201,16 +2215,17 @@
                 }
 
                 if (areaIdToEdit) {
-                    const area = deliveryAreas.find(a => a.id == areaIdToEdit);
+                    const area = deliveryAreas.find(a => a.id == areaIdToEdit || a.area_id == areaIdToEdit);
                     if (area) {
                         areaModalTitle.textContent = 'Edit Delivery Area';
                         areaModalSave.textContent = 'Update Area';
-                        areaId.value = area.id;
-                        areaName.value = area.name;
-                        areaFee.value = area.fee;
+                        areaId.value = area.id || area.area_id;
+                        areaName.value = area.name || area.area_name;
+                        areaFee.value = area.fee || area.area_fee;
                         // Load polygon
-                        if (area.polygon) {
-                            const geojson = typeof area.polygon === 'string' ? JSON.parse(area.polygon) : area.polygon;
+                        const polygonData = area.polygon || area.area_polygon;
+                        if (polygonData) {
+                            const geojson = typeof polygonData === 'string' ? JSON.parse(polygonData) : polygonData;
                             // Need to wait for map to be ready
                             setTimeout(() => {
                                 if (areaMapModal) {
@@ -2251,7 +2266,7 @@
                 autocompleteDropdown.classList.remove('show');
             }
 
-            // ─── FIXED: saveArea with correct polygon format ───
+            // ─── saveArea with correct polygon format ───
             async function saveArea(e) {
                 e.preventDefault();
                 const id = areaId.value;
@@ -2320,9 +2335,10 @@
             }
 
             async function deleteArea(id) {
-                const area = deliveryAreas.find(a => a.id == id);
+                const area = deliveryAreas.find(a => a.id == id || a.area_id == id);
+                const name = area?.name || area?.area_name || 'Unknown';
                 if (!area) return;
-                if (!confirm(`Delete delivery area "${area.name}"? This action cannot be undone.`)) return;
+                if (!confirm(`Delete delivery area "${name}"? This action cannot be undone.`)) return;
 
                 try {
                     const response = await fetch(`${API.deliveryAreas}/${id}`, {
