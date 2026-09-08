@@ -3077,10 +3077,14 @@
                             ${subText ? `<span class="sub-text">${highlightText(subText, query)}</span>` : ''}
                         `;
 
-                        item.addEventListener('click', function() {
+                        // FIX: Use mousedown instead of click to prevent blur from hiding the dropdown
+                        item.addEventListener('mousedown', function(e) {
+                            e.preventDefault(); // Prevent blur
                             const fullAddress = result.display_name || result.name || '';
                             deliveryAddress.value = fullAddress;
+                            // Immediately hide dropdown
                             addressDropdown.classList.remove('show');
+                            // Trigger delivery check
                             deliveryAddress.dispatchEvent(new Event('input', { bubbles: true }));
                         });
 
@@ -4243,10 +4247,11 @@
                 }
             });
 
+            // FIX: Use a longer delay for blur to allow click events to fire
             deliveryAddress.addEventListener('blur', function() {
                 setTimeout(() => {
                     addressDropdown.classList.remove('show');
-                }, 200);
+                }, 300);
             });
 
             deliveryAddress.addEventListener('keydown', function(e) {
