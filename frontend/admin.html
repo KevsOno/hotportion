@@ -915,6 +915,27 @@
             outline: none;
         }
         .inline-edit-input:hover { background: #f8faf9; }
+
+        /* Delivery settings section in product modal */
+        .delivery-settings-section {
+            background: #f8faf9;
+            padding: 16px;
+            border-radius: var(--radius-sm);
+            margin-bottom: 16px;
+            border: 1px solid #e2e8e6;
+        }
+        .delivery-settings-section h4 {
+            font-size: 0.85rem;
+            font-weight: 700;
+            margin-bottom: 12px;
+            color: var(--text-dark);
+        }
+        .delivery-settings-section .delivery-field-hint {
+            color: var(--text-muted);
+            font-size: 0.7rem;
+            display: block;
+            margin-top: 2px;
+        }
     </style>
     <!-- ─── LEAFTET CDN ─── -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -963,7 +984,6 @@
             <button data-tab="banners"><i class="fa-solid fa-images"></i> Banners</button>
             <button data-tab="topproducts"><i class="fa-solid fa-chart-simple"></i> Top Products</button>
             <button data-tab="areas"><i class="fa-solid fa-map-location-dot"></i> Areas Covered</button>
-            <!-- NEW TAB: Delivery Rules -->
             <button data-tab="deliveryrules"><i class="fa-solid fa-truck-fast"></i> Delivery Rules</button>
         </div>
 
@@ -984,11 +1004,12 @@
                             <th>Category</th>
                             <th>Price</th>
                             <th>Stock</th>
+                            <th>Delivery</th>
                             <th style="text-align:right;">Actions</th>
                         </tr>
                     </thead>
                     <tbody id="products-table-body">
-                        <tr><td colspan="5" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
+                        <tr><td colspan="6" class="empty-state"><i class="fa-regular fa-spinner fa-spin"></i> Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1300,7 +1321,7 @@
 
     </div>
 
-    <!-- ─── PRODUCT MODAL ─── -->
+    <!-- ─── PRODUCT MODAL (UPDATED WITH DELIVERY FIELDS) ─── -->
     <div class="modal-overlay" id="product-modal">
         <div class="modal">
             <div class="modal-header">
@@ -1339,6 +1360,34 @@
                         <input type="text" id="p-emoji" placeholder="🍔" maxlength="2" />
                     </div>
                 </div>
+
+                <!-- ⭐ NEW: Delivery Settings Section -->
+                <div class="delivery-settings-section">
+                    <h4><i class="fa-solid fa-truck"></i> Delivery Settings</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Main Item?</label>
+                            <select id="p-is-main-item">
+                                <option value="true">Yes (counts toward main item surcharge)</option>
+                                <option value="false">No (side dish/drink)</option>
+                            </select>
+                            <span class="delivery-field-hint">Main items count toward the main item surcharge threshold (e.g., 5+ main items = extra fee)</span>
+                        </div>
+                        <div class="form-group">
+                            <label>Weight (kg)</label>
+                            <input type="number" id="p-weight" value="0.5" min="0" step="0.1" />
+                            <span class="delivery-field-hint">Used for weight-based delivery surcharges. Default: 0.5kg</span>
+                        </div>
+                    </div>
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                            <input type="checkbox" id="p-is-bulky" /> 
+                            <span>Bulky Item</span>
+                        </label>
+                        <span class="delivery-field-hint">Bulky items may incur additional delivery fees (e.g., large party packs, family meals)</span>
+                    </div>
+                </div>
+
                 <div class="form-group">
                     <label>Image URL</label>
                     <input type="text" id="p-image" placeholder="/fastfood/images/burger.webp" />
@@ -1892,6 +1941,10 @@
             const pEmoji = document.getElementById('p-emoji');
             const pImage = document.getElementById('p-image');
             const pTagcolor = document.getElementById('p-tagcolor');
+            // NEW delivery fields
+            const pIsMainItem = document.getElementById('p-is-main-item');
+            const pWeight = document.getElementById('p-weight');
+            const pIsBulky = document.getElementById('p-is-bulky');
             const productModalTitle = document.getElementById('product-modal-title');
             const productModalSave = document.getElementById('product-modal-save');
 
@@ -2080,7 +2133,7 @@
                 });
             }
 
-            // ─── AREA MAP (unchanged) ───
+            // ─── AREA MAP ───
             function initAreaMap() {
                 const mapContainer = document.getElementById('delivery-area-map');
                 if (!mapContainer) return;
@@ -2499,7 +2552,7 @@
                 }
             }
 
-            // ─── RENDER FUNCTIONS (unchanged) ───
+            // ─── RENDER PRODUCTS (UPDATED WITH DELIVERY INFO) ───
             function renderProducts() {
                 const search = productSearch.value.toLowerCase().trim();
                 let filtered = products;
@@ -2511,7 +2564,7 @@
                 }
                 if (filtered.length === 0) {
                     productsBody.innerHTML =
-                        `<tr><td colspan="5" class="empty-state"><i class="fa-regular fa-box"></i> No products found</td></tr>`;
+                        `<tr><td colspan="6" class="empty-state"><i class="fa-regular fa-box"></i> No products found</td></tr>`;
                     return;
                 }
                 productsBody.innerHTML = filtered.map(p => {
@@ -2519,6 +2572,18 @@
                     const imageHtml = imageUrl ?
                         `<img src="${imageUrl}" alt="${p.name}" class="thumb" loading="lazy" onerror="this.style.display='none'">` :
                         `<span class="emoji">${p.emoji || '🍽️'}</span>`;
+                    // Build delivery info string
+                    const deliveryInfo = [];
+                    if (p.is_main_item !== undefined) {
+                        deliveryInfo.push(p.is_main_item ? 'Main' : 'Side');
+                    }
+                    if (p.is_bulky) {
+                        deliveryInfo.push('📦 Bulky');
+                    }
+                    if (p.weight_kg !== undefined) {
+                        deliveryInfo.push(`${p.weight_kg}kg`);
+                    }
+                    const deliveryDisplay = deliveryInfo.length > 0 ? deliveryInfo.join(' · ') : 'Default';
                     return `
                         <tr>
                             <td>
@@ -2533,6 +2598,7 @@
                             <td><span class="tag-preview ${p.tagColor || 'primary'}">${p.tag}</span></td>
                             <td>₦${Number(p.price).toLocaleString()}</td>
                             <td><span class="stock-badge ${p.stock > 10 ? 'in-stock' : p.stock > 0 ? 'low-stock' : 'out-of-stock'}">${p.stock}</span></td>
+                            <td style="font-size:0.7rem;color:var(--text-muted);">${deliveryDisplay}</td>
                             <td style="text-align:right;">
                                 <div class="actions-cell" style="justify-content:flex-end;">
                                     <button class="btn btn-primary btn-sm edit-product" data-id="${p.id}"><i class="fa-regular fa-pen-to-square"></i></button>
@@ -2550,6 +2616,7 @@
                 });
             }
 
+            // ─── RENDER INVENTORY ───
             function renderInventory() {
                 const view = document.querySelector('#inventory-view-toggle .active')?.dataset.view || 'all';
                 let filtered = [...products];
@@ -2591,6 +2658,7 @@
                 });
             }
 
+            // ─── RENDER ORDERS ───
             function renderOrders() {
                 const search = orderSearch.value.toLowerCase().trim();
                 const dateFilter = orderDateFilter.value;
@@ -2641,6 +2709,7 @@
                 });
             }
 
+            // ─── RENDER TOP PRODUCTS ───
             function renderTopProducts() {
                 if (!topProductsBody) return;
                 if (topProducts.length === 0) {
@@ -2671,6 +2740,7 @@
                 topProductsBody.innerHTML = html;
             }
 
+            // ─── RENDER CATEGORIES ───
             function renderCategories() {
                 if (categories.length === 0) {
                     categoriesBody.innerHTML =
@@ -2705,7 +2775,7 @@
                 if (current) pCategory.value = current;
             }
 
-            // ─── PRODUCT CRUD ───
+            // ─── PRODUCT CRUD (UPDATED WITH DELIVERY FIELDS) ───
             function openProductModal(product = null) {
                 productModal.classList.add('open');
                 if (product) {
@@ -2720,6 +2790,10 @@
                     pEmoji.value = product.emoji || '';
                     pImage.value = product.image || '';
                     pTagcolor.value = product.tagColor || 'primary';
+                    // NEW: Set delivery fields
+                    pIsMainItem.value = product.is_main_item !== undefined ? String(product.is_main_item) : 'true';
+                    pWeight.value = product.weight_kg || 0.5;
+                    pIsBulky.checked = product.is_bulky || false;
                 } else {
                     productModalTitle.textContent = 'Add Product';
                     productModalSave.textContent = 'Save';
@@ -2732,6 +2806,10 @@
                     pEmoji.value = '';
                     pImage.value = '';
                     pTagcolor.value = 'primary';
+                    // NEW: Set default delivery values
+                    pIsMainItem.value = 'true';
+                    pWeight.value = 0.5;
+                    pIsBulky.checked = false;
                 }
             }
 
@@ -2739,6 +2817,7 @@
                 productModal.classList.remove('open');
             }
 
+            // ─── SAVE PRODUCT (UPDATED WITH DELIVERY FIELDS) ───
             async function saveProduct(e) {
                 e.preventDefault();
                 const data = {
@@ -2750,6 +2829,10 @@
                     emoji: pEmoji.value.trim() || '🍽️',
                     image: pImage.value.trim() || '',
                     tagColor: pTagcolor.value,
+                    // NEW: Delivery fields
+                    is_main_item: pIsMainItem.value === 'true',
+                    weight_kg: parseFloat(pWeight.value) || 0.5,
+                    is_bulky: pIsBulky.checked,
                 };
                 const id = productId.value;
                 try {
@@ -3987,6 +4070,7 @@
             console.log('🔄 Optimized order polling active (every 30s)');
             console.log('🗺️ Delivery Areas management with Leaflet map and autocomplete loaded');
             console.log('📋 Delivery Rules management loaded');
+            console.log('📦 Product delivery settings: is_main_item, weight_kg, is_bulky');
 
         })();
     </script>
