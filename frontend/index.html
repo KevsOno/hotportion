@@ -183,7 +183,7 @@
         }
         .chat-msg-bubble .hero-offer, 
         .chat-msg-bubble .hero-badge {
-            display: none;  /* hide any accidental hero styles inside chat */
+            display: none;
         }
         .brand {
             display: flex;
@@ -2237,15 +2237,12 @@
                 background-position: 0% 50%;
             }
         }
-        /* ─── AUTOCOMPLETE HIGHLIGHT ─── */
         .address-autocomplete-item .highlight {
             font-weight: 700;
             color: var(--primary);
         }
     </style>
-    <!-- ─── SEO: JSON‑LD Schema Injection ─── -->
-    <script src="/js/seo.js" defer>
-    </script>
+    <script src="/js/seo.js" defer></script>
 </head>
 <body>
 
@@ -2299,7 +2296,6 @@
         <!-- ─── HERO SLIDER ─── -->
         <section class="hero" aria-label="Promotional banner">
             <div class="hero-slider" id="hero-slider">
-                <!-- Static fallback slides (will be replaced if banners loaded) -->
                 <div class="hero-slide active" data-index="0">
                     <span class="hero-badge">🎉 WEEKEND SPECIAL</span>
                     <h1><span class="highlight">10% OFF</span><br /><span class="highlight2">All Items</span></h1>
@@ -2451,7 +2447,6 @@
                         <button class="btn-gps" id="gps-btn" aria-label="Get current location">
                             <i class="fa-solid fa-location-crosshairs" aria-hidden="true"></i> GPS
                         </button>
-                        <!-- Autocomplete Dropdown -->
                         <div class="address-autocomplete-dropdown" id="address-autocomplete-dropdown">
                             <div class="address-autocomplete-loading" style="display:none;">
                                 <i class="fa-solid fa-spinner fa-spin"></i> Searching...
@@ -2466,7 +2461,6 @@
                         Delivery fee: <span>₦0</span>
                         <span class="fee-breakdown-toggle" id="fee-breakdown-toggle">Show breakdown</span>
                     </div>
-                    <!-- Delivery Fee Breakdown -->
                     <div class="delivery-breakdown" id="delivery-breakdown">
                         <div class="breakdown-row">
                             <span>Base Fee</span>
@@ -2755,92 +2749,90 @@
                 return `/.netlify/images?url=${encodeURIComponent(url)}&w=${width}&format=webp`;
             }
 
-            // ================================================================
-            // ─── ADDRESS AUTOCOMPLETE (Nominatim) ───
-            // TODO: Replace Nominatim with Google Places API
-            //   - Google Places Autocomplete: https://maps.googleapis.com/maps/api/place/autocomplete/json
-            //   - Google Places Details: https://maps.googleapis.com/maps/api/place/details/json
-            //   - Requires API key: &key=YOUR_GOOGLE_API_KEY
-            // ================================================================
+            // ─── Get cart items for delivery calculation ───
+            function getCartItemsForDelivery() {
+                return Object.values(cart).map(item => ({
+                    product_id: parseInt(item.id) || 0,
+                    qty: parseInt(item.qty) || 1,
+                    name: item.name || 'Unknown',
+                    price: parseInt(item.price) || 0
+                }));
+            }
 
-            async function searchAddresses(query) {
-                if (!query || query.length < 2) {
-                    addressDropdown.classList.remove('show');
-                    return;
+            // ─── FIXED: Check delivery coverage with full intelligent fee ───
+            async function checkDeliveryCoverage(address) {
+                if (!address || address.trim().length < 5) {
+                    return { covered: false, error: 'Please enter a full address' };
                 }
 
-                const loadingEl = addressDropdown.querySelector('.address-autocomplete-loading');
-                const emptyEl = addressDropdown.querySelector('.address-autocomplete-empty');
-                loadingEl.style.display = 'block';
-                emptyEl.style.display = 'none';
-                addressDropdown.classList.add('show');
+                isCheckingDelivery = true;
+                updateDeliveryStatus('loading', 'Checking delivery availability...');
+
+                const items = getCartItemsForDelivery();
+                const email = customerEmail.value.trim();
 
                 try {
-                    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=6&addressdetails=1`;
-                    const response = await fetch(url, {
-                        headers: { 'User-Agent': 'HotPortionGrill/1.0' }
+                    // Build the exact payload the backend expects
+                    const payload = {
+                        address: address.trim(),
+                        items: items.map(item => ({
+                            name: item.name || 'Unknown',
+                            qty: item.qty || 1,
+                            price: item.price || 0,
+                            product_id: parseInt(item.product_id) || 0
+                        })),
+                        order_total: cartTotalPrice || 0,
+                        customer_email: email || undefined
+                    };
+
+                    console.log('📦 Sending delivery request:', payload);
+
+                    const response = await fetch('/api/delivery-fee', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(payload)
                     });
 
-                    if (!response.ok) throw new Error('Search failed');
+                    console.log('📥 Response status:', response.status);
 
-                    const data = await response.json();
-                    loadingEl.style.display = 'none';
+                    if (!response.ok) {
+                        let errorText = '';
+                        try {
+                            const errorData = await response.json();
+                            errorText = JSON.stringify(errorData);
+                        } catch (e) {
+                            errorText = await response.text();
+                        }
+                        console.warn('Delivery API error:', response.status, errorText);
 
-                    // Remove old results
-                    const items = addressDropdown.querySelectorAll('.address-autocomplete-item');
-                    items.forEach(el => el.remove());
-
-                    if (!data || data.length === 0) {
-                        emptyEl.style.display = 'block';
-                        return;
+                        return {
+                            covered: true,
+                            fee: Math.floor(Math.random() * 1500) + 500,
+                            fallback: true,
+                            error: errorText
+                        };
                     }
 
-                    emptyEl.style.display = 'none';
-
-                    data.forEach(result => {
-                        const item = document.createElement('div');
-                        item.className = 'address-autocomplete-item';
-
-                        const displayName = result.display_name || result.name || 'Unknown location';
-                        const subText = result.address ?
-                            `${result.address.city || result.address.town || result.address.village || ''}, ${result.address.country || ''}` :
-                            '';
-
-                        item.innerHTML = `
-                            <span>${highlightText(displayName, query)}</span>
-                            ${subText ? `<span class="sub-text">${highlightText(subText, query)}</span>` : ''}
-                        `;
-
-                        item.addEventListener('click', function() {
-                            const fullAddress = result.display_name || result.name || '';
-                            deliveryAddress.value = fullAddress;
-                            addressDropdown.classList.remove('show');
-                            // Trigger delivery check
-                            deliveryAddress.dispatchEvent(new Event('input', { bubbles: true }));
-                        });
-
-                        addressDropdown.appendChild(item);
-                    });
+                    const data = await response.json();
+                    console.log('✅ Delivery response:', data);
+                    return data;
 
                 } catch (err) {
-                    console.warn('Autocomplete error:', err);
-                    loadingEl.style.display = 'none';
-                    emptyEl.style.display = 'block';
-                    emptyEl.textContent = 'Error searching locations';
+                    console.warn('Delivery check error:', err);
+                    return {
+                        covered: true,
+                        fee: Math.floor(Math.random() * 1500) + 500,
+                        fallback: true,
+                        error: err.message
+                    };
+                } finally {
+                    isCheckingDelivery = false;
                 }
             }
 
-            function highlightText(text, query) {
-                if (!query || !text) return text;
-                const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-                return text.replace(regex, '<span class="highlight">$1</span>');
-            }
-
-            // ================================================================
-            // ─── GEOCODING HELPERS (Future-proof for Google Maps API) ───
-            // TODO: Replace Nominatim with Google Geocoding API
-            // ================================================================
-
+            // ─── GEOCODING HELPERS ───
             async function geocodeAddress(address) {
                 const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`;
                 const response = await fetch(url, {
@@ -2865,56 +2857,6 @@
                 const data = await response.json();
                 if (!data || !data.display_name) throw new Error('Location not found');
                 return data.display_name;
-            }
-
-            // ─── Get cart items for delivery calculation ───
-            function getCartItemsForDelivery() {
-                return Object.values(cart).map(item => ({
-                    product_id: parseInt(item.id),
-                    qty: item.qty,
-                    name: item.name,
-                    price: item.price
-                }));
-            }
-
-            // ─── Check delivery coverage with full intelligent fee ───
-            async function checkDeliveryCoverage(address) {
-                if (!address || address.trim().length < 5) {
-                    return { covered: false, error: 'Please enter a full address' };
-                }
-
-                isCheckingDelivery = true;
-                updateDeliveryStatus('loading', 'Checking delivery availability...');
-
-                const items = getCartItemsForDelivery();
-                const email = customerEmail.value.trim();
-
-                try {
-                    const response = await fetch('/api/delivery-fee', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            address: address.trim(),
-                            items: items,
-                            order_total: cartTotalPrice,
-                            customer_email: email || undefined
-                        })
-                    });
-
-                    if (!response.ok) {
-                        console.warn('Delivery API failed, using fallback');
-                        return { covered: true, fee: Math.floor(Math.random() * 1500) + 500, fallback: true };
-                    }
-
-                    const data = await response.json();
-                    return data;
-
-                } catch (err) {
-                    console.warn('Delivery check error:', err);
-                    return { covered: true, fee: Math.floor(Math.random() * 1500) + 500, fallback: true };
-                } finally {
-                    isCheckingDelivery = false;
-                }
             }
 
             function getCurrentPosition() {
@@ -2967,12 +2909,11 @@
                 breakdownLoyalty.textContent = `-${formatPrice(Math.abs(breakdown.loyalty_discount || 0))}`;
                 breakdownTotal.textContent = formatPrice(breakdown.final || 0);
 
-                // Only show breakdown if there are adjustments
-                const hasAdjustments = breakdown.value_discount > 0 || 
-                                      breakdown.item_surcharge > 0 || 
-                                      breakdown.peak_surcharge > 0 || 
-                                      breakdown.loyalty_discount > 0;
-                
+                const hasAdjustments = breakdown.value_discount > 0 ||
+                    breakdown.item_surcharge > 0 ||
+                    breakdown.peak_surcharge > 0 ||
+                    breakdown.loyalty_discount > 0;
+
                 if (hasAdjustments) {
                     deliveryBreakdown.classList.add('show');
                 } else {
@@ -2986,13 +2927,11 @@
             async function handleDeliveryAddressChange() {
                 const address = deliveryAddress.value.trim();
 
-                // Don't check if address is too short
                 if (address.length < 5) {
                     resetDeliveryStatus();
                     return;
                 }
 
-                // Don't re-check if address hasn't changed and we already have a valid fee
                 if (address === lastCheckedAddress && isDeliveryCovered && lastBreakdown) {
                     return;
                 }
@@ -3014,12 +2953,11 @@
                     deliveryFee = result.total_fee || result.fee || 0;
                     isDeliveryCovered = true;
                     lastBreakdown = result.breakdown || null;
-                    
+
                     const areaMsg = result.area_name ? ` (${result.area_name})` : '';
                     updateDeliveryStatus('covered', `✅ We deliver to your area! Fee: ${formatPrice(deliveryFee)}${areaMsg}`);
                     updateDeliveryFeeUI(deliveryFee);
-                    
-                    // Update breakdown if available
+
                     if (lastBreakdown) {
                         updateBreakdownUI(lastBreakdown);
                     }
@@ -3051,8 +2989,7 @@
             function updateDeliveryFeeUI(fee) {
                 deliveryFeeDisplay.innerHTML = `Delivery fee: <span>${formatPrice(fee)}</span>
                     <span class="fee-breakdown-toggle" id="fee-breakdown-toggle">Show breakdown</span>`;
-                
-                // Re-attach toggle event
+
                 const newToggle = document.getElementById('fee-breakdown-toggle');
                 if (newToggle) {
                     newToggle.addEventListener('click', function() {
@@ -3060,7 +2997,7 @@
                         this.textContent = deliveryBreakdown.classList.contains('show') ? 'Hide breakdown' : 'Show breakdown';
                     });
                 }
-                
+
                 updateCartUI();
             }
 
@@ -3080,7 +3017,6 @@
 
                     if (address) {
                         deliveryAddress.value = address;
-                        // Trigger address check
                         await handleDeliveryAddressChange();
                         showToast('📍 Location found!', 'fa-solid fa-check-circle');
                     }
@@ -3091,6 +3027,78 @@
                     gpsBtn.disabled = false;
                     gpsBtn.innerHTML = '<i class="fa-solid fa-location-crosshairs" aria-hidden="true"></i> GPS';
                 }
+            }
+
+            // ─── ADDRESS AUTOCOMPLETE ───
+            async function searchAddresses(query) {
+                if (!query || query.length < 2) {
+                    addressDropdown.classList.remove('show');
+                    return;
+                }
+
+                const loadingEl = addressDropdown.querySelector('.address-autocomplete-loading');
+                const emptyEl = addressDropdown.querySelector('.address-autocomplete-empty');
+                loadingEl.style.display = 'block';
+                emptyEl.style.display = 'none';
+                addressDropdown.classList.add('show');
+
+                try {
+                    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=6&addressdetails=1`;
+                    const response = await fetch(url, {
+                        headers: { 'User-Agent': 'HotPortionGrill/1.0' }
+                    });
+
+                    if (!response.ok) throw new Error('Search failed');
+
+                    const data = await response.json();
+                    loadingEl.style.display = 'none';
+
+                    const items = addressDropdown.querySelectorAll('.address-autocomplete-item');
+                    items.forEach(el => el.remove());
+
+                    if (!data || data.length === 0) {
+                        emptyEl.style.display = 'block';
+                        return;
+                    }
+
+                    emptyEl.style.display = 'none';
+
+                    data.forEach(result => {
+                        const item = document.createElement('div');
+                        item.className = 'address-autocomplete-item';
+
+                        const displayName = result.display_name || result.name || 'Unknown location';
+                        const subText = result.address ?
+                            `${result.address.city || result.address.town || result.address.village || ''}, ${result.address.country || ''}` :
+                            '';
+
+                        item.innerHTML = `
+                            <span>${highlightText(displayName, query)}</span>
+                            ${subText ? `<span class="sub-text">${highlightText(subText, query)}</span>` : ''}
+                        `;
+
+                        item.addEventListener('click', function() {
+                            const fullAddress = result.display_name || result.name || '';
+                            deliveryAddress.value = fullAddress;
+                            addressDropdown.classList.remove('show');
+                            deliveryAddress.dispatchEvent(new Event('input', { bubbles: true }));
+                        });
+
+                        addressDropdown.appendChild(item);
+                    });
+
+                } catch (err) {
+                    console.warn('Autocomplete error:', err);
+                    loadingEl.style.display = 'none';
+                    emptyEl.style.display = 'block';
+                    emptyEl.textContent = 'Error searching locations';
+                }
+            }
+
+            function highlightText(text, query) {
+                if (!query || !text) return text;
+                const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+                return text.replace(regex, '<span class="highlight">$1</span>');
             }
 
             // ─── LOAD PRODUCTS FROM BACKEND API ───
@@ -3564,7 +3572,6 @@
                     cart[productId] = { ...product, qty: qty };
                 }
                 updateCartUI();
-                // Recalculate delivery fee if delivery is selected and address is set
                 if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
                     handleDeliveryAddressChange();
                 }
@@ -3575,7 +3582,6 @@
                 if (cart[productId]) {
                     delete cart[productId];
                     updateCartUI();
-                    // Recalculate delivery fee if delivery is selected
                     if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
                         handleDeliveryAddressChange();
                     }
@@ -3590,7 +3596,6 @@
                 } else {
                     cart[productId].qty = newQty;
                     updateCartUI();
-                    // Recalculate delivery fee if delivery is selected
                     if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
                         handleDeliveryAddressChange();
                     }
@@ -3931,7 +3936,6 @@
                     items: items.map(i => ({ name: i.name, qty: i.qty, price: i.price, product_id: i.id }))
                 };
 
-                // Include breakdown if available for record keeping
                 if (lastBreakdown && deliveryMethod === 'delivery') {
                     orderPayload.delivery_breakdown = lastBreakdown;
                 }
@@ -4166,7 +4170,6 @@
                 cartOverlay.classList.add('open');
                 document.body.style.overflow = 'hidden';
                 updateCheckoutButton();
-                // Refresh delivery fee if needed
                 if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
                     handleDeliveryAddressChange();
                 }
@@ -4211,7 +4214,6 @@
             deliveryAddress.addEventListener('input', function() {
                 const query = this.value.trim();
 
-                // Autocomplete
                 clearTimeout(addressAutocompleteTimeout);
                 if (query.length < 2) {
                     addressDropdown.classList.remove('show');
@@ -4221,7 +4223,6 @@
                     }, 300);
                 }
 
-                // Delivery check
                 clearTimeout(deliveryDebounceTimer);
                 if (query.length < 5) {
                     resetDeliveryStatus();
