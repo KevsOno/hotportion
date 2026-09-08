@@ -1361,8 +1361,9 @@ async def get_all_delivery_areas():
     """
     try:
         db = get_supabase()
+        # FIXED: Added empty params dict {} to the RPC call
         result = await execute_db(
-            db.rpc("get_delivery_areas_geojson")
+            db.rpc("get_delivery_areas_geojson", {})
         )
         
         # Convert datetime objects to ISO strings
