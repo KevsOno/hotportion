@@ -1128,8 +1128,8 @@
         }
         .checkout-form .form-group label {
             display: block;
-            font-size: 0.75rem;
             font-weight: 700;
+            font-size: 0.75rem;
             color: var(--text-muted);
             text-transform: uppercase;
             letter-spacing: 0.05em;
@@ -1160,11 +1160,12 @@
             min-height: 50px;
         }
 
-        /* ─── ADDRESS INPUT WITH GPS BUTTON ─── */
+        /* ─── ADDRESS INPUT WITH AUTOCOMPLETE ─── */
         .address-input-wrap {
             display: flex;
             gap: 8px;
             align-items: center;
+            position: relative;
         }
         .address-input-wrap input {
             flex: 1;
@@ -1172,6 +1173,63 @@
         .address-input-wrap .btn-gps {
             flex-shrink: 0;
         }
+
+        /* ─── AUTOCOMPLETE DROPDOWN ─── */
+        .address-autocomplete-dropdown {
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0;
+            right: 60px;
+            background: white;
+            border: 1px solid #e2e8e6;
+            border-radius: var(--radius-sm);
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 300;
+            display: none;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+        }
+        .address-autocomplete-dropdown.show {
+            display: block;
+        }
+        .address-autocomplete-item {
+            padding: 10px 14px;
+            cursor: pointer;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 0.85rem;
+            transition: background 0.15s;
+        }
+        .address-autocomplete-item:hover {
+            background: #f8faf9;
+        }
+        .address-autocomplete-item:last-child {
+            border-bottom: none;
+        }
+        .address-autocomplete-item .highlight {
+            font-weight: 700;
+            color: var(--primary);
+        }
+        .address-autocomplete-item .sub-text {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            display: block;
+        }
+        .address-autocomplete-loading {
+            padding: 10px 14px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+        .address-autocomplete-empty {
+            padding: 10px 14px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+        .address-autocomplete-loading i {
+            margin-right: 8px;
+        }
+
         .delivery-status {
             margin-top: 6px;
             font-size: 0.8rem;
@@ -1971,6 +2029,14 @@
             .section-title {
                 font-size: 1.4rem;
             }
+            .address-autocomplete-dropdown {
+                right: 0;
+                max-height: 150px;
+            }
+            .address-autocomplete-item {
+                padding: 8px 12px;
+                font-size: 0.8rem;
+            }
         }
         @media (max-width: 480px) {
             .section-title {
@@ -2110,6 +2176,11 @@
             100% {
                 background-position: 0% 50%;
             }
+        }
+        /* ─── AUTOCOMPLETE HIGHLIGHT ─── */
+        .address-autocomplete-item .highlight {
+            font-weight: 700;
+            color: var(--primary);
         }
     </style>
     <!-- ─── SEO: JSON‑LD Schema Injection ─── -->
@@ -2316,10 +2387,19 @@
                 <div class="form-group" id="address-group" style="display:none;">
                     <label for="delivery-address">Delivery Address</label>
                     <div class="address-input-wrap">
-                        <input type="text" id="delivery-address" placeholder="Enter your delivery address" autocomplete="off">
+                        <input type="text" id="delivery-address" placeholder="Start typing your address..." autocomplete="off">
                         <button class="btn-gps" id="gps-btn" aria-label="Get current location">
                             <i class="fa-solid fa-location-crosshairs" aria-hidden="true"></i> GPS
                         </button>
+                        <!-- Autocomplete Dropdown -->
+                        <div class="address-autocomplete-dropdown" id="address-autocomplete-dropdown">
+                            <div class="address-autocomplete-loading" style="display:none;">
+                                <i class="fa-solid fa-spinner fa-spin"></i> Searching...
+                            </div>
+                            <div class="address-autocomplete-empty" style="display:none;">
+                                No locations found
+                            </div>
+                        </div>
                     </div>
                     <div class="delivery-status" id="delivery-status"></div>
                     <div class="delivery-fee-display" id="delivery-fee-display">Delivery fee: <span>₦0</span></div>
@@ -2470,7 +2550,6 @@
             window.addEventListener('load', setHeaderHeight);
             window.addEventListener('resize', setHeaderHeight);
 
-
             // ─── STATE ───
             let products = [];
             let categories = [];
@@ -2484,11 +2563,14 @@
             let deliveryFee = 0;
             let lastOrderData = null;
             let isDataLoaded = false;
-            
+
             // ─── Delivery Coverage State ───
             let isDeliveryCovered = false;
             let isCheckingDelivery = false;
             let lastCheckedAddress = '';
+
+            // ─── Autocomplete State ───
+            let addressAutocompleteTimeout = null;
 
             // ─── DOM REFS ───
             const menuGrid = document.getElementById('menu-grid');
@@ -2547,6 +2629,9 @@
             const navChat = document.getElementById('nav-chat');
             const navCartBottom = document.getElementById('nav-cart-bottom');
 
+            // ─── Address Autocomplete DOM ───
+            const addressDropdown = document.getElementById('address-autocomplete-dropdown');
+
             // ─── HELPERS ───
             function formatPrice(amount) { return '₦' + Number(amount).toLocaleString(); }
 
@@ -2569,17 +2654,91 @@
             }
 
             // ================================================================
-            // ─── GEOCODING HELPERS (Future-proof for Google Maps API) ───
-            // TODO: Replace Nominatim with Google Geocoding API
-            //   - Google Geocoding endpoint: https://maps.googleapis.com/maps/api/geocode/json
-            //   - Google Reverse Geocoding: https://maps.googleapis.com/maps/api/geocode/json?latlng={lat},{lng}
+            // ─── ADDRESS AUTOCOMPLETE (Nominatim) ───
+            // TODO: Replace Nominatim with Google Places API
+            //   - Google Places Autocomplete: https://maps.googleapis.com/maps/api/place/autocomplete/json
+            //   - Google Places Details: https://maps.googleapis.com/maps/api/place/details/json
             //   - Requires API key: &key=YOUR_GOOGLE_API_KEY
             // ================================================================
 
-            /**
-             * Geocode an address to lat/lng using Nominatim (OpenStreetMap)
-             * TODO: Replace with Google Geocoding API
-             */
+            async function searchAddresses(query) {
+                if (!query || query.length < 2) {
+                    addressDropdown.classList.remove('show');
+                    return;
+                }
+
+                const loadingEl = addressDropdown.querySelector('.address-autocomplete-loading');
+                const emptyEl = addressDropdown.querySelector('.address-autocomplete-empty');
+                loadingEl.style.display = 'block';
+                emptyEl.style.display = 'none';
+                addressDropdown.classList.add('show');
+
+                try {
+                    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=6&addressdetails=1`;
+                    const response = await fetch(url, {
+                        headers: { 'User-Agent': 'HotPortionGrill/1.0' }
+                    });
+
+                    if (!response.ok) throw new Error('Search failed');
+
+                    const data = await response.json();
+                    loadingEl.style.display = 'none';
+
+                    // Remove old results
+                    const items = addressDropdown.querySelectorAll('.address-autocomplete-item');
+                    items.forEach(el => el.remove());
+
+                    if (!data || data.length === 0) {
+                        emptyEl.style.display = 'block';
+                        return;
+                    }
+
+                    emptyEl.style.display = 'none';
+
+                    data.forEach(result => {
+                        const item = document.createElement('div');
+                        item.className = 'address-autocomplete-item';
+
+                        const displayName = result.display_name || result.name || 'Unknown location';
+                        const subText = result.address ?
+                            `${result.address.city || result.address.town || result.address.village || ''}, ${result.address.country || ''}` :
+                            '';
+
+                        item.innerHTML = `
+                            <span>${highlightText(displayName, query)}</span>
+                            ${subText ? `<span class="sub-text">${highlightText(subText, query)}</span>` : ''}
+                        `;
+
+                        item.addEventListener('click', function() {
+                            const fullAddress = result.display_name || result.name || '';
+                            deliveryAddress.value = fullAddress;
+                            addressDropdown.classList.remove('show');
+                            // Trigger delivery check
+                            deliveryAddress.dispatchEvent(new Event('input', { bubbles: true }));
+                        });
+
+                        addressDropdown.appendChild(item);
+                    });
+
+                } catch (err) {
+                    console.warn('Autocomplete error:', err);
+                    loadingEl.style.display = 'none';
+                    emptyEl.style.display = 'block';
+                    emptyEl.textContent = 'Error searching locations';
+                }
+            }
+
+            function highlightText(text, query) {
+                if (!query || !text) return text;
+                const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+                return text.replace(regex, '<span class="highlight">$1</span>');
+            }
+
+            // ================================================================
+            // ─── GEOCODING HELPERS (Future-proof for Google Maps API) ───
+            // TODO: Replace Nominatim with Google Geocoding API
+            // ================================================================
+
             async function geocodeAddress(address) {
                 const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`;
                 const response = await fetch(url, {
@@ -2595,10 +2754,6 @@
                 };
             }
 
-            /**
-             * Reverse geocode lat/lng to address using Nominatim (OpenStreetMap)
-             * TODO: Replace with Google Geocoding API
-             */
             async function reverseGeocode(lat, lng) {
                 const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`;
                 const response = await fetch(url, {
@@ -2610,9 +2765,6 @@
                 return data.display_name;
             }
 
-            /**
-             * Check delivery coverage via backend API
-             */
             async function checkDeliveryCoverage(address) {
                 if (!address || address.trim().length < 5) {
                     return { covered: false, error: 'Please enter a full address' };
@@ -2629,7 +2781,6 @@
                     });
 
                     if (!response.ok) {
-                        // If API fails, fallback to random fee (existing behavior)
                         console.warn('Delivery API failed, using fallback');
                         return { covered: true, fee: Math.floor(Math.random() * 1500) + 500, fallback: true };
                     }
@@ -2639,16 +2790,12 @@
 
                 } catch (err) {
                     console.warn('Delivery check error:', err);
-                    // Fallback to random fee if API is down
                     return { covered: true, fee: Math.floor(Math.random() * 1500) + 500, fallback: true };
                 } finally {
                     isCheckingDelivery = false;
                 }
             }
 
-            /**
-             * Get user's current location via browser GPS
-             */
             function getCurrentPosition() {
                 return new Promise((resolve, reject) => {
                     if (!navigator.geolocation) {
@@ -2690,7 +2837,7 @@
 
             async function handleDeliveryAddressChange() {
                 const address = deliveryAddress.value.trim();
-                
+
                 // Don't check if address is too short or same as last checked
                 if (address.length < 5) {
                     resetDeliveryStatus();
@@ -2704,7 +2851,6 @@
                 const result = await checkDeliveryCoverage(address);
 
                 if (result.fallback) {
-                    // API fallback: use random fee with warning
                     deliveryFee = result.fee;
                     isDeliveryCovered = true;
                     updateDeliveryStatus('covered', '⚠️ Using estimated delivery fee (service temporarily unavailable)');
@@ -2758,7 +2904,7 @@
                 try {
                     const position = await getCurrentPosition();
                     const address = await reverseGeocode(position.lat, position.lng);
-                    
+
                     if (address) {
                         deliveryAddress.value = address;
                         // Trigger address check
@@ -2797,7 +2943,7 @@
                 }
             }
 
-            // ─── FALLBACK: hardcoded products (used if API fails) ───
+            // ─── FALLBACK: hardcoded products ───
             function getFallbackProducts() {
                 return [
                     { id: 'burg1', name: 'Burger', description: 'Classic beef burger with lettuce, tomato, cheese & sauce.',
@@ -2855,7 +3001,7 @@
                 ];
             }
 
-            // ─── LOAD BANNERS FROM BACKEND API ───
+            // ─── LOAD BANNERS ───
             async function loadBannersFromAPI() {
                 try {
                     const response = await fetch('/api/v1/banners/active');
@@ -2881,7 +3027,6 @@
                 const slider = document.getElementById('hero-slider');
                 if (!slider) return;
 
-                // If no banners from API, keep the static fallback (already in HTML)
                 if (!banners || banners.length === 0) {
                     console.log('Using static hero fallback');
                     initHeroDots();
@@ -2889,11 +3034,9 @@
                     return;
                 }
 
-                // Remove existing slides but keep arrows and dot container
                 const slides = slider.querySelectorAll('.hero-slide');
                 slides.forEach(s => s.remove());
 
-                // Build new slides from API data
                 let html = '';
                 banners.forEach((banner, index) => {
                     const activeClass = index === 0 ? 'active' : '';
@@ -2927,7 +3070,6 @@
                     `;
                 });
 
-                // Insert new slides before the arrows
                 const prevArrow = slider.querySelector('.hero-arrow.prev');
                 if (prevArrow) {
                     prevArrow.insertAdjacentHTML('beforebegin', html);
@@ -2935,7 +3077,6 @@
                     slider.innerHTML = html + slider.innerHTML;
                 }
 
-                // Update dots
                 const dotContainer = document.getElementById('hero-dots');
                 if (dotContainer) {
                     dotContainer.innerHTML = '';
@@ -2949,11 +3090,9 @@
                     });
                 }
 
-                // Reset hero state
                 heroCurrentIndex = 0;
                 isHeroTransitioning = false;
 
-                // Re-attach event listeners to the new CTA buttons
                 document.querySelectorAll('.hero-slide .hero-cta .btn-primary').forEach(btn => {
                     btn.addEventListener('click', function(e) {
                         e.stopPropagation();
@@ -2962,14 +3101,12 @@
                     });
                 });
 
-                // Restart autoplay with new slides
                 stopHeroAutoplay();
                 startHeroAutoplay();
             }
 
-            // ─── PRODUCT REFRESH FUNCTION (used after stock changes) ───
+            // ─── PRODUCT REFRESH ───
             async function refreshProducts() {
-                // Reload products from API (or fallback)
                 const loaded = await loadProductsFromAPI();
                 if (!loaded || products.length === 0) {
                     products = getFallbackProducts();
@@ -2992,7 +3129,6 @@
                     isDataLoaded = true;
                 }
 
-                // ─── INJECT SEO SCHEMAS AFTER PRODUCTS ARE LOADED ───
                 if (window.__injectProductSchemas && products.length) {
                     window.__injectProductSchemas(products);
                     if (typeof window.__updateFeaturedItems === 'function') {
@@ -3013,7 +3149,6 @@
                 initHeroDots();
                 startHeroAutoplay();
 
-                // ─── Handle Monnify redirect after everything is loaded ───
                 handlePaymentRedirect();
 
                 console.log(`🍔 Hot Portion Grill — ${products.length} meals, ${categories.length} categories`);
@@ -3343,7 +3478,6 @@
                 }
 
                 const subtotal = cartTotalPrice;
-                // Only add delivery fee if delivery method is 'delivery' and area is covered
                 const finalDeliveryFee = (deliveryMethod === 'delivery' && isDeliveryCovered) ? deliveryFee : 0;
                 const total = subtotal + finalDeliveryFee;
                 cartSubtotal.textContent = formatPrice(subtotal);
@@ -3355,7 +3489,6 @@
                 }
                 cartTotal.textContent = formatPrice(total);
 
-                // Update checkout button state
                 updateCheckoutButton();
             }
 
@@ -3376,7 +3509,6 @@
 
                 checkoutBtn.disabled = disabled;
 
-                // Update button text with status
                 if (!hasItems) {
                     checkoutBtn.innerHTML = '<i class="fa-regular fa-credit-card"></i> Add items to cart';
                 } else if (isDelivery && !isDeliveryCovered && deliveryAddress.value.trim().length > 5) {
@@ -3399,7 +3531,6 @@
                 if (method === 'delivery') {
                     addressGroup.style.display = 'block';
                     deliveryAddress.required = true;
-                    // Trigger address check if there's already text
                     if (deliveryAddress.value.trim().length >= 5) {
                         handleDeliveryAddressChange();
                     } else {
@@ -3410,7 +3541,6 @@
                 } else {
                     addressGroup.style.display = 'none';
                     deliveryAddress.required = false;
-                    // Reset delivery state
                     isDeliveryCovered = false;
                     deliveryFee = 0;
                     resetDeliveryStatus();
@@ -3488,14 +3618,12 @@
                 deliveryAddress.value = '';
                 orderNotes.value = '';
                 preferredTime.value = '';
-                // Reset delivery state
                 isDeliveryCovered = false;
                 deliveryFee = 0;
                 resetDeliveryStatus();
                 updateDeliveryFeeUI(0);
                 deliveryFeeRow.style.display = 'none';
                 showToast('✅ Order placed successfully!', 'fa-solid fa-check-circle');
-                // Refresh products to reflect stock changes after order
                 refreshProducts();
             }
             receiptClose.addEventListener('click', closeReceipt);
@@ -3514,12 +3642,10 @@
                 }
             }
 
-            // ─── IMPROVED HANDLE MONNIFY REDIRECT ───
+            // ─── HANDLE MONNIFY REDIRECT ───
             function handlePaymentRedirect() {
-                // Handle malformed URLs with multiple '?' by taking the last query string
                 let queryString = window.location.search;
                 if (queryString.includes('?') && queryString.indexOf('?') !== queryString.lastIndexOf('?')) {
-                    // Multiple '?' found – use the part after the last '?'
                     queryString = '?' + window.location.search.split('?').pop();
                 }
                 const urlParams = new URLSearchParams(queryString);
@@ -3527,7 +3653,6 @@
                 let status = urlParams.get('status') || urlParams.get('paymentStatus');
 
                 if (transactionRef) {
-                    // Remove query params from URL
                     window.history.replaceState({}, document.title, window.location.pathname);
 
                     let orderData = null;
@@ -3538,7 +3663,6 @@
                         } catch (e) { /* ignore */ }
                     }
 
-                    // Normalise status to uppercase for case‑insensitive comparison
                     const normalizedStatus = (status || '').toUpperCase();
                     const paymentOk = normalizedStatus === 'PAID' || normalizedStatus === 'SUCCESS';
 
@@ -3548,7 +3672,6 @@
                                 if (data) {
                                     if (paymentOk) {
                                         showReceipt(data);
-                                        // Refresh products after successful payment
                                         refreshProducts();
                                     } else {
                                         showToast('Payment failed or was cancelled. Please try again.', 'fa-solid fa-exclamation-circle');
@@ -3567,7 +3690,6 @@
 
                     if (paymentOk) {
                         showReceipt(orderData);
-                        // Refresh products after successful payment
                         refreshProducts();
                     } else {
                         showToast('Payment failed or was cancelled. Please try again.', 'fa-solid fa-exclamation-circle');
@@ -3576,7 +3698,7 @@
                 }
             }
 
-            // ─── CHECKOUT (Backend API + Monnify Redirect) ───
+            // ─── CHECKOUT ───
             async function checkout() {
                 const items = Object.values(cart);
                 if (items.length === 0) {
@@ -3640,14 +3762,11 @@
                     const result = await response.json();
                     console.log('✅ Order created, redirecting to Monnify:', result);
 
-                    // Store order data in sessionStorage before redirect
                     sessionStorage.setItem('pending_order', JSON.stringify(result));
 
-                    // ─── REDIRECT TO MONNIFY PAYMENT PAGE ───
                     if (result.checkout_url) {
                         window.location.href = result.checkout_url;
                     } else {
-                        // Fallback: if no checkout_url, show toast
                         showToast('Payment init failed. Please try again.', 'fa-solid fa-exclamation-circle');
                         btn.innerHTML = originalText;
                         btn.disabled = false;
@@ -3677,8 +3796,7 @@
                 if (isTyping && sender === 'assistant') {
                     bubble.innerHTML = '<div class="thinking-dots"><span></span><span></span><span></span></div>';
                 } else {
-                    // --- NEW: parse Markdown to HTML ---
-                    const parsed = marked.parse(text);   // <-- add this line
+                    const parsed = marked.parse(text);
                     bubble.innerHTML = parsed + extraHtml;
                 }
                 row.appendChild(bubble);
@@ -3853,7 +3971,6 @@
                 cartDrawer.classList.add('open');
                 cartOverlay.classList.add('open');
                 document.body.style.overflow = 'hidden';
-                // Update checkout button state when cart opens
                 updateCheckoutButton();
             }
 
@@ -3883,6 +4000,7 @@
                     if (cartDrawer.classList.contains('open')) closeCart();
                     if (chatModal.classList.contains('active')) chatModal.classList.remove('active');
                     if (receiptOverlay.classList.contains('open')) closeReceipt();
+                    if (addressDropdown.classList.contains('show')) addressDropdown.classList.remove('show');
                 }
             });
 
@@ -3891,11 +4009,23 @@
             });
             setDeliveryMethod('pickup');
 
-            // ─── DELIVERY ADDRESS INPUT HANDLER ───
+            // ─── DELIVERY ADDRESS INPUT WITH AUTOCOMPLETE ───
             deliveryAddress.addEventListener('input', function() {
+                const query = this.value.trim();
+
+                // Autocomplete
+                clearTimeout(addressAutocompleteTimeout);
+                if (query.length < 2) {
+                    addressDropdown.classList.remove('show');
+                } else {
+                    addressAutocompleteTimeout = setTimeout(() => {
+                        searchAddresses(query);
+                    }, 300);
+                }
+
+                // Delivery check
                 clearTimeout(deliveryDebounceTimer);
-                const address = this.value.trim();
-                if (address.length < 5) {
+                if (query.length < 5) {
                     resetDeliveryStatus();
                     deliveryFee = 0;
                     updateDeliveryFeeUI(0);
@@ -3904,6 +4034,30 @@
                     return;
                 }
                 deliveryDebounceTimer = setTimeout(handleDeliveryAddressChange, 500);
+            });
+
+            deliveryAddress.addEventListener('focus', function() {
+                if (this.value.trim().length >= 2) {
+                    addressDropdown.classList.add('show');
+                }
+            });
+
+            deliveryAddress.addEventListener('blur', function() {
+                setTimeout(() => {
+                    addressDropdown.classList.remove('show');
+                }, 200);
+            });
+
+            deliveryAddress.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    addressDropdown.classList.remove('show');
+                }
+                if (e.key === 'Enter') {
+                    const firstItem = addressDropdown.querySelector('.address-autocomplete-item');
+                    if (firstItem) {
+                        firstItem.click();
+                    }
+                }
             });
 
             // ─── GPS BUTTON ───
@@ -3985,14 +4139,15 @@
             // ─── BOOT ───
             initData().then(() => {
                 console.log('🚀 Hot Portion Grill ready!');
-                console.log('📍 Delivery coverage system active (Nominatim → Google Maps ready)');
+                console.log('📍 Delivery coverage with address autocomplete active');
             });
 
             console.log('📱 Bottom nav: Home, Menu, Chat, Cart (mobile only)');
-            console.log('🔐 Monnify payment integration ready (simulated)');
+            console.log('🔐 Monnify payment integration ready');
             console.log('🤖 Context-aware AI assistant active');
             console.log('🎠 Hero slider dynamic – loaded from backend');
             console.log('🖼️ All images served via Netlify Image CDN');
+            console.log('🔍 Address autocomplete using Nominatim (OpenStreetMap)');
 
         })();
     </script>
