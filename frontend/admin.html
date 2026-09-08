@@ -503,6 +503,81 @@
             font-weight: 800;
         }
 
+        /* ─── AUTOCOMPLETE STYLES ─── */
+        .autocomplete-container {
+            position: relative;
+        }
+        .autocomplete-container input {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid #e2e8e6;
+            border-radius: var(--radius-sm);
+            font-size: 0.9rem;
+            font-family: inherit;
+            outline: none;
+            background: #fafbfa;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .autocomplete-container input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(229, 57, 53, 0.08);
+            background: #fff;
+        }
+        .autocomplete-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #e2e8e6;
+            border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1100;
+            display: none;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+        }
+        .autocomplete-dropdown.show {
+            display: block;
+        }
+        .autocomplete-item {
+            padding: 10px 14px;
+            cursor: pointer;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 0.85rem;
+            transition: background 0.15s;
+        }
+        .autocomplete-item:hover {
+            background: #f8faf9;
+        }
+        .autocomplete-item:last-child {
+            border-bottom: none;
+        }
+        .autocomplete-item .highlight {
+            font-weight: 700;
+            color: var(--primary);
+        }
+        .autocomplete-item .sub-text {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            display: block;
+        }
+        .autocomplete-loading {
+            padding: 10px 14px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+        .autocomplete-loading i {
+            margin-right: 8px;
+        }
+        .autocomplete-empty {
+            padding: 10px 14px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
         /* ─── MAP LEGEND ─── */
         .map-legend {
             display: flex;
@@ -607,6 +682,13 @@
             }
             #delivery-area-map {
                 height: 300px;
+            }
+            .autocomplete-dropdown {
+                max-height: 150px;
+            }
+            .autocomplete-item {
+                padding: 8px 12px;
+                font-size: 0.8rem;
             }
         }
         @media (max-width: 480px) {
@@ -892,6 +974,12 @@
         .pagination button:disabled {
             opacity: 0.4;
             pointer-events: none;
+        }
+
+        /* Autocomplete highlight */
+        .autocomplete-item .highlight {
+            font-weight: 700;
+            color: var(--primary);
         }
 
         @media (max-width: 768px) {
@@ -1453,6 +1541,23 @@
                     </div>
                 </div>
                 <div class="form-group">
+                    <label>Search Location</label>
+                    <div class="autocomplete-container">
+                        <input type="text" id="location-search" placeholder="Search for a location to center the map..." />
+                        <div class="autocomplete-dropdown" id="autocomplete-dropdown">
+                            <div class="autocomplete-loading" style="display:none;">
+                                <i class="fa-solid fa-spinner fa-spin"></i> Searching...
+                            </div>
+                            <div class="autocomplete-empty" style="display:none;">
+                                No locations found
+                            </div>
+                        </div>
+                    </div>
+                    <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">
+                        <i class="fa-regular fa-info-circle"></i> Search for a location to center the map, or zoom manually.
+                    </div>
+                </div>
+                <div class="form-group">
                     <label>Draw the delivery area on the map below *</label>
                     <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px;">
                         <i class="fa-regular fa-circle-info"></i> Use the polygon tool (<i class="fa-regular fa-draw-polygon"></i>) to draw the area. Double-click to finish.
@@ -1528,6 +1633,10 @@
             let areaMapLayers = [];
             let areaEditId = null;
 
+            // ─── AUTOCOMPLETE STATE ───
+            let autocompleteTimeout = null;
+            let isAutocompleteActive = false;
+
             // ─── DOM REFS ───
             const tabs = document.querySelectorAll('#admin-tabs button');
             const panels = {
@@ -1598,6 +1707,10 @@
             const polygonStatus = document.getElementById('polygon-status');
             const areaCount = document.getElementById('area-count');
             const areasBody = document.getElementById('areas-table-body');
+
+            // ─── AUTOCOMPLETE DOM REFS ───
+            const locationSearch = document.getElementById('location-search');
+            const autocompleteDropdown = document.getElementById('autocomplete-dropdown');
 
             // ─── FETCH HELPERS ───
             async function fetchJSON(url, options = {}) {
@@ -1969,6 +2082,87 @@
                 }
             }
 
+            // ─── AUTOCOMPLETE ───
+            async function searchLocations(query) {
+                if (!query || query.length < 2) {
+                    autocompleteDropdown.classList.remove('show');
+                    return;
+                }
+
+                const loadingEl = autocompleteDropdown.querySelector('.autocomplete-loading');
+                const emptyEl = autocompleteDropdown.querySelector('.autocomplete-empty');
+                loadingEl.style.display = 'block';
+                emptyEl.style.display = 'none';
+                autocompleteDropdown.classList.add('show');
+
+                try {
+                    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=8&addressdetails=1`;
+                    const response = await fetch(url, {
+                        headers: { 'User-Agent': 'HotPortionGrill/1.0' }
+                    });
+
+                    if (!response.ok) throw new Error('Search failed');
+
+                    const data = await response.json();
+                    loadingEl.style.display = 'none';
+
+                    // Remove old results (keep loading and empty elements)
+                    const items = autocompleteDropdown.querySelectorAll('.autocomplete-item');
+                    items.forEach(el => el.remove());
+
+                    if (!data || data.length === 0) {
+                        emptyEl.style.display = 'block';
+                        return;
+                    }
+
+                    emptyEl.style.display = 'none';
+
+                    data.forEach(result => {
+                        const item = document.createElement('div');
+                        item.className = 'autocomplete-item';
+
+                        const displayName = result.display_name || result.name || 'Unknown location';
+                        const subText = result.address ? 
+                            `${result.address.city || result.address.town || result.address.village || ''}, ${result.address.country || ''}` : 
+                            '';
+
+                        item.innerHTML = `
+                            <span>${highlightText(displayName, query)}</span>
+                            ${subText ? `<span class="sub-text">${highlightText(subText, query)}</span>` : ''}
+                        `;
+
+                        item.addEventListener('click', function() {
+                            const lat = parseFloat(result.lat);
+                            const lng = parseFloat(result.lon);
+                            if (areaMapModal && !isNaN(lat) && !isNaN(lng)) {
+                                areaMapModal.setView([lat, lng], 14);
+                                // Add a temporary marker to show the location
+                                const marker = L.marker([lat, lng]).addTo(areaMapModal);
+                                setTimeout(() => {
+                                    areaMapModal.removeLayer(marker);
+                                }, 5000);
+                            }
+                            locationSearch.value = displayName;
+                            autocompleteDropdown.classList.remove('show');
+                        });
+
+                        autocompleteDropdown.appendChild(item);
+                    });
+
+                } catch (err) {
+                    console.warn('Autocomplete error:', err);
+                    loadingEl.style.display = 'none';
+                    emptyEl.style.display = 'block';
+                    emptyEl.textContent = 'Error searching locations';
+                }
+            }
+
+            function highlightText(text, query) {
+                if (!query || !text) return text;
+                const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+                return text.replace(regex, '<span class="highlight">$1</span>');
+            }
+
             // ─── AREA CRUD ───
             function openAreaModal(areaIdToEdit = null) {
                 areaEditId = areaIdToEdit;
@@ -1977,6 +2171,8 @@
                 form.reset();
                 polygonStatus.textContent = 'None';
                 polygonStatus.style.color = 'var(--text-dark)';
+                locationSearch.value = '';
+                autocompleteDropdown.classList.remove('show');
 
                 // Reset map
                 if (areaMapModal) {
@@ -2039,6 +2235,7 @@
                     areaEditLayer = null;
                 }
                 areaEditId = null;
+                autocompleteDropdown.classList.remove('show');
             }
 
             async function saveArea(e) {
@@ -3136,6 +3333,43 @@
             areaForm.addEventListener('submit', saveArea);
             areaModal.addEventListener('click', (e) => { if (e.target === areaModal) closeAreaModal(); });
 
+            // ─── AUTOCOMPLETE EVENT LISTENERS ───
+            locationSearch.addEventListener('input', function() {
+                clearTimeout(autocompleteTimeout);
+                const query = this.value.trim();
+                if (query.length < 2) {
+                    autocompleteDropdown.classList.remove('show');
+                    return;
+                }
+                autocompleteTimeout = setTimeout(() => {
+                    searchLocations(query);
+                }, 300);
+            });
+
+            locationSearch.addEventListener('focus', function() {
+                if (this.value.trim().length >= 2) {
+                    autocompleteDropdown.classList.add('show');
+                }
+            });
+
+            locationSearch.addEventListener('blur', function() {
+                setTimeout(() => {
+                    autocompleteDropdown.classList.remove('show');
+                }, 200);
+            });
+
+            locationSearch.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    autocompleteDropdown.classList.remove('show');
+                }
+                if (e.key === 'Enter') {
+                    const firstItem = autocompleteDropdown.querySelector('.autocomplete-item');
+                    if (firstItem) {
+                        firstItem.click();
+                    }
+                }
+            });
+
             // ─── KEYBOARD SHORTCUTS ───
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
@@ -3145,6 +3379,7 @@
                     if (bannerModal.classList.contains('open')) closeBannerModal();
                     if (bannerPreviewModal.classList.contains('open')) bannerPreviewModal.classList.remove('open');
                     if (areaModal.classList.contains('open')) closeAreaModal();
+                    if (autocompleteDropdown.classList.contains('show')) autocompleteDropdown.classList.remove('show');
                 }
             });
 
@@ -3167,7 +3402,7 @@
             console.log('📦 Hot Portion Admin Panel loaded');
             console.log('🔧 API endpoints: /api/products, /api/categories, /api/orders, /api/stats, /api/v1/banners, /api/top-products, /api/delivery-areas');
             console.log('🔄 Optimized order polling active (every 30s)');
-            console.log('🗺️ Delivery Areas management with Leaflet map loaded');
+            console.log('🗺️ Delivery Areas management with Leaflet map and autocomplete loaded');
 
         })();
     </script>
