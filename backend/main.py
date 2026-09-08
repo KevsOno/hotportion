@@ -1940,7 +1940,7 @@ async def delete_delivery_rule(rule_id: int):
 @app.get("/api/admin/peak-settings", response_model=List[DeliveryPeakSetting])
 async def get_peak_settings():
     db = get_supabase()
-    result = await execute_db(db.table("delivery_peak_settings").select("*").order("day_of_week", nulls_last=True))
+    result = await execute_db(db.table("delivery_peak_settings").select("*").order("day_of_week"))
     return result.data
 
 @app.get("/api/admin/peak-settings/{setting_id}", response_model=DeliveryPeakSetting)
