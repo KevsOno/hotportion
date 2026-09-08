@@ -1273,6 +1273,54 @@
         .checkout-form .delivery-options button:hover {
             border-color: var(--primary);
         }
+
+        /* ─── DELIVERY FEE BREAKDOWN ─── */
+        .delivery-breakdown {
+            background: #f8faf8;
+            border-radius: var(--radius-sm);
+            padding: 10px 14px;
+            margin-top: 6px;
+            font-size: 0.75rem;
+            display: none;
+            border: 1px solid #e2e8e6;
+        }
+        .delivery-breakdown.show {
+            display: block;
+        }
+        .delivery-breakdown .breakdown-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 2px 0;
+            color: var(--text-muted);
+        }
+        .delivery-breakdown .breakdown-row .value {
+            font-weight: 600;
+            color: var(--text-dark);
+        }
+        .delivery-breakdown .breakdown-row .value.positive {
+            color: var(--primary);
+        }
+        .delivery-breakdown .breakdown-row .value.negative {
+            color: #2d7d46;
+        }
+        .delivery-breakdown .breakdown-divider {
+            border: 0;
+            height: 1px;
+            background: #e2e8e6;
+            margin: 4px 0;
+        }
+        .delivery-breakdown .breakdown-total {
+            font-weight: 700;
+            font-size: 0.85rem;
+            color: var(--text-dark);
+            padding-top: 4px;
+            border-top: 2px solid var(--primary);
+            margin-top: 4px;
+        }
+        .delivery-breakdown .breakdown-total .value {
+            color: var(--primary);
+        }
+
         .checkout-form .delivery-fee-display {
             font-size: 0.8rem;
             color: var(--text-muted);
@@ -1282,6 +1330,18 @@
             font-weight: 700;
             color: var(--text-dark);
         }
+        .checkout-form .delivery-fee-display .fee-breakdown-toggle {
+            color: var(--primary);
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.7rem;
+            margin-left: 6px;
+            text-decoration: underline;
+        }
+        .checkout-form .delivery-fee-display .fee-breakdown-toggle:hover {
+            color: var(--primary-dark);
+        }
+
         .cart-footer {
             padding: 12px 24px 24px 24px;
             border-top: 1px solid rgba(0, 0, 0, 0.06);
@@ -2402,7 +2462,38 @@
                         </div>
                     </div>
                     <div class="delivery-status" id="delivery-status"></div>
-                    <div class="delivery-fee-display" id="delivery-fee-display">Delivery fee: <span>₦0</span></div>
+                    <div class="delivery-fee-display" id="delivery-fee-display">
+                        Delivery fee: <span>₦0</span>
+                        <span class="fee-breakdown-toggle" id="fee-breakdown-toggle">Show breakdown</span>
+                    </div>
+                    <!-- Delivery Fee Breakdown -->
+                    <div class="delivery-breakdown" id="delivery-breakdown">
+                        <div class="breakdown-row">
+                            <span>Base Fee</span>
+                            <span class="value" id="breakdown-base">₦0</span>
+                        </div>
+                        <div class="breakdown-row">
+                            <span>Value Discount</span>
+                            <span class="value negative" id="breakdown-discount">-₦0</span>
+                        </div>
+                        <div class="breakdown-row">
+                            <span>Item Surcharge</span>
+                            <span class="value positive" id="breakdown-surcharge">+₦0</span>
+                        </div>
+                        <div class="breakdown-row">
+                            <span>Peak Surcharge</span>
+                            <span class="value positive" id="breakdown-peak">+₦0</span>
+                        </div>
+                        <div class="breakdown-row">
+                            <span>Loyalty Discount</span>
+                            <span class="value negative" id="breakdown-loyalty">-₦0</span>
+                        </div>
+                        <hr class="breakdown-divider">
+                        <div class="breakdown-row breakdown-total">
+                            <span>Total Fee</span>
+                            <span class="value" id="breakdown-total">₦0</span>
+                        </div>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label for="customer-name">Full Name *</label>
@@ -2568,6 +2659,7 @@
             let isDeliveryCovered = false;
             let isCheckingDelivery = false;
             let lastCheckedAddress = '';
+            let lastBreakdown = null;
 
             // ─── Autocomplete State ───
             let addressAutocompleteTimeout = null;
@@ -2610,6 +2702,16 @@
             const preferredTime = document.getElementById('preferred-time');
             const orderNotes = document.getElementById('order-notes');
             const deliveryFeeRow = document.getElementById('delivery-fee-row');
+            const feeBreakdownToggle = document.getElementById('fee-breakdown-toggle');
+            const deliveryBreakdown = document.getElementById('delivery-breakdown');
+
+            // Breakdown elements
+            const breakdownBase = document.getElementById('breakdown-base');
+            const breakdownDiscount = document.getElementById('breakdown-discount');
+            const breakdownSurcharge = document.getElementById('breakdown-surcharge');
+            const breakdownPeak = document.getElementById('breakdown-peak');
+            const breakdownLoyalty = document.getElementById('breakdown-loyalty');
+            const breakdownTotal = document.getElementById('breakdown-total');
 
             const receiptOverlay = document.getElementById('receipt-overlay');
             const receiptModal = document.getElementById('receipt-modal');
@@ -2765,6 +2867,17 @@
                 return data.display_name;
             }
 
+            // ─── Get cart items for delivery calculation ───
+            function getCartItemsForDelivery() {
+                return Object.values(cart).map(item => ({
+                    product_id: parseInt(item.id),
+                    qty: item.qty,
+                    name: item.name,
+                    price: item.price
+                }));
+            }
+
+            // ─── Check delivery coverage with full intelligent fee ───
             async function checkDeliveryCoverage(address) {
                 if (!address || address.trim().length < 5) {
                     return { covered: false, error: 'Please enter a full address' };
@@ -2773,11 +2886,19 @@
                 isCheckingDelivery = true;
                 updateDeliveryStatus('loading', 'Checking delivery availability...');
 
+                const items = getCartItemsForDelivery();
+                const email = customerEmail.value.trim();
+
                 try {
                     const response = await fetch('/api/delivery-fee', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ address: address.trim() })
+                        body: JSON.stringify({
+                            address: address.trim(),
+                            items: items,
+                            order_total: cartTotalPrice,
+                            customer_email: email || undefined
+                        })
                     });
 
                     if (!response.ok) {
@@ -2832,18 +2953,47 @@
                 });
             }
 
+            // ─── Update delivery breakdown UI ───
+            function updateBreakdownUI(breakdown) {
+                if (!breakdown) {
+                    deliveryBreakdown.classList.remove('show');
+                    return;
+                }
+
+                breakdownBase.textContent = formatPrice(breakdown.base || 0);
+                breakdownDiscount.textContent = `-${formatPrice(Math.abs(breakdown.value_discount || 0))}`;
+                breakdownSurcharge.textContent = `+${formatPrice(breakdown.item_surcharge || 0)}`;
+                breakdownPeak.textContent = `+${formatPrice(breakdown.peak_surcharge || 0)}`;
+                breakdownLoyalty.textContent = `-${formatPrice(Math.abs(breakdown.loyalty_discount || 0))}`;
+                breakdownTotal.textContent = formatPrice(breakdown.final || 0);
+
+                // Only show breakdown if there are adjustments
+                const hasAdjustments = breakdown.value_discount > 0 || 
+                                      breakdown.item_surcharge > 0 || 
+                                      breakdown.peak_surcharge > 0 || 
+                                      breakdown.loyalty_discount > 0;
+                
+                if (hasAdjustments) {
+                    deliveryBreakdown.classList.add('show');
+                } else {
+                    deliveryBreakdown.classList.remove('show');
+                }
+            }
+
             // ─── DELIVERY ADDRESS HANDLER ───
             let deliveryDebounceTimer = null;
 
             async function handleDeliveryAddressChange() {
                 const address = deliveryAddress.value.trim();
 
-                // Don't check if address is too short or same as last checked
+                // Don't check if address is too short
                 if (address.length < 5) {
                     resetDeliveryStatus();
                     return;
                 }
-                if (address === lastCheckedAddress && isDeliveryCovered) {
+
+                // Don't re-check if address hasn't changed and we already have a valid fee
+                if (address === lastCheckedAddress && isDeliveryCovered && lastBreakdown) {
                     return;
                 }
 
@@ -2853,6 +3003,7 @@
                 if (result.fallback) {
                     deliveryFee = result.fee;
                     isDeliveryCovered = true;
+                    lastBreakdown = null;
                     updateDeliveryStatus('covered', '⚠️ Using estimated delivery fee (service temporarily unavailable)');
                     updateDeliveryFeeUI(deliveryFee);
                     showToast('Delivery service is experiencing issues. Using estimated fee.', 'fa-solid fa-triangle-exclamation');
@@ -2860,16 +3011,25 @@
                 }
 
                 if (result.covered) {
-                    deliveryFee = result.fee || 0;
+                    deliveryFee = result.total_fee || result.fee || 0;
                     isDeliveryCovered = true;
+                    lastBreakdown = result.breakdown || null;
+                    
                     const areaMsg = result.area_name ? ` (${result.area_name})` : '';
                     updateDeliveryStatus('covered', `✅ We deliver to your area! Fee: ${formatPrice(deliveryFee)}${areaMsg}`);
                     updateDeliveryFeeUI(deliveryFee);
+                    
+                    // Update breakdown if available
+                    if (lastBreakdown) {
+                        updateBreakdownUI(lastBreakdown);
+                    }
                 } else {
                     deliveryFee = 0;
                     isDeliveryCovered = false;
+                    lastBreakdown = null;
                     updateDeliveryStatus('not-covered', result.message || '❌ Sorry, we don\'t deliver to this area yet.');
                     updateDeliveryFeeUI(0);
+                    deliveryBreakdown.classList.remove('show');
                 }
             }
 
@@ -2883,11 +3043,24 @@
                 deliveryStatus.textContent = '';
                 isDeliveryCovered = false;
                 deliveryFee = 0;
+                lastBreakdown = null;
                 updateDeliveryFeeUI(0);
+                deliveryBreakdown.classList.remove('show');
             }
 
             function updateDeliveryFeeUI(fee) {
-                deliveryFeeDisplay.innerHTML = `Delivery fee: <span>${formatPrice(fee)}</span>`;
+                deliveryFeeDisplay.innerHTML = `Delivery fee: <span>${formatPrice(fee)}</span>
+                    <span class="fee-breakdown-toggle" id="fee-breakdown-toggle">Show breakdown</span>`;
+                
+                // Re-attach toggle event
+                const newToggle = document.getElementById('fee-breakdown-toggle');
+                if (newToggle) {
+                    newToggle.addEventListener('click', function() {
+                        deliveryBreakdown.classList.toggle('show');
+                        this.textContent = deliveryBreakdown.classList.contains('show') ? 'Hide breakdown' : 'Show breakdown';
+                    });
+                }
+                
                 updateCartUI();
             }
 
@@ -2946,56 +3119,56 @@
             // ─── FALLBACK: hardcoded products ───
             function getFallbackProducts() {
                 return [
-                    { id: 'burg1', name: 'Burger', description: 'Classic beef burger with lettuce, tomato, cheese & sauce.',
+                    { id: 1, name: 'Burger', description: 'Classic beef burger with lettuce, tomato, cheese & sauce.',
                         price: 4500, emoji: '🍔', tag: 'Burgers', tagColor: 'primary',
                         image: netlifyImageUrl('burger.webp', 400) },
-                    { id: 'burg2', name: 'Shawarma', description: 'Spiced meat wrapped in flatbread with veggies & garlic sauce.',
+                    { id: 2, name: 'Shawarma', description: 'Spiced meat wrapped in flatbread with veggies & garlic sauce.',
                         price: 4500, emoji: '🌯', tag: 'Burgers', tagColor: 'primary',
                         image: netlifyImageUrl('shawarma.webp', 400) },
-                    { id: 'burg3', name: 'Hot Dog', description: 'Grilled sausage in a bun with ketchup, mustard & onions.',
+                    { id: 3, name: 'Hot Dog', description: 'Grilled sausage in a bun with ketchup, mustard & onions.',
                         price: 2500, emoji: '🌭', tag: 'Burgers', tagColor: 'primary',
                         image: netlifyImageUrl('hot-dog.webp', 400) },
-                    { id: 'rice1', name: 'Jollof Rice + Chicken', description: 'Classic tomato rice with grilled chicken.',
+                    { id: 4, name: 'Jollof Rice + Chicken', description: 'Classic tomato rice with grilled chicken.',
                         price: 5500, emoji: '🍛', tag: 'Rice Dishes', tagColor: 'primary',
                         image: netlifyImageUrl('jollof-rice-chicken.webp', 400) },
-                    { id: 'rice2', name: 'Jollof Rice + Beef', description: 'Classic tomato rice with tender beef.',
+                    { id: 5, name: 'Jollof Rice + Beef', description: 'Classic tomato rice with tender beef.',
                         price: 4500, emoji: '🍛', tag: 'Rice Dishes', tagColor: 'primary',
                         image: netlifyImageUrl('jollof-rice-beef.webp', 400) },
-                    { id: 'rice3', name: 'Jollof Rice + Turkey', description: 'Classic tomato rice with succulent turkey.',
+                    { id: 6, name: 'Jollof Rice + Turkey', description: 'Classic tomato rice with succulent turkey.',
                         price: 7500, emoji: '🍛', tag: 'Rice Dishes', tagColor: 'primary',
                         image: netlifyImageUrl('jollof-rice-turkey.webp', 400) },
-                    { id: 'soup1', name: 'Pounded Yam + Egusi', description: 'Smooth pounded yam with melon seed soup & meat.',
+                    { id: 7, name: 'Pounded Yam + Egusi', description: 'Smooth pounded yam with melon seed soup & meat.',
                         price: 6000, emoji: '🍲', tag: 'Swallow & Soups', tagColor: 'primary',
                         image: netlifyImageUrl('pounded-yam-egusi.webp', 400) },
-                    { id: 'soup2', name: 'Eba + Egusi Soup', description: 'Eba with melon seed soup and assorted meat.',
+                    { id: 8, name: 'Eba + Egusi Soup', description: 'Eba with melon seed soup and assorted meat.',
                         price: 5000, emoji: '🍲', tag: 'Swallow & Soups', tagColor: 'primary',
                         image: netlifyImageUrl('eba-egusi.webp', 400) },
-                    { id: 'spec1', name: 'Nkwobi', description: 'Traditional Igbo cow leg delicacy in rich palm oil sauce.',
+                    { id: 9, name: 'Nkwobi', description: 'Traditional Igbo cow leg delicacy in rich palm oil sauce.',
                         price: 5500, emoji: '🍖', tag: 'Specialties', tagColor: 'orange',
                         image: netlifyImageUrl('nkwobi.webp', 400) },
-                    { id: 'spec2', name: 'Isi Ewu', description: 'Spicy goat head delicacy with palm oil and herbs.',
+                    { id: 10, name: 'Isi Ewu', description: 'Spicy goat head delicacy with palm oil and herbs.',
                         price: 6500, emoji: '🍖', tag: 'Specialties', tagColor: 'orange',
                         image: netlifyImageUrl('isi-ewu.webp', 400) },
-                    { id: 'grill1', name: 'Suya (Beef) – 5 sticks',
+                    { id: 11, name: 'Suya (Beef) – 5 sticks',
                         description: 'Spicy grilled beef skewers with onions & pepper.', price: 3500, emoji: '🥩',
                         tag: 'Grilled & Roast', tagColor: 'orange', image: netlifyImageUrl('beef-suya.webp', 400) },
-                    { id: 'grill2', name: 'Kilishi (Beef Jerky)', description: 'Dried spicy beef strips – perfect snack.',
+                    { id: 12, name: 'Kilishi (Beef Jerky)', description: 'Dried spicy beef strips – perfect snack.',
                         price: 4500, emoji: '🥩', tag: 'Grilled & Roast', tagColor: 'orange',
                         image: netlifyImageUrl('kilishi.webp', 400) },
-                    { id: 'bip1', name: 'Beans Porridge', description: 'Rich bean porridge with spices and palm oil.',
+                    { id: 13, name: 'Beans Porridge', description: 'Rich bean porridge with spices and palm oil.',
                         price: 4000, emoji: '🍛', tag: 'Beans, Yam & Plantain', tagColor: 'primary',
                         image: netlifyImageUrl('beans-porridge.webp', 400) },
-                    { id: 'bip2', name: 'Beans + Plantain', description: 'Beans porridge served with fried plantain.',
+                    { id: 14, name: 'Beans + Plantain', description: 'Beans porridge served with fried plantain.',
                         price: 4500, emoji: '🍛', tag: 'Beans, Yam & Plantain', tagColor: 'primary',
                         image: netlifyImageUrl('beans-plantain.webp', 400) },
-                    { id: 'snk1', name: 'Moi Moi', description: 'Steamed bean pudding with fish and eggs.', price: 2500,
+                    { id: 15, name: 'Moi Moi', description: 'Steamed bean pudding with fish and eggs.', price: 2500,
                         emoji: '🍮', tag: 'Snacks', tagColor: 'orange', image: netlifyImageUrl('moi-moi.webp', 400) },
-                    { id: 'snk2', name: 'Akara (Fried Bean Cake)', description: 'Crispy fried bean cakes.', price: 2000,
+                    { id: 16, name: 'Akara (Fried Bean Cake)', description: 'Crispy fried bean cakes.', price: 2000,
                         emoji: '🍘', tag: 'Snacks', tagColor: 'orange', image: netlifyImageUrl('akara.webp', 400) },
-                    { id: 'bev1', name: 'Zobo Drink – 500ml', description: 'Hibiscus drink with ginger and pineapple.',
+                    { id: 17, name: 'Zobo Drink – 500ml', description: 'Hibiscus drink with ginger and pineapple.',
                         price: 800, emoji: '🍹', tag: 'Beverages', tagColor: 'primary',
                         image: netlifyImageUrl('zobo-drink.webp', 400) },
-                    { id: 'bev2', name: 'Fresh Coconut Water', description: 'Pure coconut water, chilled.', price: 700,
+                    { id: 18, name: 'Fresh Coconut Water', description: 'Pure coconut water, chilled.', price: 700,
                         emoji: '🥥', tag: 'Beverages', tagColor: 'primary',
                         image: netlifyImageUrl('coconut-water.webp', 400) },
                 ];
@@ -3391,6 +3564,10 @@
                     cart[productId] = { ...product, qty: qty };
                 }
                 updateCartUI();
+                // Recalculate delivery fee if delivery is selected and address is set
+                if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
+                    handleDeliveryAddressChange();
+                }
                 showToast(`${product.name} added to cart!`, 'fa-solid fa-check-circle');
             }
 
@@ -3398,6 +3575,10 @@
                 if (cart[productId]) {
                     delete cart[productId];
                     updateCartUI();
+                    // Recalculate delivery fee if delivery is selected
+                    if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
+                        handleDeliveryAddressChange();
+                    }
                 }
             }
 
@@ -3409,6 +3590,10 @@
                 } else {
                     cart[productId].qty = newQty;
                     updateCartUI();
+                    // Recalculate delivery fee if delivery is selected
+                    if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
+                        handleDeliveryAddressChange();
+                    }
                 }
             }
 
@@ -3543,9 +3728,11 @@
                     deliveryAddress.required = false;
                     isDeliveryCovered = false;
                     deliveryFee = 0;
+                    lastBreakdown = null;
                     resetDeliveryStatus();
                     updateDeliveryFeeUI(0);
                     deliveryFeeRow.style.display = 'none';
+                    deliveryBreakdown.classList.remove('show');
                 }
                 updateCartUI();
                 updateCheckoutButton();
@@ -3620,9 +3807,11 @@
                 preferredTime.value = '';
                 isDeliveryCovered = false;
                 deliveryFee = 0;
+                lastBreakdown = null;
                 resetDeliveryStatus();
                 updateDeliveryFeeUI(0);
                 deliveryFeeRow.style.display = 'none';
+                deliveryBreakdown.classList.remove('show');
                 showToast('✅ Order placed successfully!', 'fa-solid fa-check-circle');
                 refreshProducts();
             }
@@ -3741,6 +3930,11 @@
                     delivery_fee: finalDeliveryFee,
                     items: items.map(i => ({ name: i.name, qty: i.qty, price: i.price, product_id: i.id }))
                 };
+
+                // Include breakdown if available for record keeping
+                if (lastBreakdown && deliveryMethod === 'delivery') {
+                    orderPayload.delivery_breakdown = lastBreakdown;
+                }
 
                 const btn = checkoutBtn;
                 const originalText = btn.innerHTML;
@@ -3972,6 +4166,10 @@
                 cartOverlay.classList.add('open');
                 document.body.style.overflow = 'hidden';
                 updateCheckoutButton();
+                // Refresh delivery fee if needed
+                if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
+                    handleDeliveryAddressChange();
+                }
             }
 
             function closeCart() {
@@ -4028,7 +4226,9 @@
                 if (query.length < 5) {
                     resetDeliveryStatus();
                     deliveryFee = 0;
+                    lastBreakdown = null;
                     updateDeliveryFeeUI(0);
+                    deliveryBreakdown.classList.remove('show');
                     updateCartUI();
                     updateCheckoutButton();
                     return;
@@ -4060,12 +4260,26 @@
                 }
             });
 
+            // ─── FEE BREAKDOWN TOGGLE ───
+            feeBreakdownToggle.addEventListener('click', function() {
+                deliveryBreakdown.classList.toggle('show');
+                this.textContent = deliveryBreakdown.classList.contains('show') ? 'Hide breakdown' : 'Show breakdown';
+            });
+
             // ─── GPS BUTTON ───
             gpsBtn.addEventListener('click', handleGPSButton);
 
             // ─── FORM INPUTS FOR CHECKOUT BUTTON STATE ───
             [customerName, customerEmail, customerPhone].forEach(input => {
                 input.addEventListener('input', updateCheckoutButton);
+            });
+
+            // ─── Recalculate delivery fee when email changes (for loyalty) ───
+            customerEmail.addEventListener('input', function() {
+                if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
+                    clearTimeout(deliveryDebounceTimer);
+                    deliveryDebounceTimer = setTimeout(handleDeliveryAddressChange, 500);
+                }
             });
 
             chatLauncher.addEventListener('click', toggleChat);
@@ -4139,7 +4353,8 @@
             // ─── BOOT ───
             initData().then(() => {
                 console.log('🚀 Hot Portion Grill ready!');
-                console.log('📍 Delivery coverage with address autocomplete active');
+                console.log('📍 Delivery coverage with intelligent fee calculation');
+                console.log('📊 Fee breakdown includes: base + discounts + surcharges');
             });
 
             console.log('📱 Bottom nav: Home, Menu, Chat, Cart (mobile only)');
@@ -4148,6 +4363,7 @@
             console.log('🎠 Hero slider dynamic – loaded from backend');
             console.log('🖼️ All images served via Netlify Image CDN');
             console.log('🔍 Address autocomplete using Nominatim (OpenStreetMap)');
+            console.log('💰 Intelligent delivery fee with breakdown display');
 
         })();
     </script>
