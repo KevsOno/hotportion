@@ -2759,7 +2759,7 @@
                 }));
             }
 
-            // ─── FIXED: Check delivery coverage with full intelligent fee ───
+            // ─── Check delivery coverage with full intelligent fee ───
             async function checkDeliveryCoverage(address) {
                 if (!address || address.trim().length < 5) {
                     return { covered: false, error: 'Please enter a full address' };
@@ -2772,7 +2772,6 @@
                 const email = customerEmail.value.trim();
 
                 try {
-                    // Build the exact payload the backend expects
                     const payload = {
                         address: address.trim(),
                         items: items.map(item => ({
@@ -2789,9 +2788,7 @@
 
                     const response = await fetch('/api/delivery-fee', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
+                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
                     });
 
@@ -2932,7 +2929,11 @@
                     return;
                 }
 
+                // Always recalculate if address changed OR cart changed
+                // We'll force recalculation by clearing lastCheckedAddress when cart changes
                 if (address === lastCheckedAddress && isDeliveryCovered && lastBreakdown) {
+                    // But if the cart total changed, we need to recalculate
+                    // This is handled by clearing lastCheckedAddress in cart operations
                     return;
                 }
 
@@ -3077,14 +3078,11 @@
                             ${subText ? `<span class="sub-text">${highlightText(subText, query)}</span>` : ''}
                         `;
 
-                        // FIX: Use mousedown instead of click to prevent blur from hiding the dropdown
                         item.addEventListener('mousedown', function(e) {
-                            e.preventDefault(); // Prevent blur
+                            e.preventDefault();
                             const fullAddress = result.display_name || result.name || '';
                             deliveryAddress.value = fullAddress;
-                            // Immediately hide dropdown
                             addressDropdown.classList.remove('show');
-                            // Trigger delivery check
                             deliveryAddress.dispatchEvent(new Event('input', { bubbles: true }));
                         });
 
@@ -3566,7 +3564,7 @@
                 }
             }
 
-            // ─── CART OPERATIONS ───
+            // ─── CART OPERATIONS (UPDATED WITH DELIVERY RECALCULATION) ───
             function addToCart(productId, qty = 1) {
                 const product = products.find(p => p.id == productId);
                 if (!product) return;
@@ -3576,8 +3574,12 @@
                     cart[productId] = { ...product, qty: qty };
                 }
                 updateCartUI();
+                // 🔄 Recalculate delivery fee if delivery is selected and address is set
                 if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
-                    handleDeliveryAddressChange();
+                    // Clear the last checked address to force recalculation
+                    lastCheckedAddress = '';
+                    // Use a small delay to ensure cart total is updated
+                    setTimeout(handleDeliveryAddressChange, 100);
                 }
                 showToast(`${product.name} added to cart!`, 'fa-solid fa-check-circle');
             }
@@ -3586,8 +3588,10 @@
                 if (cart[productId]) {
                     delete cart[productId];
                     updateCartUI();
+                    // 🔄 Recalculate delivery fee if delivery is selected
                     if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
-                        handleDeliveryAddressChange();
+                        lastCheckedAddress = '';
+                        setTimeout(handleDeliveryAddressChange, 100);
                     }
                 }
             }
@@ -3600,8 +3604,10 @@
                 } else {
                     cart[productId].qty = newQty;
                     updateCartUI();
+                    // 🔄 Recalculate delivery fee if delivery is selected
                     if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
-                        handleDeliveryAddressChange();
+                        lastCheckedAddress = '';
+                        setTimeout(handleDeliveryAddressChange, 100);
                     }
                 }
             }
@@ -4174,8 +4180,10 @@
                 cartOverlay.classList.add('open');
                 document.body.style.overflow = 'hidden';
                 updateCheckoutButton();
+                // 🔄 Refresh delivery fee when cart opens
                 if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
-                    handleDeliveryAddressChange();
+                    lastCheckedAddress = '';
+                    setTimeout(handleDeliveryAddressChange, 200);
                 }
             }
 
@@ -4247,7 +4255,6 @@
                 }
             });
 
-            // FIX: Use a longer delay for blur to allow click events to fire
             deliveryAddress.addEventListener('blur', function() {
                 setTimeout(() => {
                     addressDropdown.classList.remove('show');
@@ -4284,6 +4291,7 @@
             customerEmail.addEventListener('input', function() {
                 if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
                     clearTimeout(deliveryDebounceTimer);
+                    lastCheckedAddress = '';
                     deliveryDebounceTimer = setTimeout(handleDeliveryAddressChange, 500);
                 }
             });
@@ -4361,6 +4369,7 @@
                 console.log('🚀 Hot Portion Grill ready!');
                 console.log('📍 Delivery coverage with intelligent fee calculation');
                 console.log('📊 Fee breakdown includes: base + discounts + surcharges');
+                console.log('🔄 Delivery fee recalculates when cart changes');
             });
 
             console.log('📱 Bottom nav: Home, Menu, Chat, Cart (mobile only)');
