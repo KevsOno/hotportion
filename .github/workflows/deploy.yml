@@ -87,7 +87,7 @@ jobs:
       - name: Deploy Live Update to Capgo
         run: |
           cd frontend
-          npx @capgo/cli@7 upload --apikey ${{ secrets.CAPGO_TOKEN }} --channel production
+          npx @capgo/cli app:upload --apikey ${{ secrets.CAPGO_TOKEN }} --channel production
 
   # ─── 4. SEO PRE‑RENDERING ───
   prerender-seo:
@@ -120,7 +120,6 @@ jobs:
           npm run prerender
         env:
           BASE_URL: ${{ secrets.PRODUCTION_URL }}
-          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'false'
 
   # ─── 5. BUILD ANDROID RELEASE APK (via Capacitor) ───
   build-android:
@@ -191,12 +190,12 @@ jobs:
           }
           EOF
 
-      - name: Install dependencies
+      - name: Install dependencies with strict Capgo versioning
         run: |
           cd mobile
-          npm install -g @capacitor/cli
-          npm install @capacitor/android@^5.7.0 --ignore-scripts
-          npm install @capgo/capacitor-updater@^5.0.0 --ignore-scripts
+          npm install -g @capacitor/cli@5.7.0
+          npm install @capacitor/core@5.7.0 @capacitor/android@5.7.0 --save-exact --ignore-scripts
+          npm install @capgo/capacitor-updater@5.0.0 --save-exact --ignore-scripts
           npm install --ignore-scripts
 
       - name: Add Android platform
@@ -291,11 +290,12 @@ jobs:
           }
           EOF
 
-      - name: Install Capacitor and dependencies
+      - name: Install dependencies with strict Capgo versioning
         run: |
           cd mobile
-          npm install -g @capacitor/cli
-          npm install @capgo/capacitor-updater@^5.0.0 --ignore-scripts
+          npm install -g @capacitor/cli@5.7.0
+          npm install @capacitor/core@5.7.0 @capacitor/ios@5.7.0 --save-exact --ignore-scripts
+          npm install @capgo/capacitor-updater@5.0.0 --save-exact --ignore-scripts
           npm install --ignore-scripts
 
       - name: Add iOS platform
@@ -304,11 +304,10 @@ jobs:
           rm -rf ios
           npx cap add ios
 
-      - name: Configure iOS Deployment Target
+      - name: Sync iOS project & Install CocoaPods
         run: |
-          cd mobile/ios/App
-          sed -i '' "s/platform :ios, '.*'/platform :ios, '14.0'/g" Podfile
-          pod install --repo-update
+          cd mobile
+          npx cap sync ios
 
       - name: Build unsigned iOS archive
         run: |
