@@ -205,6 +205,7 @@ class OrderCreate(BaseModel):
 
 class OrderStatusUpdate(BaseModel):
     status: str
+    reason: Optional[str] = None   # For cancellation
 
 class BannerBase(BaseModel):
     title: str
@@ -1126,6 +1127,53 @@ async def calculate_intelligent_delivery_fee(
         }
     }
 
+# =============================================
+# STOCK MANAGEMENT HELPERS
+# =============================================
+
+async def reduce_order_stock(order: dict):
+    """Reduce stock for all items in an order."""
+    items = order.get("items", [])
+    for item in items:
+        product_id = item.get("product_id")
+        qty = item.get("qty", 0)
+        if product_id and qty > 0:
+            prod_result = await execute_db(
+                get_supabase().table("products").select("stock").eq("id", product_id)
+            )
+            if prod_result.data:
+                current_stock = prod_result.data[0].get("stock", 0)
+                new_stock = max(0, current_stock - qty)
+                await execute_db(
+                    get_supabase().table("products")
+                    .update({"stock": new_stock})
+                    .eq("id", product_id)
+                )
+                logger.info(f"Stock updated for product {product_id}: {current_stock} → {new_stock}")
+    invalidate_stats_cache()
+
+
+async def restore_order_stock(order: dict):
+    """Restore stock for all items in an order (for cancellations)."""
+    items = order.get("items", [])
+    for item in items:
+        product_id = item.get("product_id")
+        qty = item.get("qty", 0)
+        if product_id and qty > 0:
+            prod_result = await execute_db(
+                get_supabase().table("products").select("stock").eq("id", product_id)
+            )
+            if prod_result.data:
+                current_stock = prod_result.data[0].get("stock", 0)
+                new_stock = current_stock + qty
+                await execute_db(
+                    get_supabase().table("products")
+                    .update({"stock": new_stock})
+                    .eq("id", product_id)
+                )
+                logger.info(f"Stock restored for product {product_id}: {current_stock} → {new_stock}")
+    invalidate_stats_cache()
+
 # ---------- DATABASE SETUP ----------
 async def setup_database():
     db = get_supabase()
@@ -1134,7 +1182,8 @@ async def setup_database():
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS is_main_item BOOLEAN DEFAULT TRUE;",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS weight_kg DECIMAL(4,2) DEFAULT 0.5;",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS is_bulky BOOLEAN DEFAULT FALSE;",
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee INTEGER DEFAULT 0;"
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee INTEGER DEFAULT 0;",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;"
         ]
         for q in alter_queries:
             try:
@@ -1601,10 +1650,59 @@ async def create_order(order: OrderCreate, bg: BackgroundTasks):
 
 @app.patch("/api/orders/{oid}/status")
 async def update_order_status(oid: int, upd: OrderStatusUpdate):
-    r = await execute_db(get_supabase().table("orders").update({"status": upd.status}).eq("id", oid))
-    if not r.data:
-        raise HTTPException(404, "Not found")
-    return r.data[0]
+    # Fetch current order
+    order_result = await execute_db(get_supabase().table("orders").select("*").eq("id", oid))
+    if not order_result.data:
+        raise HTTPException(404, "Order not found")
+    order = order_result.data[0]
+    current_status = order.get("status")
+
+    # Prepare update payload
+    update_data = {"status": upd.status}
+    if upd.reason is not None:
+        update_data["cancellation_reason"] = upd.reason
+
+    # If status changes to "cancelled", restore stock
+    if upd.status == "cancelled" and current_status not in ("cancelled",):
+        await restore_order_stock(order)
+        logger.info(f"Stock restored for cancelled order {oid}")
+
+    # If status changes to "confirmed" or "paid" and wasn't already, reduce stock
+    if upd.status in ("confirmed", "paid") and current_status not in ("confirmed", "paid"):
+        await reduce_order_stock(order)
+
+    # Execute update
+    result = await execute_db(get_supabase().table("orders").update(update_data).eq("id", oid))
+    if not result.data:
+        raise HTTPException(404, "Order not found")
+    
+    # Invalidate cache after status change
+    invalidate_stats_cache()
+    
+    return result.data[0]
+
+@app.post("/api/orders/{oid}/confirm-offline")
+async def confirm_order_offline(oid: int):
+    """Confirm an order offline (e.g., from admin panel) and reduce stock."""
+    order_result = await execute_db(get_supabase().table("orders").select("*").eq("id", oid))
+    if not order_result.data:
+        raise HTTPException(404, "Order not found")
+    order = order_result.data[0]
+    
+    if order.get("status") in ("confirmed", "paid"):
+        raise HTTPException(400, "Order already confirmed")
+    
+    await reduce_order_stock(order)
+    
+    await execute_db(
+        get_supabase().table("orders")
+        .update({"status": "confirmed"})
+        .eq("id", oid)
+    )
+    
+    invalidate_stats_cache()
+    
+    return {"message": "Order confirmed offline", "status": "confirmed"}
 
 @app.get("/api/stats")
 async def get_stats():
@@ -1679,26 +1777,8 @@ async def monnify_webhook(
 
         order = order_result.data[0]
 
-        # Reduce stock for each item
-        items = order.get("items", [])
-        for item in items:
-            product_id = item.get("product_id")
-            qty = item.get("qty", 0)
-            if product_id and qty > 0:
-                prod_result = await execute_db(
-                    get_supabase().table("products").select("stock").eq("id", product_id)
-                )
-                if prod_result.data:
-                    current_stock = prod_result.data[0].get("stock", 0)
-                    new_stock = max(0, current_stock - qty)
-                    await execute_db(
-                        get_supabase().table("products")
-                        .update({"stock": new_stock})
-                        .eq("id", product_id)
-                    )
-                    logger.info(f"Stock updated for product {product_id}: {current_stock} → {new_stock}")
-
-        invalidate_stats_cache()
+        # Reduce stock for each item (using the helper function)
+        await reduce_order_stock(order)
 
         if order.get("status") != "paid":
             await execute_db(
