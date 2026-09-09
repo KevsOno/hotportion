@@ -87,7 +87,7 @@ jobs:
       - name: Deploy Live Update to Capgo
         run: |
           cd frontend
-          npx @capgo/cli bundle:upload --apikey ${{ secrets.CAPGO_TOKEN }} --channel production
+          npx @capgo/cli@7 upload --apikey ${{ secrets.CAPGO_TOKEN }} --channel production
 
   # ─── 4. SEO PRE‑RENDERING ───
   prerender-seo:
