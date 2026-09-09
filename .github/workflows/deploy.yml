@@ -101,12 +101,16 @@ jobs:
             "server": {
               "androidScheme": "https",
               "iosScheme": "https",
-              "allowNavigation": ["hotportion.netlify.app", "hotportiongrill.com"]
+              "allowNavigation": [
+                "hotportion.netlify.app",
+                "hotportiongrill.com",
+                "*.onrender.com"
+              ]
             },
             "android": {
               "allowMixedContent": true,
               "captureInput": true,
-              "webContentsDebuggingEnabled": false
+              "webContentsDebuggingEnabled": true
             },
             "ios": {
               "scheme": "HotPortion",
@@ -137,7 +141,7 @@ jobs:
       - name: Deploy Live Update to Capgo
         run: |
           cd mobile
-          npx capgo@latest bundle upload --apikey ${{ secrets.CAPGO_TOKEN }} --channel production --path ./frontend
+          npx @capgo/cli bundle upload --apikey ${{ secrets.CAPGO_TOKEN }} --channel production --path ./frontend
 
   # ─── 4. SEO PRE‑RENDERING ───
   prerender-seo:
@@ -207,12 +211,16 @@ jobs:
             "server": {
               "androidScheme": "https",
               "iosScheme": "https",
-              "allowNavigation": ["hotportion.netlify.app", "hotportiongrill.com"]
+              "allowNavigation": [
+                "hotportion.netlify.app",
+                "hotportiongrill.com",
+                "*.onrender.com"
+              ]
             },
             "android": {
               "allowMixedContent": true,
               "captureInput": true,
-              "webContentsDebuggingEnabled": false
+              "webContentsDebuggingEnabled": true
             },
             "ios": {
               "scheme": "HotPortion",
@@ -253,6 +261,14 @@ jobs:
           cd mobile
           rm -rf android
           npx cap add android
+
+      - name: Enable Network Permissions on Android
+        run: |
+          MANIFEST="mobile/android/app/src/main/AndroidManifest.xml"
+          if [ -f "$MANIFEST" ]; then
+            sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />' "$MANIFEST"
+            sed -i 's/<application/<application android:usesCleartextTraffic="true"/' "$MANIFEST"
+          fi
 
       - name: Sync Android project
         run: |
@@ -316,7 +332,11 @@ jobs:
             "server": {
               "androidScheme": "https",
               "iosScheme": "https",
-              "allowNavigation": ["hotportion.netlify.app"]
+              "allowNavigation": [
+                "hotportion.netlify.app",
+                "hotportiongrill.com",
+                "*.onrender.com"
+              ]
             },
             "ios": {
               "scheme": "HotPortion",
