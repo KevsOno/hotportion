@@ -936,6 +936,20 @@
             display: block;
             margin-top: 2px;
         }
+
+        .cancellation-reason {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            max-width: 200px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            cursor: help;
+        }
+        .cancellation-reason:hover {
+            white-space: normal;
+            overflow: visible;
+        }
     </style>
     <!-- ─── LEAFTET CDN ─── -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -1439,6 +1453,27 @@
         </div>
     </div>
 
+    <!-- ─── CANCEL ORDER MODAL ─── -->
+    <div class="modal-overlay" id="cancel-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Cancel Order</h3>
+                <button class="modal-close" id="cancel-modal-close">&times;</button>
+            </div>
+            <form id="cancel-form">
+                <input type="hidden" id="cancel-order-id" />
+                <div class="form-group">
+                    <label>Cancellation Reason *</label>
+                    <textarea id="cancel-reason" required placeholder="e.g. Customer requested, payment failed, inventory issue, etc."></textarea>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-outline" id="cancel-modal-cancel">Close</button>
+                    <button type="submit" class="btn btn-danger"><i class="fa-solid fa-ban"></i> Cancel Order</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- ─── BANNER MODAL ─── -->
     <div class="modal-overlay" id="banner-modal">
         <div class="modal" style="max-width: 800px;">
@@ -1888,6 +1923,7 @@
             let previousOrderCount = 0;
             let pollInterval = null;
             let lastPollTimestamp = null;
+            let cancelOrderId = null;
 
             // ─── AREAS STATE ───
             let deliveryAreas = [];
@@ -1978,6 +2014,12 @@
             const polygonStatus = document.getElementById('polygon-status');
             const areaCount = document.getElementById('area-count');
             const areasBody = document.getElementById('areas-table-body');
+
+            // ─── CANCEL MODAL DOM REFS ───
+            const cancelModal = document.getElementById('cancel-modal');
+            const cancelForm = document.getElementById('cancel-form');
+            const cancelOrderIdInput = document.getElementById('cancel-order-id');
+            const cancelReason = document.getElementById('cancel-reason');
 
             // ─── AUTOCOMPLETE DOM REFS ───
             const locationSearch = document.getElementById('location-search');
@@ -2658,7 +2700,7 @@
                 });
             }
 
-            // ─── RENDER ORDERS ───
+            // ─── RENDER ORDERS (UPDATED WITH CONFIRM AND CANCEL BUTTONS) ───
             function renderOrders() {
                 const search = orderSearch.value.toLowerCase().trim();
                 const dateFilter = orderDateFilter.value;
@@ -2685,6 +2727,11 @@
                 ordersBody.innerHTML = filtered.map(o => {
                     const itemCount = Array.isArray(o.items) ? o.items.reduce((sum, i) => sum + (i.qty || 0), 0) : 0;
                     const createdAt = o.created_at ? new Date(o.created_at).toLocaleString() : '-';
+                    const status = o.status || 'pending';
+                    const isCancelled = status === 'cancelled';
+                    const reason = o.cancellation_reason || '';
+                    const reasonHtml = reason ? `<span class="cancellation-reason" title="${reason}">📝 ${reason}</span>` : '';
+                    
                     return `
                         <tr>
                             <td><code style="background:#f0f0f0;padding:2px 8px;border-radius:4px;font-size:0.75rem;">${o.payment_reference || o.id}</code></td>
@@ -2692,21 +2739,95 @@
                             <td>${o.customer_phone || 'N/A'}</td>
                             <td>${itemCount} items</td>
                             <td>₦${Number(o.total || 0).toLocaleString()}</td>
-                            <td><span class="status-badge ${o.status || 'pending'}">${o.status || 'pending'}</span></td>
+                            <td>
+                                <span class="status-badge ${status}">${status}</span>
+                                ${reasonHtml}
+                            </td>
                             <td style="font-size:0.75rem;color:var(--text-muted);">${createdAt}</td>
                             <td style="text-align:right;">
-                                <button class="btn btn-primary btn-sm view-order" data-id="${o.id}"><i class="fa-regular fa-eye"></i></button>
-                                <button class="btn btn-sm ${o.status === 'completed' ? 'btn-success' : 'btn-outline'} update-order-status" data-id="${o.id}" data-status="${o.status || 'pending'}"><i class="fa-solid fa-rotate"></i></button>
+                                <div class="actions-cell" style="justify-content:flex-end;">
+                                    ${!isCancelled && status !== 'completed' ? `
+                                        <button class="btn btn-success btn-sm confirm-order" data-id="${o.id}">
+                                            <i class="fa-solid fa-check"></i> Confirm
+                                        </button>
+                                        <button class="btn btn-danger btn-sm cancel-order" data-id="${o.id}">
+                                            <i class="fa-solid fa-ban"></i> Cancel
+                                        </button>
+                                    ` : ''}
+                                    <button class="btn btn-primary btn-sm view-order" data-id="${o.id}">
+                                        <i class="fa-regular fa-eye"></i>
+                                    </button>
+                                </div>
                             </td>
                         </tr>
                     `;
                 }).join('');
+                
+                // ─── ATTACH EVENT LISTENERS ───
+                document.querySelectorAll('.confirm-order').forEach(btn => {
+                    btn.addEventListener('click', () => confirmOrder(btn.dataset.id));
+                });
+                document.querySelectorAll('.cancel-order').forEach(btn => {
+                    btn.addEventListener('click', () => openCancelModal(btn.dataset.id));
+                });
                 document.querySelectorAll('.view-order').forEach(btn => {
                     btn.addEventListener('click', () => viewOrder(btn.dataset.id));
                 });
-                document.querySelectorAll('.update-order-status').forEach(btn => {
-                    btn.addEventListener('click', () => updateOrderStatus(btn.dataset.id, btn.dataset.status));
-                });
+            }
+
+            // ─── CONFIRM ORDER (OFFLINE) ───
+            async function confirmOrder(id) {
+                if (!confirm('Confirm this order offline? Stock will be reduced.')) return;
+                try {
+                    const response = await fetch(`/api/orders/${id}/confirm-offline`, {
+                        method: 'POST',
+                    });
+                    if (!response.ok) throw new Error('Confirmation failed');
+                    showToast('Order confirmed offline! Stock updated.');
+                    await loadOrders();
+                    await loadStats();
+                } catch (err) {
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
+            }
+
+            // ─── CANCEL ORDER MODAL ───
+            function openCancelModal(orderId) {
+                cancelOrderId = orderId;
+                cancelOrderIdInput.value = orderId;
+                cancelReason.value = '';
+                cancelModal.classList.add('open');
+                setTimeout(() => cancelReason.focus(), 100);
+            }
+
+            function closeCancelModal() {
+                cancelModal.classList.remove('open');
+                cancelOrderId = null;
+            }
+
+            // ─── SUBMIT CANCEL ───
+            async function submitCancel(e) {
+                e.preventDefault();
+                const id = cancelOrderIdInput.value;
+                const reason = cancelReason.value.trim();
+                if (!reason) {
+                    showToast('Please provide a cancellation reason.', 'fa-solid fa-exclamation-circle');
+                    return;
+                }
+                try {
+                    const response = await fetch(`/api/orders/${id}/status`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ status: 'cancelled', reason: reason }),
+                    });
+                    if (!response.ok) throw new Error('Cancellation failed');
+                    showToast('Order cancelled.');
+                    closeCancelModal();
+                    await loadOrders();
+                    await loadStats();
+                } catch (err) {
+                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                }
             }
 
             // ─── RENDER TOP PRODUCTS ───
@@ -2957,6 +3078,10 @@
                             <span>₦${Number(item.price * item.qty).toLocaleString()}</span>
                         </div>
                     `).join('') || '<p style="color:var(--text-muted);">No items</p>';
+                    
+                    const reasonHtml = data.cancellation_reason ? 
+                        `<p><strong>Cancellation Reason:</strong> ${data.cancellation_reason}</p>` : '';
+                    
                     orderDetailBody.innerHTML = `
                         <div style="margin-bottom:16px;">
                             <p><strong>Order ID:</strong> <code>${data.payment_reference || data.id}</code></p>
@@ -2964,6 +3089,7 @@
                             <p><strong>Email:</strong> ${data.customer_email || 'N/A'}</p>
                             <p><strong>Phone:</strong> ${data.customer_phone || 'N/A'}</p>
                             <p><strong>Status:</strong> <span class="status-badge ${data.status || 'pending'}">${data.status || 'pending'}</span></p>
+                            ${reasonHtml}
                             <p><strong>Date:</strong> ${createdAt}</p>
                             ${data.delivery_method ? `<p><strong>Delivery Method:</strong> ${data.delivery_method}</p>` : ''}
                             ${data.delivery_address ? `<p><strong>Address:</strong> ${data.delivery_address}</p>` : ''}
@@ -2986,25 +3112,6 @@
                     orderModal.classList.add('open');
                 } catch (err) {
                     showToast('Error loading order: ' + err.message, 'fa-solid fa-exclamation-circle');
-                }
-            }
-
-            async function updateOrderStatus(id, currentStatus) {
-                const statuses = ['pending', 'confirmed', 'preparing', 'ready', 'completed', 'cancelled'];
-                const currentIdx = statuses.indexOf(currentStatus);
-                const nextIdx = (currentIdx + 1) % statuses.length;
-                const newStatus = statuses[nextIdx];
-                if (!confirm(`Change order status from "${currentStatus}" to "${newStatus}"?`)) return;
-                try {
-                    await fetchJSON(`${API.orders}/${id}/status`, {
-                        method: 'PATCH',
-                        body: JSON.stringify({ status: newStatus })
-                    });
-                    showToast(`Status updated to ${newStatus}`);
-                    await loadOrders();
-                    await loadStats();
-                } catch (err) {
-                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
                 }
             }
 
@@ -3893,6 +4000,12 @@
             document.getElementById('order-modal-close').addEventListener('click', closeOrderModal);
             orderModal.addEventListener('click', (e) => { if (e.target === orderModal) closeOrderModal(); });
 
+            // ─── CANCEL MODAL EVENTS ───
+            document.getElementById('cancel-modal-close').addEventListener('click', closeCancelModal);
+            document.getElementById('cancel-modal-cancel').addEventListener('click', closeCancelModal);
+            cancelForm.addEventListener('submit', submitCancel);
+            cancelModal.addEventListener('click', (e) => { if (e.target === cancelModal) closeCancelModal(); });
+
             // Refresh
             refreshBtn.addEventListener('click', () => {
                 showToast('Refreshing...', 'fa-solid fa-rotate fa-spin');
@@ -4044,6 +4157,7 @@
                     if (bannerModal.classList.contains('open')) closeBannerModal();
                     if (bannerPreviewModal.classList.contains('open')) bannerPreviewModal.classList.remove('open');
                     if (areaModal.classList.contains('open')) closeAreaModal();
+                    if (cancelModal.classList.contains('open')) closeCancelModal();
                     if (document.getElementById('value-rule-modal').classList.contains('open')) closeValueRuleModal();
                     if (document.getElementById('peak-setting-modal').classList.contains('open')) closePeakSettingModal();
                     if (document.getElementById('loyalty-setting-modal').classList.contains('open')) closeLoyaltySettingModal();
@@ -4071,6 +4185,7 @@
             console.log('🗺️ Delivery Areas management with Leaflet map and autocomplete loaded');
             console.log('📋 Delivery Rules management loaded');
             console.log('📦 Product delivery settings: is_main_item, weight_kg, is_bulky');
+            console.log('✅ Order management: Confirm offline and Cancel with reason');
 
         })();
     </script>
