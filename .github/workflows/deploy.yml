@@ -84,10 +84,60 @@ jobs:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
 
+      - name: Copy frontend assets to mobile/frontend
+        run: |
+          cd mobile
+          rm -rf frontend
+          cp -r ../frontend frontend/
+
+      - name: Create root Capacitor config
+        run: |
+          cd mobile
+          cat > capacitor.config.json << 'EOF'
+          {
+            "appId": "com.hotportion.grill",
+            "appName": "Hot Portion Grill",
+            "webDir": "frontend",
+            "server": {
+              "androidScheme": "https",
+              "iosScheme": "https",
+              "allowNavigation": ["hotportion.netlify.app", "hotportiongrill.com"]
+            },
+            "android": {
+              "allowMixedContent": true,
+              "captureInput": true,
+              "webContentsDebuggingEnabled": false
+            },
+            "ios": {
+              "scheme": "HotPortion",
+              "contentInset": "automatic",
+              "backgroundColor": "#E53935",
+              "allowsLinkPreview": false,
+              "preferredContentMode": "mobile",
+              "limitsNavigationsToAppBoundDomains": true
+            },
+            "plugins": {
+              "SplashScreen": {
+                "launchShowDuration": 1500,
+                "backgroundColor": "#E53935",
+                "androidScaleType": "CENTER_CROP"
+              },
+              "CapacitorCookies": {
+                "enabled": true
+              },
+              "CapacitorUpdater": {
+                "autoUpdate": true,
+                "statsUrl": "https://api.capgo.app/stats",
+                "channel": "production"
+              }
+            }
+          }
+          EOF
+
       - name: Deploy Live Update to Capgo
         run: |
-          cd frontend
-          npx @capgo/cli@7 upload --apikey ${{ secrets.CAPGO_TOKEN }} --channel production
+          cd mobile
+          npx capgo@latest bundle upload --apikey ${{ secrets.CAPGO_TOKEN }} --channel production --path ./frontend
 
   # ─── 4. SEO PRE‑RENDERING ───
   prerender-seo:
