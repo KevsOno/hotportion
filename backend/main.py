@@ -1099,8 +1099,13 @@ async def calculate_intelligent_delivery_fee(
     if fee > 0 and fee < minimum_fee:
         fee = minimum_fee
 
-    # ─── 12. ROUND AND RETURN ───
+    # ─── 12. ROUND ALL NUMERIC VALUES TO AVOID FLOATING-POINT FRACTIONS ───
     final_fee = max(0, round(fee))
+    value_discount = round(value_discount)
+    item_surcharge = round(item_surcharge)
+    peak_surcharge = round(peak_surcharge)
+    loyalty_discount = round(loyalty_discount)
+    volume_surcharge = round(volume_surcharge)
 
     return {
         "base_fee": base_fee,
