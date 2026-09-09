@@ -125,7 +125,7 @@ jobs:
           name: seo-snapshots
           path: seo/dist/
 
-# ─── 5. BUILD ANDROID RELEASE APK (via Capacitor) ───
+  # ─── 5. BUILD ANDROID RELEASE APK (via Capacitor) ───
   build-android:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -208,16 +208,18 @@ jobs:
           cd mobile
           npx cap sync android
 
+      # ── Updated keystore and build steps ──
       - name: Decode Android Keystore
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > mobile/android/release.keystore
+          mkdir -p mobile/android/app
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > mobile/android/app/release.keystore
 
       - name: Build Release APK with Gradle
         run: |
           cd mobile/android
           chmod +x gradlew
           ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=release.keystore \
+            -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/mobile/android/app/release.keystore \
             -Pandroid.injected.signing.store.password=${{ secrets.ANDROID_KEYSTORE_PASSWORD }} \
             -Pandroid.injected.signing.key.alias=${{ secrets.ANDROID_KEY_ALIAS }} \
             -Pandroid.injected.signing.key.password=${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -227,6 +229,7 @@ jobs:
         with:
           name: android-release-apk
           path: mobile/android/app/build/outputs/apk/release/app-release.apk
+
   # ─── 6. BUILD IOS APP (UNSIGNED via Capacitor) ───
   build-ios:
     runs-on: macos-latest
