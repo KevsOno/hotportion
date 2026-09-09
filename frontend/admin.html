@@ -950,8 +950,12 @@
             white-space: normal;
             overflow: visible;
         }
+        .btn:disabled {
+            opacity: 0.6;
+            pointer-events: none;
+        }
     </style>
-    <!-- ─── LEAFTET CDN ─── -->
+    <!-- ─── LEAFLET CDN ─── -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
 </head>
@@ -1375,7 +1379,7 @@
                     </div>
                 </div>
 
-                <!-- ⭐ NEW: Delivery Settings Section -->
+                <!-- ⭐ Delivery Settings Section -->
                 <div class="delivery-settings-section">
                     <h4><i class="fa-solid fa-truck"></i> Delivery Settings</h4>
                     <div class="form-row">
@@ -1889,7 +1893,6 @@
                 banners: '/api/v1/banners',
                 topProducts: '/api/top-products',
                 deliveryAreas: '/api/delivery-areas',
-                // Delivery Rules
                 valueRules: '/api/admin/delivery-rules',
                 peakSettings: '/api/admin/peak-settings',
                 loyaltySettings: '/api/admin/loyalty-settings',
@@ -1906,7 +1909,7 @@
                 toastEl.querySelector('i').className = icon;
                 toastEl.classList.add('show');
                 clearTimeout(toastTimer);
-                toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2500);
+                toastTimer = setTimeout(() => toastEl.classList.remove('show'), 3000);
             }
 
             // ─── STATE ───
@@ -1938,6 +1941,11 @@
             // ─── AUTOCOMPLETE STATE ───
             let autocompleteTimeout = null;
             let isAutocompleteActive = false;
+
+            // ─── CACHING ───
+            let topProductsCache = null;
+            let topProductsCacheTime = 0;
+            const TOP_PRODUCTS_CACHE_TTL = 30000; // 30 seconds
 
             // ─── DOM REFS ───
             const tabs = document.querySelectorAll('#admin-tabs button');
@@ -1977,7 +1985,6 @@
             const pEmoji = document.getElementById('p-emoji');
             const pImage = document.getElementById('p-image');
             const pTagcolor = document.getElementById('p-tagcolor');
-            // NEW delivery fields
             const pIsMainItem = document.getElementById('p-is-main-item');
             const pWeight = document.getElementById('p-weight');
             const pIsBulky = document.getElementById('p-is-bulky');
@@ -2003,7 +2010,6 @@
             const bannerPreviewModal = document.getElementById('banner-preview-modal');
             const previewContent = document.getElementById('banner-preview-content');
 
-            // ─── AREAS DOM REFS ───
             const areaModal = document.getElementById('area-modal');
             const areaForm = document.getElementById('area-form');
             const areaId = document.getElementById('area-id');
@@ -2015,13 +2021,11 @@
             const areaCount = document.getElementById('area-count');
             const areasBody = document.getElementById('areas-table-body');
 
-            // ─── CANCEL MODAL DOM REFS ───
             const cancelModal = document.getElementById('cancel-modal');
             const cancelForm = document.getElementById('cancel-form');
             const cancelOrderIdInput = document.getElementById('cancel-order-id');
             const cancelReason = document.getElementById('cancel-reason');
 
-            // ─── AUTOCOMPLETE DOM REFS ───
             const locationSearch = document.getElementById('location-search');
             const autocompleteDropdown = document.getElementById('autocomplete-dropdown');
 
@@ -2050,7 +2054,7 @@
             }
 
             // ─── LOAD DATA ───
-            async function loadAllData() {
+            async function loadAllData(forceTopProducts = false) {
                 try {
                     await Promise.all([
                         loadProducts(),
@@ -2058,7 +2062,7 @@
                         loadOrders(),
                         loadStats(),
                         loadBanners(),
-                        loadTopProducts()
+                        loadTopProducts(forceTopProducts)
                     ]);
                 } catch (err) {
                     console.error('Load error:', err);
@@ -2106,16 +2110,26 @@
                 return data;
             }
 
-            async function loadTopProducts() {
+            // ─── TOP PRODUCTS WITH CACHING ───
+            async function loadTopProducts(force = false) {
+                const now = Date.now();
+                if (!force && topProductsCache && (now - topProductsCacheTime) < TOP_PRODUCTS_CACHE_TTL) {
+                    topProducts = topProductsCache;
+                    renderTopProducts();
+                    return topProducts;
+                }
                 try {
                     const data = await fetchJSON(API.topProducts);
-                    topProducts = data;
+                    topProducts = data || [];
+                    topProductsCache = topProducts;
+                    topProductsCacheTime = now;
                     renderTopProducts();
                 } catch (err) {
                     console.error('Error loading top products:', err);
                     topProducts = [];
                     renderTopProducts();
                 }
+                return topProducts;
             }
 
             // ─── DELIVERY AREAS ───
@@ -2341,7 +2355,6 @@
                     if (feature && feature.geometry) {
                         return feature.geometry;
                     }
-                    console.error('Invalid polygon geometry:', feature);
                     return null;
                 } catch (err) {
                     console.error('Error converting polygon to GeoJSON:', err);
@@ -2398,7 +2411,8 @@
                 emptyEl.style.display = 'none';
                 autocompleteDropdown.classList.add('show');
                 try {
-                    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=8&addressdetails=1`;
+                    const url =
+                        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=8&addressdetails=1`;
                     const response = await fetch(url, {
                         headers: { 'User-Agent': 'HotPortionGrill/1.0' }
                     });
@@ -2416,8 +2430,8 @@
                         const item = document.createElement('div');
                         item.className = 'autocomplete-item';
                         const displayName = result.display_name || result.name || 'Unknown location';
-                        const subText = result.address ? 
-                            `${result.address.city || result.address.town || result.address.village || ''}, ${result.address.country || ''}` : 
+                        const subText = result.address ?
+                            `${result.address.city || result.address.town || result.address.village || ''}, ${result.address.country || ''}` :
                             '';
                         item.innerHTML = `
                             <span>${highlightText(displayName, query)}</span>
@@ -2594,7 +2608,7 @@
                 }
             }
 
-            // ─── RENDER PRODUCTS (UPDATED WITH DELIVERY INFO) ───
+            // ─── RENDER PRODUCTS ───
             function renderProducts() {
                 const search = productSearch.value.toLowerCase().trim();
                 let filtered = products;
@@ -2614,7 +2628,6 @@
                     const imageHtml = imageUrl ?
                         `<img src="${imageUrl}" alt="${p.name}" class="thumb" loading="lazy" onerror="this.style.display='none'">` :
                         `<span class="emoji">${p.emoji || '🍽️'}</span>`;
-                    // Build delivery info string
                     const deliveryInfo = [];
                     if (p.is_main_item !== undefined) {
                         deliveryInfo.push(p.is_main_item ? 'Main' : 'Side');
@@ -2700,7 +2713,7 @@
                 });
             }
 
-            // ─── RENDER ORDERS (UPDATED WITH CONFIRM AND CANCEL BUTTONS) ───
+            // ─── RENDER ORDERS (UPDATED WITH CANCEL REASON DISPLAY) ───
             function renderOrders() {
                 const search = orderSearch.value.toLowerCase().trim();
                 const dateFilter = orderDateFilter.value;
@@ -2731,7 +2744,6 @@
                     const isCancelled = status === 'cancelled';
                     const reason = o.cancellation_reason || '';
                     const reasonHtml = reason ? `<span class="cancellation-reason" title="${reason}">📝 ${reason}</span>` : '';
-                    
                     return `
                         <tr>
                             <td><code style="background:#f0f0f0;padding:2px 8px;border-radius:4px;font-size:0.75rem;">${o.payment_reference || o.id}</code></td>
@@ -2762,30 +2774,154 @@
                         </tr>
                     `;
                 }).join('');
-                
-                // ─── ATTACH EVENT LISTENERS ───
+
                 document.querySelectorAll('.confirm-order').forEach(btn => {
-                    btn.addEventListener('click', () => confirmOrder(btn.dataset.id));
+                    btn.removeEventListener('click', confirmOrderHandler);
+                    btn.addEventListener('click', confirmOrderHandler);
                 });
                 document.querySelectorAll('.cancel-order').forEach(btn => {
-                    btn.addEventListener('click', () => openCancelModal(btn.dataset.id));
+                    btn.removeEventListener('click', cancelOrderHandler);
+                    btn.addEventListener('click', cancelOrderHandler);
                 });
                 document.querySelectorAll('.view-order').forEach(btn => {
-                    btn.addEventListener('click', () => viewOrder(btn.dataset.id));
+                    btn.removeEventListener('click', viewOrderHandler);
+                    btn.addEventListener('click', viewOrderHandler);
                 });
             }
 
-            // ─── CONFIRM ORDER (OFFLINE) ───
+            // ─── EVENT HANDLER WRAPPERS ───
+            function confirmOrderHandler(e) {
+                const id = e.currentTarget.dataset.id;
+                confirmOrder(id);
+            }
+
+            function cancelOrderHandler(e) {
+                const id = e.currentTarget.dataset.id;
+                openCancelModal(id);
+            }
+
+            function viewOrderHandler(e) {
+                const id = e.currentTarget.dataset.id;
+                viewOrder(id);
+            }
+
+            // ─── CONFIRM ORDER (OFFLINE) WITH LOADING STATE ───
             async function confirmOrder(id) {
                 if (!confirm('Confirm this order offline? Stock will be reduced.')) return;
+
+                const btn = document.querySelector(`.confirm-order[data-id="${id}"]`);
+                const originalHtml = btn ? btn.innerHTML : '';
+                if (btn) {
+                    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Confirming...';
+                    btn.disabled = true;
+                }
+
                 try {
                     const response = await fetch(`/api/orders/${id}/confirm-offline`, {
                         method: 'POST',
                     });
-                    if (!response.ok) throw new Error('Confirmation failed');
-                    showToast('Order confirmed offline! Stock updated.');
-                    await loadOrders();
-                    await loadStats();
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({}));
+                        throw new Error(errorData.detail || 'Confirmation failed');
+                    }
+                    showToast('✅ Order confirmed offline! Stock updated.');
+
+                    // ─── COMPLETE DATA REFRESH ───
+                    await Promise.all([
+                        loadOrders(),
+                        loadStats(),
+                        loadProducts(),
+                        loadTopProducts(true)
+                    ]);
+
+                    if (currentTab === 'orders') renderOrders();
+                    if (currentTab === 'inventory') renderInventory();
+
+                } catch (err) {
+                    console.error('Confirm error:', err);
+                    showToast('❌ Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                } finally {
+                    if (btn) {
+                        btn.innerHTML = originalHtml;
+                        btn.disabled = false;
+                    }
+                }
+            }
+
+            // ─── SUBMIT CANCEL WITH LOADING STATE ───
+            async function submitCancel(e) {
+                e.preventDefault();
+                const id = cancelOrderIdInput.value;
+                const reason = cancelReason.value.trim();
+
+                if (!reason) {
+                    showToast('Please provide a cancellation reason.', 'fa-solid fa-exclamation-circle');
+                    cancelReason.focus();
+                    return;
+                }
+
+                const submitBtn = cancelForm.querySelector('button[type="submit"]');
+                const originalHtml = submitBtn.innerHTML;
+                submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Cancelling...';
+                submitBtn.disabled = true;
+
+                try {
+                    const response = await fetch(`/api/orders/${id}/status`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ status: 'cancelled', reason: reason }),
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({}));
+                        throw new Error(errorData.detail || 'Cancellation failed');
+                    }
+
+                    showToast('✅ Order cancelled.');
+                    closeCancelModal();
+
+                    await Promise.all([
+                        loadOrders(),
+                        loadStats(),
+                        loadProducts(),
+                        loadTopProducts(true)
+                    ]);
+
+                    if (currentTab === 'orders') renderOrders();
+                    if (currentTab === 'inventory') renderInventory();
+
+                } catch (err) {
+                    console.error('Cancel error:', err);
+                    showToast('❌ Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+                } finally {
+                    submitBtn.innerHTML = originalHtml;
+                    submitBtn.disabled = false;
+                }
+            }
+
+            // ─── UPDATE ORDER STATUS DIRECT (NEW) ───
+            async function updateOrderStatusDirect(id, newStatus) {
+                try {
+                    const response = await fetch(`/api/orders/${id}/status`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ status: newStatus }),
+                    });
+
+                    if (!response.ok) throw new Error('Status update failed');
+
+                    showToast(`Status updated to ${newStatus}`);
+
+                    await Promise.all([
+                        loadOrders(),
+                        loadStats(),
+                        loadProducts(),
+                        loadTopProducts(true)
+                    ]);
+
+                    if (currentTab === 'orders') renderOrders();
+                    if (currentTab === 'inventory') renderInventory();
+
                 } catch (err) {
                     showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
                 }
@@ -2803,31 +2939,6 @@
             function closeCancelModal() {
                 cancelModal.classList.remove('open');
                 cancelOrderId = null;
-            }
-
-            // ─── SUBMIT CANCEL ───
-            async function submitCancel(e) {
-                e.preventDefault();
-                const id = cancelOrderIdInput.value;
-                const reason = cancelReason.value.trim();
-                if (!reason) {
-                    showToast('Please provide a cancellation reason.', 'fa-solid fa-exclamation-circle');
-                    return;
-                }
-                try {
-                    const response = await fetch(`/api/orders/${id}/status`, {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ status: 'cancelled', reason: reason }),
-                    });
-                    if (!response.ok) throw new Error('Cancellation failed');
-                    showToast('Order cancelled.');
-                    closeCancelModal();
-                    await loadOrders();
-                    await loadStats();
-                } catch (err) {
-                    showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
-                }
             }
 
             // ─── RENDER TOP PRODUCTS ───
@@ -2896,7 +3007,7 @@
                 if (current) pCategory.value = current;
             }
 
-            // ─── PRODUCT CRUD (UPDATED WITH DELIVERY FIELDS) ───
+            // ─── PRODUCT CRUD ───
             function openProductModal(product = null) {
                 productModal.classList.add('open');
                 if (product) {
@@ -2911,7 +3022,6 @@
                     pEmoji.value = product.emoji || '';
                     pImage.value = product.image || '';
                     pTagcolor.value = product.tagColor || 'primary';
-                    // NEW: Set delivery fields
                     pIsMainItem.value = product.is_main_item !== undefined ? String(product.is_main_item) : 'true';
                     pWeight.value = product.weight_kg || 0.5;
                     pIsBulky.checked = product.is_bulky || false;
@@ -2927,7 +3037,6 @@
                     pEmoji.value = '';
                     pImage.value = '';
                     pTagcolor.value = 'primary';
-                    // NEW: Set default delivery values
                     pIsMainItem.value = 'true';
                     pWeight.value = 0.5;
                     pIsBulky.checked = false;
@@ -2938,7 +3047,6 @@
                 productModal.classList.remove('open');
             }
 
-            // ─── SAVE PRODUCT (UPDATED WITH DELIVERY FIELDS) ───
             async function saveProduct(e) {
                 e.preventDefault();
                 const data = {
@@ -2950,7 +3058,6 @@
                     emoji: pEmoji.value.trim() || '🍽️',
                     image: pImage.value.trim() || '',
                     tagColor: pTagcolor.value,
-                    // NEW: Delivery fields
                     is_main_item: pIsMainItem.value === 'true',
                     weight_kg: parseFloat(pWeight.value) || 0.5,
                     is_bulky: pIsBulky.checked,
@@ -2965,7 +3072,7 @@
                         showToast('Product added successfully!');
                     }
                     closeProductModal();
-                    await loadAllData();
+                    await loadAllData(true);
                 } catch (err) {
                     showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
                 }
@@ -2981,7 +3088,7 @@
                 try {
                     await fetch(`${API.products}/${id}`, { method: 'DELETE' });
                     showToast('Product deleted.');
-                    await loadAllData();
+                    await loadAllData(true);
                 } catch (err) {
                     showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
                 }
@@ -3002,7 +3109,7 @@
                         body: JSON.stringify({ stock: val })
                     });
                     showToast(`Stock updated to ${val}`);
-                    await loadAllData();
+                    await loadAllData(true);
                 } catch (err) {
                     showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
                 }
@@ -3039,7 +3146,7 @@
                         showToast('Category added!');
                     }
                     closeCategoryModal();
-                    await loadAllData();
+                    await loadAllData(true);
                 } catch (err) {
                     showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
                 }
@@ -3061,7 +3168,7 @@
                 try {
                     await fetch(`${API.categories}/${id}`, { method: 'DELETE' });
                     showToast('Category deleted.');
-                    await loadAllData();
+                    await loadAllData(true);
                 } catch (err) {
                     showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
                 }
@@ -3078,10 +3185,10 @@
                             <span>₦${Number(item.price * item.qty).toLocaleString()}</span>
                         </div>
                     `).join('') || '<p style="color:var(--text-muted);">No items</p>';
-                    
-                    const reasonHtml = data.cancellation_reason ? 
+
+                    const reasonHtml = data.cancellation_reason ?
                         `<p><strong>Cancellation Reason:</strong> ${data.cancellation_reason}</p>` : '';
-                    
+
                     orderDetailBody.innerHTML = `
                         <div style="margin-bottom:16px;">
                             <p><strong>Order ID:</strong> <code>${data.payment_reference || data.id}</code></p>
@@ -3130,33 +3237,34 @@
                 }
             }
 
+            // ─── OPTIMIZED POLLING ───
             async function pollOrders() {
                 try {
                     const url = `${API.orders}?since=${encodeURIComponent(lastPollTimestamp)}`;
                     const response = await fetch(url);
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const newOrders = await response.json();
+
                     if (newOrders.length > 0) {
-                        newOrders.forEach(order => {
-                            showToast(`🆕 New order #${order.payment_reference || order.id} from ${order.customer_name || 'Customer'}`, 'fa-solid fa-bell');
-                        });
+                        const newOrder = newOrders[0];
+                        if (newOrder.status === 'pending') {
+                            showToast(`🆕 New order #${newOrder.payment_reference || newOrder.id} from ${newOrder.customer_name || 'Customer'}`, 'fa-solid fa-bell');
+                        }
+
                         orders = [...newOrders, ...orders];
                         previousOrderCount = orders.length;
                         updateOrdersBadge(orders.length);
                         document.getElementById('stat-orders').textContent = orders.length;
+
                         if (currentTab === 'orders') {
                             renderOrders();
                         }
+
                         const latestTimestamp = newOrders[0]?.created_at;
                         if (latestTimestamp) {
                             lastPollTimestamp = latestTimestamp;
                         } else {
                             lastPollTimestamp = new Date().toISOString();
-                        }
-                    } else {
-                        const now = new Date().toISOString();
-                        if (new Date(now) - new Date(lastPollTimestamp) > 60000) {
-                            lastPollTimestamp = now;
                         }
                     }
                 } catch (err) {
@@ -3167,7 +3275,7 @@
             function startPolling() {
                 if (pollInterval) clearInterval(pollInterval);
                 pollInterval = setInterval(pollOrders, 30000);
-                console.log('🔄 Optimized order polling started (every 30s, since=' + lastPollTimestamp + ')');
+                console.log('🔄 Optimized order polling started (every 30s)');
             }
 
             function stopPolling() {
@@ -3534,7 +3642,6 @@
 
             // ─── DELIVERY RULES FUNCTIONS ───
 
-            // Value Discount
             async function loadValueRules() {
                 try {
                     const data = await fetchJSON(API.valueRules);
@@ -3566,11 +3673,12 @@
                         </td>
                     </tr>
                 `).join('');
-                document.querySelectorAll('.edit-value-rule').forEach(btn => btn.addEventListener('click', () => openValueRuleModal(btn.dataset.id)));
-                document.querySelectorAll('.delete-value-rule').forEach(btn => btn.addEventListener('click', () => deleteValueRule(btn.dataset.id)));
+                document.querySelectorAll('.edit-value-rule').forEach(btn => btn.addEventListener('click', () => openValueRuleModal(btn
+                .dataset.id)));
+                document.querySelectorAll('.delete-value-rule').forEach(btn => btn.addEventListener('click', () =>
+                    deleteValueRule(btn.dataset.id)));
             }
 
-            // Peak Settings
             async function loadPeakSettings() {
                 try {
                     const data = await fetchJSON(API.peakSettings);
@@ -3588,7 +3696,7 @@
                     tbody.innerHTML = `<tr><td colspan="6" class="empty-state">No peak hour settings defined.</td></tr>`;
                     return;
                 }
-                const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+                const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
                 tbody.innerHTML = settings.map(s => `
                     <tr>
                         <td>${s.day_of_week !== null ? days[s.day_of_week] : 'All Days'}</td>
@@ -3602,11 +3710,12 @@
                         </td>
                     </tr>
                 `).join('');
-                document.querySelectorAll('.edit-peak-setting').forEach(btn => btn.addEventListener('click', () => openPeakSettingModal(btn.dataset.id)));
-                document.querySelectorAll('.delete-peak-setting').forEach(btn => btn.addEventListener('click', () => deletePeakSetting(btn.dataset.id)));
+                document.querySelectorAll('.edit-peak-setting').forEach(btn => btn.addEventListener('click', () =>
+                    openPeakSettingModal(btn.dataset.id)));
+                document.querySelectorAll('.delete-peak-setting').forEach(btn => btn.addEventListener('click', () =>
+                    deletePeakSetting(btn.dataset.id)));
             }
 
-            // Loyalty Settings
             async function loadLoyaltySettings() {
                 try {
                     const data = await fetchJSON(API.loyaltySettings);
@@ -3635,11 +3744,12 @@
                         </td>
                     </tr>
                 `).join('');
-                document.querySelectorAll('.edit-loyalty-setting').forEach(btn => btn.addEventListener('click', () => openLoyaltySettingModal(btn.dataset.id)));
-                document.querySelectorAll('.delete-loyalty-setting').forEach(btn => btn.addEventListener('click', () => deleteLoyaltySetting(btn.dataset.id)));
+                document.querySelectorAll('.edit-loyalty-setting').forEach(btn => btn.addEventListener('click', () =>
+                    openLoyaltySettingModal(btn.dataset.id)));
+                document.querySelectorAll('.delete-loyalty-setting').forEach(btn => btn.addEventListener('click', () =>
+                    deleteLoyaltySetting(btn.dataset.id)));
             }
 
-            // Item Surcharge
             async function loadItemSurchargeRules() {
                 try {
                     const data = await fetchJSON(API.itemSurchargeRules);
@@ -3671,19 +3781,21 @@
                         </td>
                     </tr>
                 `).join('');
-                document.querySelectorAll('.edit-item-surcharge').forEach(btn => btn.addEventListener('click', () => openItemSurchargeModal(btn.dataset.id)));
-                document.querySelectorAll('.delete-item-surcharge').forEach(btn => btn.addEventListener('click', () => deleteItemSurchargeRule(btn.dataset.id)));
+                document.querySelectorAll('.edit-item-surcharge').forEach(btn => btn.addEventListener('click', () =>
+                    openItemSurchargeModal(btn.dataset.id)));
+                document.querySelectorAll('.delete-item-surcharge').forEach(btn => btn.addEventListener('click', () =>
+                    deleteItemSurchargeRule(btn.dataset.id)));
             }
 
             // ─── RULE MODALS ───
 
-            // Value Rule
             function openValueRuleModal(id = null) {
                 const modal = document.getElementById('value-rule-modal');
                 const form = document.getElementById('value-rule-form');
                 form.reset();
                 document.getElementById('value-rule-id').value = '';
-                document.getElementById('value-rule-title').textContent = id ? 'Edit Value Discount Rule' : 'Add Value Discount Rule';
+                document.getElementById('value-rule-title').textContent = id ? 'Edit Value Discount Rule' :
+                    'Add Value Discount Rule';
                 if (id) {
                     fetchJSON(`${API.valueRules}/${id}`).then(rule => {
                         if (rule) {
@@ -3709,7 +3821,8 @@
                 const id = document.getElementById('value-rule-id').value;
                 const data = {
                     min_order_value: parseInt(document.getElementById('vr-min').value),
-                    max_order_value: document.getElementById('vr-max').value ? parseInt(document.getElementById('vr-max').value) : null,
+                    max_order_value: document.getElementById('vr-max').value ? parseInt(document.getElementById('vr-max')
+                        .value) : null,
                     fee_multiplier: parseFloat(document.getElementById('vr-multiplier').value),
                     fee_discount: parseInt(document.getElementById('vr-discount').value),
                     free_delivery: document.getElementById('vr-free').checked,
@@ -3718,8 +3831,9 @@
                 try {
                     let url = API.valueRules;
                     let method = 'POST';
-                    if (id) { url += '/' + id; method = 'PUT'; }
-                    const result = await fetchJSON(url, { method, body: JSON.stringify(data) });
+                    if (id) { url += '/' + id;
+                        method = 'PUT'; }
+                    await fetchJSON(url, { method, body: JSON.stringify(data) });
                     showToast(id ? 'Rule updated!' : 'Rule created!');
                     closeValueRuleModal();
                     loadValueRules();
@@ -3739,7 +3853,6 @@
                 }
             }
 
-            // Peak Setting
             function openPeakSettingModal(id = null) {
                 const modal = document.getElementById('peak-setting-modal');
                 const form = document.getElementById('peak-setting-form');
@@ -3750,7 +3863,8 @@
                     fetchJSON(`${API.peakSettings}/${id}`).then(setting => {
                         if (setting) {
                             document.getElementById('peak-setting-id').value = setting.id;
-                            document.getElementById('ps-day').value = setting.day_of_week !== null ? setting.day_of_week : '';
+                            document.getElementById('ps-day').value = setting.day_of_week !== null ? setting
+                                .day_of_week : '';
                             document.getElementById('ps-start').value = setting.start_time;
                             document.getElementById('ps-end').value = setting.end_time;
                             document.getElementById('ps-amount').value = setting.surcharge_amount;
@@ -3769,7 +3883,8 @@
                 e.preventDefault();
                 const id = document.getElementById('peak-setting-id').value;
                 const data = {
-                    day_of_week: document.getElementById('ps-day').value ? parseInt(document.getElementById('ps-day').value) : null,
+                    day_of_week: document.getElementById('ps-day').value ? parseInt(document.getElementById('ps-day')
+                        .value) : null,
                     start_time: document.getElementById('ps-start').value,
                     end_time: document.getElementById('ps-end').value,
                     surcharge_amount: parseInt(document.getElementById('ps-amount').value),
@@ -3778,7 +3893,8 @@
                 try {
                     let url = API.peakSettings;
                     let method = 'POST';
-                    if (id) { url += '/' + id; method = 'PUT'; }
+                    if (id) { url += '/' + id;
+                        method = 'PUT'; }
                     await fetchJSON(url, { method, body: JSON.stringify(data) });
                     showToast(id ? 'Peak setting updated!' : 'Peak setting created!');
                     closePeakSettingModal();
@@ -3799,13 +3915,13 @@
                 }
             }
 
-            // Loyalty Setting
             function openLoyaltySettingModal(id = null) {
                 const modal = document.getElementById('loyalty-setting-modal');
                 const form = document.getElementById('loyalty-setting-form');
                 form.reset();
                 document.getElementById('loyalty-setting-id').value = '';
-                document.getElementById('loyalty-setting-title').textContent = id ? 'Edit Loyalty Setting' : 'Add Loyalty Setting';
+                document.getElementById('loyalty-setting-title').textContent = id ? 'Edit Loyalty Setting' :
+                    'Add Loyalty Setting';
                 if (id) {
                     fetchJSON(`${API.loyaltySettings}/${id}`).then(setting => {
                         if (setting) {
@@ -3834,7 +3950,8 @@
                 try {
                     let url = API.loyaltySettings;
                     let method = 'POST';
-                    if (id) { url += '/' + id; method = 'PUT'; }
+                    if (id) { url += '/' + id;
+                        method = 'PUT'; }
                     await fetchJSON(url, { method, body: JSON.stringify(data) });
                     showToast(id ? 'Loyalty setting updated!' : 'Loyalty setting created!');
                     closeLoyaltySettingModal();
@@ -3855,13 +3972,13 @@
                 }
             }
 
-            // Item Surcharge
             function openItemSurchargeModal(id = null) {
                 const modal = document.getElementById('item-surcharge-modal');
                 const form = document.getElementById('item-surcharge-form');
                 form.reset();
                 document.getElementById('item-surcharge-id').value = '';
-                document.getElementById('item-surcharge-title').textContent = id ? 'Edit Item Surcharge Rule' : 'Add Item Surcharge Rule';
+                document.getElementById('item-surcharge-title').textContent = id ? 'Edit Item Surcharge Rule' :
+                    'Add Item Surcharge Rule';
                 if (id) {
                     fetchJSON(`${API.itemSurchargeRules}/${id}`).then(rule => {
                         if (rule) {
@@ -3886,17 +4003,22 @@
                 e.preventDefault();
                 const id = document.getElementById('item-surcharge-id').value;
                 const data = {
-                    min_main_items: document.getElementById('isr-min-items').value ? parseInt(document.getElementById('isr-min-items').value) : null,
-                    max_main_items: document.getElementById('isr-max-items').value ? parseInt(document.getElementById('isr-max-items').value) : null,
+                    min_main_items: document.getElementById('isr-min-items').value ? parseInt(document.getElementById(
+                        'isr-min-items').value) : null,
+                    max_main_items: document.getElementById('isr-max-items').value ? parseInt(document.getElementById(
+                        'isr-max-items').value) : null,
                     surcharge_amount: parseInt(document.getElementById('isr-amount').value),
-                    weight_threshold_kg: document.getElementById('isr-weight-threshold').value ? parseFloat(document.getElementById('isr-weight-threshold').value) : null,
-                    surcharge_per_kg: document.getElementById('isr-per-kg').value ? parseInt(document.getElementById('isr-per-kg').value) : null,
+                    weight_threshold_kg: document.getElementById('isr-weight-threshold').value ? parseFloat(document
+                        .getElementById('isr-weight-threshold').value) : null,
+                    surcharge_per_kg: document.getElementById('isr-per-kg').value ? parseInt(document.getElementById(
+                        'isr-per-kg').value) : null,
                     description: document.getElementById('isr-desc').value.trim() || null,
                 };
                 try {
                     let url = API.itemSurchargeRules;
                     let method = 'POST';
-                    if (id) { url += '/' + id; method = 'PUT'; }
+                    if (id) { url += '/' + id;
+                        method = 'PUT'; }
                     await fetchJSON(url, { method, body: JSON.stringify(data) });
                     showToast(id ? 'Item surcharge rule updated!' : 'Item surcharge rule created!');
                     closeItemSurchargeModal();
@@ -3935,7 +4057,7 @@
                 loadItemSurchargeRules();
             }
 
-            // ─── TAB SWITCHING (overridden) ───
+            // ─── TAB SWITCHING ───
             function switchTab(tab) {
                 currentTab = tab;
                 tabs.forEach(btn => {
@@ -3950,7 +4072,7 @@
                 if (tab === 'banners') loadBanners();
                 if (tab === 'topproducts') {
                     if (topProducts.length === 0) {
-                        loadTopProducts();
+                        loadTopProducts(true);
                     } else {
                         renderTopProducts();
                     }
@@ -3966,21 +4088,27 @@
                 }
             }
 
+            // ─── DEBOUNCED SEARCH ───
+            let searchDebounceTimer = null;
+            productSearch.addEventListener('input', function() {
+                clearTimeout(searchDebounceTimer);
+                searchDebounceTimer = setTimeout(() => renderProducts(), 300);
+            });
+            orderSearch.addEventListener('input', function() {
+                clearTimeout(searchDebounceTimer);
+                searchDebounceTimer = setTimeout(() => renderOrders(), 300);
+            });
+            orderDateFilter.addEventListener('change', function() {
+                clearTimeout(searchDebounceTimer);
+                searchDebounceTimer = setTimeout(() => renderOrders(), 200);
+            });
+
             // ─── EVENT LISTENERS ───
-            // Re‑attach tab listeners
+
+            // Tabs
             tabs.forEach(btn => {
                 btn.addEventListener('click', () => switchTab(btn.dataset.tab));
             });
-
-            // Product search
-            productSearch.addEventListener('input', renderProducts);
-            orderSearch.addEventListener('input', renderOrders);
-            orderFilterBtn.addEventListener('click', renderOrders);
-            orderClearFilter.addEventListener('click', function() {
-                orderDateFilter.value = '';
-                renderOrders();
-            });
-            orderDateFilter.addEventListener('change', renderOrders);
 
             // Product modal
             document.getElementById('add-product-btn').addEventListener('click', () => openProductModal(null));
@@ -4000,22 +4128,40 @@
             document.getElementById('order-modal-close').addEventListener('click', closeOrderModal);
             orderModal.addEventListener('click', (e) => { if (e.target === orderModal) closeOrderModal(); });
 
-            // ─── CANCEL MODAL EVENTS ───
+            // Cancel modal
             document.getElementById('cancel-modal-close').addEventListener('click', closeCancelModal);
             document.getElementById('cancel-modal-cancel').addEventListener('click', closeCancelModal);
             cancelForm.addEventListener('submit', submitCancel);
             cancelModal.addEventListener('click', (e) => { if (e.target === cancelModal) closeCancelModal(); });
 
-            // Refresh
-            refreshBtn.addEventListener('click', () => {
-                showToast('Refreshing...', 'fa-solid fa-rotate fa-spin');
-                loadAllData().then(() => showToast('Data refreshed!'));
+            // Refresh button with loading state
+            refreshBtn.addEventListener('click', async function() {
+                const originalHtml = this.innerHTML;
+                this.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Refreshing...';
+                this.disabled = true;
+                try {
+                    await loadAllData(true);
+                    if (currentTab === 'areas') {
+                        await loadDeliveryAreas();
+                    }
+                    if (currentTab === 'deliveryrules') {
+                        loadAllRules();
+                    }
+                    showToast('✅ All data refreshed!');
+                } catch (err) {
+                    console.error('Refresh error:', err);
+                    showToast('❌ Error refreshing data', 'fa-solid fa-exclamation-circle');
+                } finally {
+                    this.innerHTML = originalHtml;
+                    this.disabled = false;
+                }
             });
 
             // Inventory view toggle
             document.querySelectorAll('#inventory-view-toggle button').forEach(btn => {
                 btn.addEventListener('click', function() {
-                    document.querySelectorAll('#inventory-view-toggle button').forEach(b => b.classList.remove('active'));
+                    document.querySelectorAll('#inventory-view-toggle button').forEach(b => b.classList.remove(
+                        'active'));
                     this.classList.add('active');
                     renderInventory();
                 });
@@ -4024,7 +4170,8 @@
             // Banner view toggle
             document.querySelectorAll('#banner-view-toggle button').forEach(btn => {
                 btn.addEventListener('click', function() {
-                    document.querySelectorAll('#banner-view-toggle button').forEach(b => b.classList.remove('active'));
+                    document.querySelectorAll('#banner-view-toggle button').forEach(b => b.classList.remove(
+                        'active'));
                     this.classList.add('active');
                     currentView = this.dataset.view;
                     currentPage = 1;
@@ -4045,7 +4192,8 @@
                 if (e.target === bannerPreviewModal) bannerPreviewModal.classList.remove('open');
             });
             document.getElementById('b-cta-type').addEventListener('change', function() {
-                document.getElementById('b-product-group').style.display = this.value === 'product' ? 'block' : 'none';
+                document.getElementById('b-product-group').style.display = this.value === 'product' ? 'block' :
+                    'none';
             });
             document.getElementById('b-image-upload').addEventListener('change', function(e) {
                 const file = e.target.files[0];
@@ -4117,7 +4265,7 @@
                 }
             });
 
-            // ─── RULES SUB-TABS ───
+            // Rules sub-tabs
             document.querySelectorAll('#rules-sub-tabs button').forEach(btn => {
                 btn.addEventListener('click', () => switchSubTab(btn.dataset.subtab));
             });
@@ -4129,7 +4277,8 @@
             document.getElementById('add-value-rule').addEventListener('click', () => openValueRuleModal(null));
             document.getElementById('add-peak-setting').addEventListener('click', () => openPeakSettingModal(null));
             document.getElementById('add-loyalty-setting').addEventListener('click', () => openLoyaltySettingModal(null));
-            document.getElementById('add-item-surcharge-rule').addEventListener('click', () => openItemSurchargeModal(null));
+            document.getElementById('add-item-surcharge-rule').addEventListener('click', () => openItemSurchargeModal(
+            null));
 
             // Rule modal close/cancel
             document.getElementById('value-rule-close').addEventListener('click', closeValueRuleModal);
@@ -4148,6 +4297,13 @@
             document.getElementById('item-surcharge-cancel').addEventListener('click', closeItemSurchargeModal);
             document.getElementById('item-surcharge-form').addEventListener('submit', saveItemSurchargeRule);
 
+            // Order filter buttons
+            orderFilterBtn.addEventListener('click', renderOrders);
+            orderClearFilter.addEventListener('click', function() {
+                orderDateFilter.value = '';
+                renderOrders();
+            });
+
             // ─── KEYBOARD SHORTCUTS ───
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
@@ -4158,17 +4314,21 @@
                     if (bannerPreviewModal.classList.contains('open')) bannerPreviewModal.classList.remove('open');
                     if (areaModal.classList.contains('open')) closeAreaModal();
                     if (cancelModal.classList.contains('open')) closeCancelModal();
-                    if (document.getElementById('value-rule-modal').classList.contains('open')) closeValueRuleModal();
-                    if (document.getElementById('peak-setting-modal').classList.contains('open')) closePeakSettingModal();
-                    if (document.getElementById('loyalty-setting-modal').classList.contains('open')) closeLoyaltySettingModal();
-                    if (document.getElementById('item-surcharge-modal').classList.contains('open')) closeItemSurchargeModal();
+                    if (document.getElementById('value-rule-modal').classList.contains('open'))
+                        closeValueRuleModal();
+                    if (document.getElementById('peak-setting-modal').classList.contains('open'))
+                        closePeakSettingModal();
+                    if (document.getElementById('loyalty-setting-modal').classList.contains('open'))
+                        closeLoyaltySettingModal();
+                    if (document.getElementById('item-surcharge-modal').classList.contains('open'))
+                        closeItemSurchargeModal();
                     if (autocompleteDropdown.classList.contains('show')) autocompleteDropdown.classList.remove('show');
                 }
             });
 
             // ─── BOOT ───
             loadBannerProductOptions();
-            loadAllData().then(() => {
+            loadAllData(true).then(() => {
                 startPolling();
                 setTimeout(() => {
                     initAreaMap();
@@ -4179,13 +4339,12 @@
                 stopPolling();
             });
 
-            console.log('📦 Hot Portion Admin Panel loaded');
-            console.log('🔧 API endpoints: /api/products, /api/categories, /api/orders, /api/stats, /api/v1/banners, /api/top-products, /api/delivery-areas');
-            console.log('🔄 Optimized order polling active (every 30s)');
+            console.log('📦 Hot Portion Admin Panel loaded with optimizations');
+            console.log('✅ Order confirmation and cancellation with full data refresh');
+            console.log('⚡ Performance optimizations: debounced search, cached top products');
             console.log('🗺️ Delivery Areas management with Leaflet map and autocomplete loaded');
             console.log('📋 Delivery Rules management loaded');
             console.log('📦 Product delivery settings: is_main_item, weight_kg, is_bulky');
-            console.log('✅ Order management: Confirm offline and Cancel with reason');
 
         })();
     </script>
