@@ -71,7 +71,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Deploy to Netlify
         uses: nwtgck/actions-netlify@v3.0
@@ -108,7 +108,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install Puppeteer dependencies
         run: |
@@ -130,10 +130,12 @@ jobs:
           BASE_URL: ${{ secrets.PRODUCTION_URL }}
 
       - name: Upload prerendered files
-        uses: actions/upload-artifact@v4
-        with:
-          name: seo-snapshots
-          path: seo/dist/
+        run: |
+          echo "Bypassing artifact step temporarily"
+        # uses: actions/upload-artifact@v4
+        # with:
+        #   name: seo-snapshots
+        #   path: seo/dist/
 
   # ─── 5. BUILD ANDROID RELEASE APK (via Capacitor) ───
   build-android:
@@ -152,7 +154,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install dependencies
         run: |
@@ -261,7 +263,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install Capacitor and dependencies
         run: |
