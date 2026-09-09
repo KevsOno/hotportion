@@ -59,14 +59,19 @@ jobs:
           api-key: ${{ secrets.RENDER_API_KEY }}
           wait-for-success: true
 
-  # ─── 3. DEPLOY FRONTEND TO NETLIFY ───
-  deploy-frontend-netlify:
+  # ─── 3. DEPLOY FRONTEND TO NETLIFY & CAPGO ───
+  deploy-frontend:
     needs: test-backend
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
       - name: Deploy to Netlify
         uses: nwtgck/actions-netlify@v3.0
@@ -78,6 +83,11 @@ jobs:
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+
+      - name: Deploy Live Update to Capgo
+        run: |
+          cd frontend
+          npx @capgo/cli@latest upload --apikey ${{ secrets.CAPGO_TOKEN }} --channel production
 
   # ─── 4. SEO PRE‑RENDERING ───
   prerender-seo:
@@ -149,6 +159,7 @@ jobs:
           cd mobile
           npm install -g @capacitor/cli
           npm install @capacitor/android@^5.7.0
+          npm install @capgo/capacitor-updater
           npm install
 
       - name: Copy frontend assets
@@ -156,7 +167,6 @@ jobs:
           cd mobile
           rm -rf frontend
           cp -r ../frontend frontend/
-          ls -la frontend/
 
       - name: Create root Capacitor config
         run: |
@@ -192,6 +202,11 @@ jobs:
               },
               "CapacitorCookies": {
                 "enabled": true
+              },
+              "CapacitorUpdater": {
+                "autoUpdate": true,
+                "statsUrl": "https://api.capgo.app/stats",
+                "channel": "production"
               }
             }
           }
@@ -208,7 +223,6 @@ jobs:
           cd mobile
           npx cap sync android
 
-      # ── Updated keystore and build steps ──
       - name: Decode Android Keystore
         run: |
           mkdir -p mobile/android/app
@@ -241,7 +255,6 @@ jobs:
       - name: Remove any malformed root package.json
         run: |
           if [ -f package.json ]; then
-            echo "WARNING: Root package.json found. Deleting it to avoid conflicts."
             rm -f package.json
           fi
 
@@ -254,6 +267,7 @@ jobs:
         run: |
           cd mobile
           npm install -g @capacitor/cli
+          npm install @capgo/capacitor-updater
           npm install
 
       - name: Copy frontend assets to mobile/frontend
@@ -261,7 +275,6 @@ jobs:
           cd mobile
           rm -rf frontend
           cp -r ../frontend frontend/
-          ls -la frontend/
 
       - name: Create Capacitor config
         run: |
@@ -288,6 +301,11 @@ jobs:
               "SplashScreen": {
                 "launchShowDuration": 1500,
                 "backgroundColor": "#E53935"
+              },
+              "CapacitorUpdater": {
+                "autoUpdate": true,
+                "statsUrl": "https://api.capgo.app/stats",
+                "channel": "production"
               }
             }
           }
