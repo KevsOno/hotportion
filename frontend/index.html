@@ -2640,6 +2640,18 @@
         (function() {
             'use strict';
 
+            // ─── API BASE: Capacitor native vs Web ───
+            function getApiBase() {
+                // Check if running inside Capacitor (native app)
+                if (window.Capacitor && window.Capacitor.isNative) {
+                    return 'https://hotportion.onrender.com'; // 👈 your Render backend URL
+                }
+                // On Netlify web, use empty string (so /api/... goes through Netlify proxy)
+                return '';
+            }
+            const API_BASE = getApiBase();
+            console.log('🔗 API_BASE:', API_BASE || '(web proxy)');
+
             // ─── Set header height for sticky bar ───
             function setHeaderHeight() {
                 const header = document.querySelector('.header');
@@ -2802,7 +2814,7 @@
 
                     console.log('📦 Sending delivery request:', payload);
 
-                    const response = await fetch('/api/delivery-fee', {
+                    const response = await fetch(`${API_BASE}/api/delivery-fee`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
@@ -3122,7 +3134,7 @@
             // ─── LOAD PRODUCTS FROM BACKEND API ───
             async function loadProductsFromAPI() {
                 try {
-                    const response = await fetch('/api/products');
+                    const response = await fetch(`${API_BASE}/api/products`);
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const data = await response.json();
                     if (data && data.length > 0) {
@@ -3203,7 +3215,7 @@
             // ─── LOAD BANNERS ───
             async function loadBannersFromAPI() {
                 try {
-                    const response = await fetch('/api/v1/banners/active');
+                    const response = await fetch(`${API_BASE}/api/v1/banners/active`);
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const data = await response.json();
                     if (data && data.length > 0) {
@@ -3852,7 +3864,7 @@
             // ─── FETCH ORDER BY REFERENCE ───
             async function fetchOrderByReference(ref) {
                 try {
-                    const response = await fetch(`/api/orders?paymentReference=${ref}`);
+                    const response = await fetch(`${API_BASE}/api/orders?paymentReference=${ref}`);
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const data = await response.json();
                     return data;
@@ -3972,7 +3984,7 @@
                 btn.disabled = true;
 
                 try {
-                    const response = await fetch('/api/orders', {
+                    const response = await fetch(`${API_BASE}/api/orders`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(orderPayload)
@@ -4037,7 +4049,7 @@
                 const typingRow = addChatMsg('assistant', '', true);
 
                 try {
-                    const response = await fetch('/api/ai/chat', {
+                    const response = await fetch(`${API_BASE}/api/ai/chat`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ message: msg })
