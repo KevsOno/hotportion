@@ -125,7 +125,7 @@ jobs:
           name: seo-snapshots
           path: seo/dist/
 
-  # ─── 5. BUILD ANDROID RELEASE APK (via Capacitor) ───
+ # ─── 5. BUILD ANDROID RELEASE APK (via Capacitor) ───
   build-android:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -155,11 +155,57 @@ jobs:
           cd mobile
           rm -rf frontend
           cp -r ../frontend frontend/
+          ls -la frontend/
 
-      - name: Add Android platform and sync
+      - name: Create root Capacitor config
         run: |
           cd mobile
-          npx cap add android || true
+          cat > capacitor.config.json << 'EOF'
+          {
+            "appId": "com.hotportion.grill",
+            "appName": "Hot Portion Grill",
+            "webDir": "frontend",
+            "bundledWebRuntime": false,
+            "server": {
+              "androidScheme": "https",
+              "iosScheme": "https",
+              "allowNavigation": ["hotportion.netlify.app", "hotportiongrill.com"]
+            },
+            "android": {
+              "allowMixedContent": true,
+              "captureInput": true,
+              "webContentsDebuggingEnabled": false
+            },
+            "ios": {
+              "scheme": "HotPortion",
+              "contentInset": "automatic",
+              "backgroundColor": "#E53935",
+              "allowsLinkPreview": false,
+              "preferredContentMode": "mobile",
+              "limitsNavigationsToAppBoundDomains": true
+            },
+            "plugins": {
+              "SplashScreen": {
+                "launchShowDuration": 1500,
+                "backgroundColor": "#E53935",
+                "androidScaleType": "CENTER_CROP"
+              },
+              "CapacitorCookies": {
+                "enabled": true
+              }
+            }
+          }
+          EOF
+
+      - name: Add Android platform (clean)
+        run: |
+          cd mobile
+          rm -rf android
+          npx cap add android
+
+      - name: Sync Android project
+        run: |
+          cd mobile
           npx cap sync android
 
       - name: Decode Android Keystore
@@ -181,7 +227,6 @@ jobs:
         with:
           name: android-release-apk
           path: mobile/android/app/build/outputs/apk/release/app-release.apk
-
   # ─── 6. BUILD IOS APP (UNSIGNED via Capacitor) ───
   build-ios:
     runs-on: macos-latest
