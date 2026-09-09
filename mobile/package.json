@@ -10,16 +10,23 @@
     "ios:build-release": "npx cap copy ios && npx cap open ios && cd ios/App && xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -archivePath App.xcarchive archive && xcodebuild -exportArchive -archivePath App.xcarchive -exportPath ../ -exportOptionsPlist exportOptions.plist",
     "android:add": "npx cap add android",
     "android:sync": "npx cap sync android",
-    "android:build": "npx cap copy android && npx cap open android"
+    "android:build": "npx cap copy android && npx cap open android",
+    "postinstall": "npx cap sync"
   },
   "devDependencies": {
-    "@capacitor/android": "^5.7.0",
-    "@capacitor/cli": "^5.7.0",
-    "@capacitor/ios": "^5.7.0"
+    "@capacitor/cli": "^5.7.0"
   },
   "dependencies": {
+    "@capacitor/android": "^5.7.0",
     "@capacitor/core": "^5.7.0",
+    "@capacitor/ios": "^5.7.0",
+    "@capacitor/app": "^5.0.7",
     "@capacitor/splash-screen": "^5.0.7",
-    "@capacitor/status-bar": "^5.0.7"
+    "@capacitor/status-bar": "^5.0.7",
+    "@capacitor/device": "^5.0.7",
+    "@capacitor/haptics": "^5.0.7",
+    "@capacitor/keyboard": "^5.0.7",
+    "@capacitor/camera": "^5.0.7",
+    "@capgo/capacitor-updater": "^6.0.0"
   }
 }
