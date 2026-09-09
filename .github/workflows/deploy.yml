@@ -87,7 +87,7 @@ jobs:
       - name: Deploy Live Update to Capgo
         run: |
           cd frontend
-          npx @capgo/cli@latest upload --apikey ${{ secrets.CAPGO_TOKEN }} --channel production
+          npx @capgo/cli@7 upload --apikey ${{ secrets.CAPGO_TOKEN }} --channel production
 
   # ─── 4. SEO PRE‑RENDERING ───
   prerender-seo:
@@ -109,15 +109,6 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Purge Broken Chrome Repos and Install Puppeteer Dependencies
-        run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
-          sudo rm -rf /var/lib/apt/lists/*
-          sudo apt-get update
-          sudo apt-get install -y \
-            libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 \
-            libgbm1 libasound2 || sudo apt-get install -y libasound2t64
-
       - name: Install Node dependencies
         run: |
           cd seo
@@ -129,6 +120,7 @@ jobs:
           npm run prerender
         env:
           BASE_URL: ${{ secrets.PRODUCTION_URL }}
+          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'false'
 
   # ─── 5. BUILD ANDROID RELEASE APK (via Capacitor) ───
   build-android:
@@ -138,11 +130,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Java JDK 21
+      - name: Setup Java JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: '21'
+          java-version: '17'
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -204,7 +196,7 @@ jobs:
           cd mobile
           npm install -g @capacitor/cli
           npm install @capacitor/android@^5.7.0 --ignore-scripts
-          npm install @capgo/capacitor-updater --ignore-scripts
+          npm install @capgo/capacitor-updater@^5.0.0 --ignore-scripts
           npm install --ignore-scripts
 
       - name: Add Android platform
@@ -303,7 +295,7 @@ jobs:
         run: |
           cd mobile
           npm install -g @capacitor/cli
-          npm install @capgo/capacitor-updater --ignore-scripts
+          npm install @capgo/capacitor-updater@^5.0.0 --ignore-scripts
           npm install --ignore-scripts
 
       - name: Add iOS platform
@@ -312,25 +304,11 @@ jobs:
           rm -rf ios
           npx cap add ios
 
-      - name: Force iOS Deployment Target to 14.0 in Podfile
+      - name: Configure iOS Deployment Target
         run: |
           cd mobile/ios/App
-          sed -i '' "s/platform :ios, '.*'/platform :ios, '14.0'/g" Podfile || echo "platform :ios, '14.0'" >> Podfile
-          cat << 'EOF' >> Podfile
-
-          post_install do |installer|
-            installer.pods_project.targets.each do |target|
-              target.build_configurations.each do |config|
-                config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
-              end
-            end
-          end
-          EOF
-
-      - name: Sync iOS project & Install CocoaPods
-        run: |
-          cd mobile
-          npx cap sync ios
+          sed -i '' "s/platform :ios, '.*'/platform :ios, '14.0'/g" Podfile
+          pod install --repo-update
 
       - name: Build unsigned iOS archive
         run: |
