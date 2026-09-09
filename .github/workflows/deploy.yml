@@ -125,7 +125,7 @@ jobs:
           name: seo-snapshots
           path: seo/dist/
 
- # ─── 5. BUILD ANDROID RELEASE APK (via Capacitor) ───
+# ─── 5. BUILD ANDROID RELEASE APK (via Capacitor) ───
   build-android:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -148,6 +148,7 @@ jobs:
         run: |
           cd mobile
           npm install -g @capacitor/cli
+          npm install @capacitor/android@^5.7.0
           npm install
 
       - name: Copy frontend assets
@@ -165,7 +166,6 @@ jobs:
             "appId": "com.hotportion.grill",
             "appName": "Hot Portion Grill",
             "webDir": "frontend",
-            "bundledWebRuntime": false,
             "server": {
               "androidScheme": "https",
               "iosScheme": "https",
