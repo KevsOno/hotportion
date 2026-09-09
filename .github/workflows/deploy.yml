@@ -87,7 +87,7 @@ jobs:
       - name: Deploy Live Update to Capgo
         run: |
           cd frontend
-          npx @capgo/cli@latest app:upload --apikey ${{ secrets.CAPGO_TOKEN }} --channel production
+          npx @capgo/cli@latest upload --apikey ${{ secrets.CAPGO_TOKEN }} --channel production
 
   # ─── 4. SEO PRE‑RENDERING ───
   prerender-seo:
@@ -101,7 +101,6 @@ jobs:
       - name: Remove any malformed root package.json
         run: |
           if [ -f package.json ]; then
-            echo "WARNING: Root package.json found. Deleting it to avoid conflicts."
             rm -f package.json
           fi
 
@@ -110,10 +109,11 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Fix APT sources and install Puppeteer dependencies
+      - name: Purge Broken Chrome Repos and Install Puppeteer Dependencies
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
           sudo rm -rf /var/lib/apt/lists/*
-          sudo apt-get update -o Acquire::CompressionTypes::Order::=gz
+          sudo apt-get update
           sudo apt-get install -y \
             libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 \
             libgbm1 libasound2 || sudo apt-get install -y libasound2t64
@@ -138,11 +138,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Java JDK
+      - name: Setup Java JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: '17'
+          java-version: '21'
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -199,7 +199,7 @@ jobs:
           }
           EOF
 
-      - name: Install dependencies (ignoring postinstall sync script)
+      - name: Install dependencies
         run: |
           cd mobile
           npm install -g @capacitor/cli
@@ -207,7 +207,7 @@ jobs:
           npm install @capgo/capacitor-updater --ignore-scripts
           npm install --ignore-scripts
 
-      - name: Add Android platform (clean)
+      - name: Add Android platform
         run: |
           cd mobile
           rm -rf android
@@ -299,28 +299,38 @@ jobs:
           }
           EOF
 
-      - name: Install Capacitor and dependencies (ignoring postinstall sync script)
+      - name: Install Capacitor and dependencies
         run: |
           cd mobile
           npm install -g @capacitor/cli
           npm install @capgo/capacitor-updater --ignore-scripts
           npm install --ignore-scripts
 
-      - name: Add iOS platform (clean)
+      - name: Add iOS platform
         run: |
           cd mobile
           rm -rf ios
           npx cap add ios
 
-      - name: Sync iOS project
+      - name: Force iOS Deployment Target to 14.0 in Podfile
+        run: |
+          cd mobile/ios/App
+          sed -i '' "s/platform :ios, '.*'/platform :ios, '14.0'/g" Podfile || echo "platform :ios, '14.0'" >> Podfile
+          cat << 'EOF' >> Podfile
+
+          post_install do |installer|
+            installer.pods_project.targets.each do |target|
+              target.build_configurations.each do |config|
+                config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
+              end
+            end
+          end
+          EOF
+
+      - name: Sync iOS project & Install CocoaPods
         run: |
           cd mobile
           npx cap sync ios
-
-      - name: Install CocoaPods
-        run: |
-          cd mobile/ios/App
-          pod install --repo-update
 
       - name: Build unsigned iOS archive
         run: |
