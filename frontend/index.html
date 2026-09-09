@@ -2619,6 +2619,20 @@
         }
     </script>
 
+    <!-- ─── CAPACITOR UPDATER (VANILLA JS) ─── -->
+<script type="module">
+  import { CapacitorUpdater } from '@capgo/capacitor-updater';
+  
+  document.addEventListener('DOMContentLoaded', async () => {
+    try {
+      await CapacitorUpdater.notifyAppReady();
+      console.log('✅ Capgo: App ready');
+    } catch (e) {
+      console.error('❌ Capgo error:', e);
+    }
+  });
+</script>
+
     <!-- ─── MAIN SCRIPT ─── -->
     <script>
         (function() {
