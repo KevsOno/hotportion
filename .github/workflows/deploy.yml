@@ -87,7 +87,7 @@ jobs:
       - name: Deploy Live Update to Capgo
         run: |
           cd frontend
-          npx @capgo/cli@latest upload --apikey ${{ secrets.CAPGO_TOKEN }} --channel production
+          npx @capgo/cli@latest app:upload --apikey ${{ secrets.CAPGO_TOKEN }} --channel production
 
   # ─── 4. SEO PRE‑RENDERING ───
   prerender-seo:
@@ -110,9 +110,10 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install Puppeteer dependencies
+      - name: Fix APT sources and install Puppeteer dependencies
         run: |
-          sudo apt-get update
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo apt-get update -o Acquire::CompressionTypes::Order::=gz
           sudo apt-get install -y \
             libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 \
             libgbm1 libasound2 || sudo apt-get install -y libasound2t64
@@ -128,14 +129,6 @@ jobs:
           npm run prerender
         env:
           BASE_URL: ${{ secrets.PRODUCTION_URL }}
-
-      - name: Upload prerendered files
-        run: |
-          echo "Bypassing artifact step temporarily"
-        # uses: actions/upload-artifact@v4
-        # with:
-        #   name: seo-snapshots
-        #   path: seo/dist/
 
   # ─── 5. BUILD ANDROID RELEASE APK (via Capacitor) ───
   build-android:
@@ -156,15 +149,7 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install dependencies
-        run: |
-          cd mobile
-          npm install -g @capacitor/cli
-          npm install @capacitor/android@^5.7.0
-          npm install @capgo/capacitor-updater
-          npm install
-
-      - name: Copy frontend assets
+      - name: Copy frontend assets to mobile/frontend
         run: |
           cd mobile
           rm -rf frontend
@@ -213,6 +198,14 @@ jobs:
             }
           }
           EOF
+
+      - name: Install dependencies (ignoring postinstall sync script)
+        run: |
+          cd mobile
+          npm install -g @capacitor/cli
+          npm install @capacitor/android@^5.7.0 --ignore-scripts
+          npm install @capgo/capacitor-updater --ignore-scripts
+          npm install --ignore-scripts
 
       - name: Add Android platform (clean)
         run: |
@@ -265,13 +258,6 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install Capacitor and dependencies
-        run: |
-          cd mobile
-          npm install -g @capacitor/cli
-          npm install @capgo/capacitor-updater
-          npm install
-
       - name: Copy frontend assets to mobile/frontend
         run: |
           cd mobile
@@ -312,6 +298,13 @@ jobs:
             }
           }
           EOF
+
+      - name: Install Capacitor and dependencies (ignoring postinstall sync script)
+        run: |
+          cd mobile
+          npm install -g @capacitor/cli
+          npm install @capgo/capacitor-updater --ignore-scripts
+          npm install --ignore-scripts
 
       - name: Add iOS platform (clean)
         run: |
