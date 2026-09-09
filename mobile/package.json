@@ -1,15 +1,19 @@
 {
   "name": "hotportion-mobile",
   "version": "1.0.0",
-  "description": "Hot Portion Grill - iOS Capacitor Build",
+  "description": "Hot Portion Grill - Mobile Capacitor Build",
   "main": "index.js",
   "scripts": {
     "ios:add": "npx cap add ios",
-    "ios:build": "npx cap copy ios && npx cap open ios",
     "ios:sync": "npx cap sync ios",
-    "ios:build-release": "npx cap copy ios && npx cap open ios && cd ios/App && xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -archivePath App.xcarchive archive && xcodebuild -exportArchive -archivePath App.xcarchive -exportPath ../ -exportOptionsPlist exportOptions.plist"
+    "ios:build": "npx cap copy ios && npx cap open ios",
+    "ios:build-release": "npx cap copy ios && npx cap open ios && cd ios/App && xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -archivePath App.xcarchive archive && xcodebuild -exportArchive -archivePath App.xcarchive -exportPath ../ -exportOptionsPlist exportOptions.plist",
+    "android:add": "npx cap add android",
+    "android:sync": "npx cap sync android",
+    "android:build": "npx cap copy android && npx cap open android"
   },
   "devDependencies": {
+    "@capacitor/android": "^5.7.0",
     "@capacitor/cli": "^5.7.0",
     "@capacitor/ios": "^5.7.0"
   },
