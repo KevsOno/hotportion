@@ -105,7 +105,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 \
-            libgbm1 libasound2t64
+            libgbm1 libasound2 || sudo apt-get install -y libasound2t64
 
       - name: Install Node dependencies
         run: |
@@ -125,7 +125,7 @@ jobs:
           name: seo-snapshots
           path: seo/dist/
 
-  # ─── 5. BUILD ANDROID APK (via PWABuilder) ───
+  # ─── 5. BUILD ANDROID RELEASE APK (via Capacitor) ───
   build-android:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -133,26 +133,56 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install PWABuilder CLI
-        run: npm install -g pwabuilder
-
-      - name: Build Android APK via PWABuilder
+      - name: Install dependencies
         run: |
-          pwabuilder build --platform=android --url=https://hotportion.netlify.app
-        continue-on-error: true
+          cd mobile
+          npm install -g @capacitor/cli
+          npm install
 
-      - name: Upload APK artifact
+      - name: Copy frontend assets
+        run: |
+          cd mobile
+          rm -rf frontend
+          cp -r ../frontend frontend/
+
+      - name: Add Android platform and sync
+        run: |
+          cd mobile
+          npx cap add android || true
+          npx cap sync android
+
+      - name: Decode Android Keystore
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > mobile/android/release.keystore
+
+      - name: Build Release APK with Gradle
+        run: |
+          cd mobile/android
+          chmod +x gradlew
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=release.keystore \
+            -Pandroid.injected.signing.store.password=${{ secrets.ANDROID_KEYSTORE_PASSWORD }} \
+            -Pandroid.injected.signing.key.alias=${{ secrets.ANDROID_KEY_ALIAS }} \
+            -Pandroid.injected.signing.key.password=${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Upload Signed Release APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-apk
-          path: ./out/android/*.apk
+          name: android-release-apk
+          path: mobile/android/app/build/outputs/apk/release/app-release.apk
 
-      # ─── 6. BUILD IOS APP (UNSIGNED via Capacitor) ───
+  # ─── 6. BUILD IOS APP (UNSIGNED via Capacitor) ───
   build-ios:
     runs-on: macos-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -178,7 +208,6 @@ jobs:
           npm install -g @capacitor/cli
           npm install
 
-      # ─── STEP 1: Copy frontend assets to mobile/frontend ───
       - name: Copy frontend assets to mobile/frontend
         run: |
           cd mobile
@@ -186,7 +215,6 @@ jobs:
           cp -r ../frontend frontend/
           ls -la frontend/
 
-      # ─── STEP 2: Create Capacitor config with correct webDir ───
       - name: Create Capacitor config
         run: |
           cd mobile
@@ -217,7 +245,6 @@ jobs:
           }
           EOF
 
-      # ─── STEP 3: Add iOS platform (clean install) ───
       - name: Add iOS platform (clean)
         run: |
           cd mobile
