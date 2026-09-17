@@ -357,6 +357,8 @@ class DeliveryFeeRequest(BaseModel):
     order_total: int
     order_time: Optional[datetime] = None
     customer_email: Optional[str] = None  # to check loyalty
+    lat: Optional[float] = None  # client-provided coordinates (from Amazon Places)
+    lng: Optional[float] = None  # client-provided coordinates (from Amazon Places)
 
 class DeliveryFeeResponse(BaseModel):
     covered: bool
@@ -1799,75 +1801,82 @@ async def monnify_webhook(
 @app.post("/api/delivery-fee", response_model=DeliveryFeeResponse)
 async def get_delivery_fee(request: DeliveryFeeRequest):
     try:
-        geocode_url = "https://nominatim.openstreetmap.org/search"
-        params = {
-            "q": request.address,
-            "format": "json",
-            "limit": 1
-        }
-        headers = {
-            "User-Agent": "HotPortionGrill/1.0"
-        }
+        # ─── If client provided coordinates (from Amazon Places), use them directly ───
+        if request.lat is not None and request.lng is not None:
+            lat = float(request.lat)
+            lng = float(request.lng)
+            logger.info(f"Using client-provided coords: lat={lat}, lng={lng} for '{request.address}'")
+        else:
+            # ─── Fallback: geocode via Nominatim ───
+            geocode_url = "https://nominatim.openstreetmap.org/search"
+            params = {
+                "q": request.address,
+                "format": "json",
+                "limit": 1
+            }
+            headers = {
+                "User-Agent": "HotPortionGrill/1.0"
+            }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(geocode_url, params=params, headers=headers) as resp:
-                if resp.status != 200:
-                    logger.error(f"Geocoding API error: {resp.status}")
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail="Geocoding service temporarily unavailable"
-                    )
-                
-                data = await resp.json()
-                
-                if not data or len(data) == 0:
-                    return DeliveryFeeResponse(
-                        covered=False,
-                        message="Address not found. Please check the address and try again."
-                    )
-                
-                lat = float(data[0].get("lat", 0))
-                lng = float(data[0].get("lon", 0))
-                
-                logger.info(f"Geocoded '{request.address}' to lat={lat}, lng={lng}")
-                
-                db = get_supabase()
-                result = await execute_db(
-                    db.rpc("find_delivery_area", {"lat": lat, "lng": lng})
-                )
-                
-                if not result.data or len(result.data) == 0:
-                    return DeliveryFeeResponse(
-                        covered=False,
-                        message="Address not in any delivery area."
-                    )
-                
-                area = result.data[0]
-                base_fee = area.get("fee", 0)
-                area_name = area.get("name", "Unknown Area")
+            async with aiohttp.ClientSession() as session:
+                async with session.get(geocode_url, params=params, headers=headers) as resp:
+                    if resp.status != 200:
+                        logger.error(f"Geocoding API error: {resp.status}")
+                        raise HTTPException(
+                            status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail="Geocoding service temporarily unavailable"
+                        )
 
-                order_time = request.order_time or datetime.now()
-                calculation = await calculate_intelligent_delivery_fee(
-                    base_fee=base_fee,
-                    order_value=request.order_total,
-                    items=request.items,
-                    order_time=order_time,
-                    customer_email=request.customer_email
-                )
+                    data = await resp.json()
 
-                return DeliveryFeeResponse(
-                    covered=True,
-                    base_fee=base_fee,
-                    area_name=area_name,
-                    volume_surcharge=calculation.get("volume_surcharge", 0),
-                    value_discount=calculation["value_discount"],
-                    item_surcharge=calculation["item_surcharge"],
-                    peak_surcharge=calculation["peak_surcharge"],
-                    loyalty_discount=calculation["loyalty_discount"],
-                    total_fee=calculation["final_fee"],
-                    breakdown=calculation["breakdown"]
-                )
-                    
+                    if not data or len(data) == 0:
+                        return DeliveryFeeResponse(
+                            covered=False,
+                            message="Address not found. Please check the address and try again."
+                        )
+
+                    lat = float(data[0].get("lat", 0))
+                    lng = float(data[0].get("lon", 0))
+
+                    logger.info(f"Geocoded '{request.address}' to lat={lat}, lng={lng}")
+
+        db = get_supabase()
+        result = await execute_db(
+            db.rpc("find_delivery_area", {"lat": lat, "lng": lng})
+        )
+
+        if not result.data or len(result.data) == 0:
+            return DeliveryFeeResponse(
+                covered=False,
+                message="Address not in any delivery area."
+            )
+
+        area = result.data[0]
+        base_fee = area.get("fee", 0)
+        area_name = area.get("name", "Unknown Area")
+
+        order_time = request.order_time or datetime.now()
+        calculation = await calculate_intelligent_delivery_fee(
+            base_fee=base_fee,
+            order_value=request.order_total,
+            items=request.items,
+            order_time=order_time,
+            customer_email=request.customer_email
+        )
+
+        return DeliveryFeeResponse(
+            covered=True,
+            base_fee=base_fee,
+            area_name=area_name,
+            volume_surcharge=calculation.get("volume_surcharge", 0),
+            value_discount=calculation["value_discount"],
+            item_surcharge=calculation["item_surcharge"],
+            peak_surcharge=calculation["peak_surcharge"],
+            loyalty_discount=calculation["loyalty_discount"],
+            total_fee=calculation["final_fee"],
+            breakdown=calculation["breakdown"]
+        )
+
     except HTTPException:
         raise
     except Exception as e:
