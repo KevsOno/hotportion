@@ -102,6 +102,9 @@ class Settings(BaseSettings):
     WEIGHT_SURCHARGE_PER_KG: int = 100
     BULKY_ITEM_SURCHARGE: int = 200
     PEAK_SURCHARGE: int = 200
+    # ─── Amazon Location Service ───
+    AWS_LOCATION_API_KEY: Optional[str] = None
+    AWS_LOCATION_REGION: str = "eu-north-1"
 
     class Config:
         env_file = ".env"
@@ -2080,6 +2083,65 @@ async def get_area_by_point(lat: float, lng: float):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error checking delivery area coverage"
+        )
+
+# =============================================
+# AMAZON LOCATION PLACES PROXY
+# =============================================
+ALLOWED_PLACES_ENDPOINTS = {"autocomplete", "geocode", "reverse-geocode"}
+
+@app.post("/api/places/{endpoint}")
+async def proxy_amazon_places(endpoint: str, body: Dict[str, Any]):
+    """
+    Proxy Amazon Location Service Places v2 calls.
+    Keeps the API key server-side so the browser never sees it.
+    """
+    if endpoint not in ALLOWED_PLACES_ENDPOINTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid endpoint: {endpoint}"
+        )
+
+    if not settings.AWS_LOCATION_API_KEY:
+        logger.error("AWS_LOCATION_API_KEY not configured")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Amazon Location key not configured on server"
+        )
+
+    url = (
+        f"https://places.geo.{settings.AWS_LOCATION_REGION}"
+        f".amazonaws.com/v2/{endpoint}"
+    )
+    params = {"key": settings.AWS_LOCATION_API_KEY}
+
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=10)
+        ) as session:
+            async with session.post(url, params=params, json=body) as resp:
+                text = await resp.text()
+                if resp.status != 200:
+                    logger.warning(
+                        f"Amazon Places {endpoint} -> {resp.status}: {text[:200]}"
+                    )
+                try:
+                    return JSONResponse(content=json.loads(text), status_code=resp.status)
+                except json.JSONDecodeError:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail=f"Invalid response from Amazon: {text[:200]}"
+                    )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Amazon Places request timed out"
+        )
+    except aiohttp.ClientError as e:
+        logger.error(f"Amazon Places request failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Amazon Places unavailable"
         )
 
 # =============================================
