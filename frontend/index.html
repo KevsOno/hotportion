@@ -2640,18 +2640,13 @@
         (function() {
             'use strict';
 
-            // ─── AMAZON LOCATION SERVICE — Places v2 ───
-            // The API key lives ONLY on the server (Netlify env var AWS_LOCATION_API_KEY).
-            // All calls are proxied through /.netlify/functions/places so the key is never shipped to the browser.
-            const AWS_PLACES_FUNCTION = (window.Capacitor && window.Capacitor.isNative)
-                ? 'https://hotportion.netlify.app/.netlify/functions/places'
-                : '/.netlify/functions/places';
-
+            // ─── AMAZON LOCATION SERVICE via backend proxy ───
+            // The FastAPI backend at /api/places/* handles the AWS key server-side.
             async function amazonPlacesFetch(endpoint, body) {
-                const response = await fetch(AWS_PLACES_FUNCTION, {
+                const response = await fetch(`${API_BASE}/api/places/${endpoint}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ endpoint, body }),
+                    body: JSON.stringify(body),
                 });
                 if (!response.ok) {
                     const text = await response.text();
@@ -4430,7 +4425,7 @@
             console.log('🤖 Context-aware AI assistant active');
             console.log('🎠 Hero slider dynamic – loaded from backend');
             console.log('🖼️ All images served via Netlify Image CDN');
-            console.log('🔍 Address autocomplete via Amazon Location Service (proxied, key server-side)');
+            console.log('🔍 Address autocomplete via Amazon Location Service (proxied through backend)');
             console.log('💰 Intelligent delivery fee with breakdown display');
 
         })();
