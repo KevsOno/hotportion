@@ -1,5 +1,6 @@
 // netlify/functions/places.js
 // Proxies Amazon Location Service Places v2 calls so the API key stays server-side.
+// Forwards the browser's Referer header so API-key referrer restrictions still apply.
 
 const ALLOWED_ENDPOINTS = new Set(['autocomplete', 'geocode', 'reverse-geocode']);
 const REGION = process.env.AWS_LOCATION_REGION || 'eu-north-1';
@@ -12,7 +13,6 @@ const CORS_HEADERS = {
 };
 
 exports.handler = async (event) => {
-  // Preflight
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 204, headers: CORS_HEADERS, body: '' };
   }
@@ -55,12 +55,36 @@ exports.handler = async (event) => {
     };
   }
 
+  // Forward the browser's Referer (and Origin as a fallback) so Amazon's
+  // API-key referrer restriction can match against the allowed URLs.
+  const incomingHeaders = event.headers || {};
+  const referer =
+    incomingHeaders.referer ||
+    incomingHeaders.referrer ||
+    incomingHeaders.Referer ||
+    incomingHeaders.Referrer ||
+    '';
+
+  const origin =
+    incomingHeaders.origin ||
+    incomingHeaders.Origin ||
+    '';
+
+  const forwardHeaders = { 'Content-Type': 'application/json' };
+
+  // Amazon only needs one of these; send Referer if present, else Origin.
+  if (referer) {
+    forwardHeaders['Referer'] = referer;
+  } else if (origin) {
+    forwardHeaders['Referer'] = origin + '/';
+  }
+
   const url = `https://places.geo.${REGION}.amazonaws.com/v2/${endpoint}?key=${encodeURIComponent(apiKey)}`;
 
   try {
     const upstream = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: forwardHeaders,
       body: JSON.stringify(body || {}),
     });
 
