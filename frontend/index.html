@@ -2640,6 +2640,26 @@
         (function() {
             'use strict';
 
+            // ─── AMAZON LOCATION SERVICE — Places v2 ───
+            // The API key lives ONLY on the server (Netlify env var AWS_LOCATION_API_KEY).
+            // All calls are proxied through /.netlify/functions/places so the key is never shipped to the browser.
+            const AWS_PLACES_FUNCTION = (window.Capacitor && window.Capacitor.isNative)
+                ? 'https://hotportion.netlify.app/.netlify/functions/places'
+                : '/.netlify/functions/places';
+
+            async function amazonPlacesFetch(endpoint, body) {
+                const response = await fetch(AWS_PLACES_FUNCTION, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ endpoint, body }),
+                });
+                if (!response.ok) {
+                    const text = await response.text();
+                    throw new Error(`Amazon Places ${endpoint} ${response.status}: ${text.slice(0, 150)}`);
+                }
+                return response.json();
+            }
+
             // ─── API BASE: Capacitor native vs Web ───
             function getApiBase() {
                 // Check if running inside Capacitor (native app)
@@ -2857,31 +2877,35 @@
                 }
             }
 
-            // ─── GEOCODING HELPERS ───
+            // ─── GEOCODING HELPERS (Amazon Location) ───
             async function geocodeAddress(address) {
-                const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`;
-                const response = await fetch(url, {
-                    headers: { 'User-Agent': 'HotPortionGrill/1.0' }
+                const data = await amazonPlacesFetch('geocode', {
+                    QueryText: address,
+                    MaxResults: 1,
+                    Filter: { IncludeCountries: ['NGA'] },
                 });
-                if (!response.ok) throw new Error('Geocoding service unavailable');
-                const data = await response.json();
-                if (!data || data.length === 0) throw new Error('Address not found');
+                const items = data.ResultItems || data.Results || [];
+                if (items.length === 0) throw new Error('Address not found');
+                const first = items[0];
+                const pos = first.Position || first.Place?.Geometry?.Point;
+                if (!pos) throw new Error('Address has no coordinates');
+                const [lng, lat] = pos;
                 return {
-                    lat: parseFloat(data[0].lat),
-                    lng: parseFloat(data[0].lon),
-                    display_name: data[0].display_name
+                    lat,
+                    lng,
+                    display_name: first.Address?.Label || first.Title || address,
                 };
             }
 
             async function reverseGeocode(lat, lng) {
-                const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`;
-                const response = await fetch(url, {
-                    headers: { 'User-Agent': 'HotPortionGrill/1.0' }
+                const data = await amazonPlacesFetch('reverse-geocode', {
+                    QueryPosition: [lng, lat],
+                    MaxResults: 1,
                 });
-                if (!response.ok) throw new Error('Reverse geocoding service unavailable');
-                const data = await response.json();
-                if (!data || !data.display_name) throw new Error('Location not found');
-                return data.display_name;
+                const items = data.ResultItems || data.Results || [];
+                if (items.length === 0) throw new Error('Location not found');
+                const first = items[0];
+                return first.Address?.Label || first.Title || '';
             }
 
             function getCurrentPosition() {
@@ -3058,7 +3082,7 @@
                 }
             }
 
-            // ─── ADDRESS AUTOCOMPLETE ───
+            // ─── ADDRESS AUTOCOMPLETE (Amazon Location) ───
             async function searchAddresses(query) {
                 if (!query || query.length < 2) {
                     addressDropdown.classList.remove('show');
@@ -3072,34 +3096,36 @@
                 addressDropdown.classList.add('show');
 
                 try {
-                    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=6&addressdetails=1`;
-                    const response = await fetch(url, {
-                        headers: { 'User-Agent': 'HotPortionGrill/1.0' }
+                    const data = await amazonPlacesFetch('autocomplete', {
+                        QueryText: query,
+                        MaxResults: 6,
+                        Language: 'en',
+                        Filter: { IncludeCountries: ['NGA'] },
                     });
 
-                    if (!response.ok) throw new Error('Search failed');
-
-                    const data = await response.json();
                     loadingEl.style.display = 'none';
 
                     const items = addressDropdown.querySelectorAll('.address-autocomplete-item');
                     items.forEach(el => el.remove());
 
-                    if (!data || data.length === 0) {
+                    const results = data.ResultItems || data.Results || [];
+                    if (results.length === 0) {
                         emptyEl.style.display = 'block';
                         return;
                     }
 
                     emptyEl.style.display = 'none';
 
-                    data.forEach(result => {
+                    results.forEach(result => {
                         const item = document.createElement('div');
                         item.className = 'address-autocomplete-item';
 
-                        const displayName = result.display_name || result.name || 'Unknown location';
-                        const subText = result.address ?
-                            `${result.address.city || result.address.town || result.address.village || ''}, ${result.address.country || ''}` :
-                            '';
+                        const displayName = result.Address?.Label || result.Title || result.Text || 'Unknown location';
+                        const subText = [
+                            result.Address?.Locality,
+                            result.Address?.Region?.Name,
+                            result.Address?.Country?.Name,
+                        ].filter(Boolean).join(', ');
 
                         item.innerHTML = `
                             <span>${highlightText(displayName, query)}</span>
@@ -3108,8 +3134,7 @@
 
                         item.addEventListener('mousedown', function(e) {
                             e.preventDefault();
-                            const fullAddress = result.display_name || result.name || '';
-                            deliveryAddress.value = fullAddress;
+                            deliveryAddress.value = displayName;
                             addressDropdown.classList.remove('show');
                             deliveryAddress.dispatchEvent(new Event('input', { bubbles: true }));
                         });
@@ -4405,7 +4430,7 @@
             console.log('🤖 Context-aware AI assistant active');
             console.log('🎠 Hero slider dynamic – loaded from backend');
             console.log('🖼️ All images served via Netlify Image CDN');
-            console.log('🔍 Address autocomplete using Nominatim (OpenStreetMap)');
+            console.log('🔍 Address autocomplete via Amazon Location Service (proxied, key server-side)');
             console.log('💰 Intelligent delivery fee with breakdown display');
 
         })();
