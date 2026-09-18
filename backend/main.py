@@ -317,6 +317,8 @@ class OrderCreate(BaseModel):
     items: List[OrderItem]
     monnify_transaction_ref: Optional[str] = None
     delivery_fee: Optional[int] = 0  # Recomputed server-side when possible
+    # Fee breakdown audit trail (optional, stored as JSONB when provided)
+    delivery_breakdown: Optional[Dict[str, Any]] = None
 
 class OrderStatusUpdate(BaseModel):
     status: str
@@ -1348,7 +1350,10 @@ async def setup_database():
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS weight_kg DECIMAL(4,2) DEFAULT 0.5;",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS is_bulky BOOLEAN DEFAULT FALSE;",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee INTEGER DEFAULT 0;",
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;"
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_breakdown JSONB;",
+            "CREATE INDEX IF NOT EXISTS idx_orders_payment_reference ON orders (payment_reference);",
+            "CREATE INDEX IF NOT EXISTS idx_orders_monnify_transaction_ref ON orders (monnify_transaction_ref);"
         ]
         for q in alter_queries:
             try:
@@ -1817,6 +1822,38 @@ async def get_order(oid: int):
         raise HTTPException(404, "Not found")
     return r.data[0]
 
+@app.get("/api/orders/by-reference/{ref}")
+async def get_order_by_reference(ref: str, email: Optional[str] = Query(None)):
+    """
+    Look up an order by either payment_reference or monnify_transaction_ref.
+    Used by the customer-facing order tracking page and the Monnify redirect fallback.
+
+    Optionally accepts an `email` query parameter: when provided, the lookup is
+    additionally filtered by customer_email to reduce enumeration risk.
+    """
+    if not ref or len(ref) > 128:
+        raise HTTPException(400, "Invalid reference")
+
+    db = get_supabase()
+
+    # Try payment_reference first (this is what customers see on receipts)
+    query = db.table("orders").select("*").eq("payment_reference", ref)
+    if email:
+        query = query.eq("customer_email", email.strip().lower())
+    r = await execute_db(query.limit(1))
+    if r.data:
+        return r.data[0]
+
+    # Fall back to Monnify's transactionReference (used by the redirect URL)
+    query = db.table("orders").select("*").eq("monnify_transaction_ref", ref)
+    if email:
+        query = query.eq("customer_email", email.strip().lower())
+    r = await execute_db(query.limit(1))
+    if r.data:
+        return r.data[0]
+
+    raise HTTPException(404, "Order not found")
+
 @app.post("/api/orders", status_code=201)
 async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks):
     """
@@ -1917,6 +1954,7 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
         "order_notes": order.order_notes,
         "items": validated_items,
         "delivery_fee": computed_delivery_fee,
+        "delivery_breakdown": order.delivery_breakdown,
     }
 
     result = await execute_db(get_supabase().table("orders").insert(data))
