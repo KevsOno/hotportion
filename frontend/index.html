@@ -11,6 +11,8 @@
     <title>Hot Portion Grill – Nigerian Meals</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <style>
         /* ─── RESET & BASE ─── */
         * {
@@ -159,7 +161,6 @@
             flex-wrap: wrap;
             gap: 12px;
         }
-        /* Chat message Markdown styles */
         .chat-msg-bubble h2 {
             font-size: 1.1rem;
             font-weight: 800;
@@ -181,7 +182,7 @@
         .chat-msg-bubble p {
             margin: 0.2rem 0;
         }
-        .chat-msg-bubble .hero-offer, 
+        .chat-msg-bubble .hero-offer,
         .chat-msg-bubble .hero-badge {
             display: none;
         }
@@ -1542,6 +1543,219 @@
         .receipt-footer i {
             color: var(--primary);
         }
+        .receipt-download-wrap {
+            text-align: center;
+            margin-top: 18px;
+            padding-top: 16px;
+            border-top: 1px solid #f0f0f0;
+        }
+        .receipt-download-wrap .btn-primary {
+            width: 100%;
+            justify-content: center;
+            padding: 12px 20px;
+            font-size: 0.9rem;
+        }
+
+        /* ─── ORDER TRACKING MODAL ─── */
+        .track-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.55);
+            backdrop-filter: blur(6px);
+            z-index: 600;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .track-overlay.open {
+            display: flex;
+            animation: fadeIn 0.25s ease-out;
+        }
+        .track-modal {
+            background: var(--white);
+            border-radius: var(--radius);
+            max-width: 480px;
+            width: 100%;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 30px 70px rgba(0, 0, 0, 0.30);
+            position: relative;
+        }
+        .track-header {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: #fff;
+            padding: 20px 24px;
+            border-radius: var(--radius) var(--radius) 0 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 2;
+        }
+        .track-header h3 {
+            font-size: 1.15rem;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .track-close-btn {
+            background: rgba(255, 255, 255, 0.15);
+            border: none;
+            color: #fff;
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            font-size: 1.2rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+        .track-close-btn:hover {
+            background: rgba(255, 255, 255, 0.30);
+        }
+        .track-body {
+            padding: 22px 24px 24px;
+        }
+        .track-body .help {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 14px;
+            line-height: 1.5;
+        }
+        .track-input-wrap {
+            display: flex;
+            gap: 8px;
+        }
+        .track-input-wrap input {
+            flex: 1;
+            padding: 11px 14px;
+            border: 1px solid #e2e8e6;
+            border-radius: var(--radius-sm);
+            font-size: 0.9rem;
+            background: #f8faf8;
+            outline: none;
+            font-family: inherit;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .track-input-wrap input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(229, 57, 53, 0.08);
+            background: #fff;
+        }
+        .track-input-wrap button {
+            padding: 11px 20px;
+            border-radius: var(--radius-sm);
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            font-weight: 700;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+        }
+        .track-input-wrap button:hover {
+            background: var(--primary-dark);
+        }
+        .track-input-wrap button:disabled {
+            opacity: 0.6;
+            cursor: wait;
+        }
+        .track-result {
+            margin-top: 18px;
+            font-size: 0.9rem;
+        }
+        .track-result.error {
+            color: var(--primary);
+            font-weight: 600;
+            padding: 12px;
+            background: #fde8e0;
+            border-radius: var(--radius-sm);
+        }
+        .track-result.loading {
+            color: var(--text-muted);
+            text-align: center;
+            padding: 12px;
+        }
+        .order-status-card {
+            border: 1px solid #e2e8e6;
+            border-radius: var(--radius-sm);
+            padding: 16px;
+            background: #fafbfa;
+        }
+        .order-status-badge {
+            display: inline-block;
+            padding: 5px 14px;
+            border-radius: 50px;
+            font-size: 0.7rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 12px;
+        }
+        .order-status-badge.pending { background: #fef3c7; color: #92400e; }
+        .order-status-badge.paid { background: #d1fae5; color: #065f46; }
+        .order-status-badge.confirmed { background: #dbeafe; color: #1e40af; }
+        .order-status-badge.completed { background: #bbf7d0; color: #14532d; }
+        .order-status-badge.cancelled { background: #fee2e2; color: #991b1b; }
+        .order-status-card .row {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            font-size: 0.85rem;
+        }
+        .order-status-card .row .label { color: var(--text-muted); }
+        .order-status-card .row .value {
+            font-weight: 600;
+            text-align: right;
+            max-width: 60%;
+            word-break: break-word;
+        }
+        .order-items-mini {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px dashed #e2e8e6;
+        }
+        .order-items-mini h5 {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+        .order-items-mini .item-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.82rem;
+            padding: 3px 0;
+        }
+        .order-items-mini .item-row .name { color: var(--text-dark); }
+        .order-items-mini .item-row .name small { color: var(--text-muted); margin-left: 4px; }
+        .order-items-mini .item-row .price { font-weight: 600; }
+        .order-status-card .total-row {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 12px;
+            padding-top: 10px;
+            border-top: 2px solid var(--primary);
+            font-weight: 800;
+            font-size: 1rem;
+            color: var(--primary);
+        }
+        @media (max-width: 480px) {
+            .track-modal { border-radius: 16px; }
+            .track-header { padding: 16px 18px; border-radius: 16px 16px 0 0; }
+            .track-body { padding: 18px 18px 20px; }
+            .receipt-download-wrap .btn-primary { font-size: 0.85rem; }
+        }
 
         /* ─── CONTACT ─── */
         .contact-section {
@@ -1626,6 +1840,7 @@
             display: flex;
             gap: 20px;
             font-size: 0.8rem;
+            flex-wrap: wrap;
         }
         .footer .footer-links a {
             color: rgba(255, 255, 255, 0.60);
@@ -2409,6 +2624,7 @@
             <div class="footer-links">
                 <a href="#menu-section">Menu</a>
                 <a href="#" id="footer-cart">Cart</a>
+                <a href="#" id="footer-track">Track Order</a>
                 <a href="mailto:Hotportionfoods@gmail.com">Email</a>
             </div>
             <div class="copy">&copy; 2026 Hot Portion. All rights reserved.</div>
@@ -2550,6 +2766,24 @@
         </div>
     </div>
 
+    <!-- ─── TRACK ORDER MODAL ─── -->
+    <div class="track-overlay" id="track-overlay">
+        <div class="track-modal" id="track-modal">
+            <div class="track-header">
+                <h3><i class="fa-solid fa-magnifying-glass-location" aria-hidden="true"></i> Track Your Order</h3>
+                <button class="track-close-btn" id="track-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="track-body">
+                <p class="help">Enter the order reference from your confirmation (e.g. <strong>HP-...</strong>) to see its current status.</p>
+                <div class="track-input-wrap">
+                    <input type="text" id="track-ref-input" placeholder="HP-xxxxxxxxxxxx" autocomplete="off">
+                    <button id="track-submit"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Track</button>
+                </div>
+                <div class="track-result" id="track-result"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- ─── CHAT LAUNCHER ─── -->
     <div class="chat-launcher-wrapper" id="chat-launcher">
         <span class="chat-launcher-label">Ask HotPortion</span>
@@ -2622,7 +2856,6 @@
 <!-- ─── CAPACITOR UPDATER (VANILLA JS SAFE) ─── -->
 <script>
   document.addEventListener('DOMContentLoaded', async () => {
-    // Check if running inside native Capacitor WebView
     if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorUpdater) {
       try {
         await window.Capacitor.Plugins.CapacitorUpdater.notifyAppReady();
@@ -2641,7 +2874,6 @@
             'use strict';
 
             // ─── AMAZON LOCATION SERVICE via backend proxy ───
-            // The FastAPI backend at /api/places/* handles the AWS key server-side.
             async function amazonPlacesFetch(endpoint, body) {
                 const response = await fetch(`${API_BASE}/api/places/${endpoint}`, {
                     method: 'POST',
@@ -2657,11 +2889,9 @@
 
             // ─── API BASE: Capacitor native vs Web ───
             function getApiBase() {
-                // Check if running inside Capacitor (native app)
                 if (window.Capacitor && window.Capacitor.isNative) {
-                    return 'https://hotportion.onrender.com'; // 👈 your Render backend URL
+                    return 'https://hotportion.onrender.com';
                 }
-                // On Netlify web, use empty string (so /api/... goes through Netlify proxy)
                 return '';
             }
             const API_BASE = getApiBase();
@@ -2700,6 +2930,9 @@
 
             // ─── Autocomplete State ───
             let addressAutocompleteTimeout = null;
+
+            // ─── Persisted delivery method restored from localStorage ───
+            let _restoredDeliveryMethod = 'pickup';
 
             // ─── DOM REFS ───
             const menuGrid = document.getElementById('menu-grid');
@@ -2742,7 +2975,6 @@
             const feeBreakdownToggle = document.getElementById('fee-breakdown-toggle');
             const deliveryBreakdown = document.getElementById('delivery-breakdown');
 
-            // Breakdown elements
             const breakdownBase = document.getElementById('breakdown-base');
             const breakdownDiscount = document.getElementById('breakdown-discount');
             const breakdownSurcharge = document.getElementById('breakdown-surcharge');
@@ -2771,6 +3003,14 @@
             // ─── Address Autocomplete DOM ───
             const addressDropdown = document.getElementById('address-autocomplete-dropdown');
 
+            // ─── Track Order DOM ───
+            const trackOverlay = document.getElementById('track-overlay');
+            const trackCloseBtn = document.getElementById('track-close');
+            const trackRefInput = document.getElementById('track-ref-input');
+            const trackSubmit = document.getElementById('track-submit');
+            const trackResult = document.getElementById('track-result');
+            const footerTrack = document.getElementById('footer-track');
+
             // ─── HELPERS ───
             function formatPrice(amount) { return '₦' + Number(amount).toLocaleString(); }
 
@@ -2791,6 +3031,72 @@
                 const url = base + path.replace(/^\/fastfood\/images\//, '');
                 return `/.netlify/images?url=${encodeURIComponent(url)}&w=${width}&format=webp`;
             }
+
+            // ================================================================
+            // ─── PERSISTENCE (localStorage) ───
+            // ================================================================
+            const PERSIST_KEY = 'hp_state';
+            const PERSIST_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+            function persistState() {
+                try {
+                    const state = {
+                        cart: cart,
+                        customer_name: customerName.value,
+                        customer_email: customerEmail.value,
+                        customer_phone: customerPhone.value,
+                        delivery_method: deliveryMethod,
+                        delivery_address: deliveryAddress.value,
+                        preferred_time: preferredTime.value,
+                        order_notes: orderNotes.value,
+                        saved_at: Date.now()
+                    };
+                    localStorage.setItem(PERSIST_KEY, JSON.stringify(state));
+                } catch (e) {
+                    console.warn('persistState failed:', e);
+                }
+            }
+
+            function restoreState() {
+                try {
+                    const raw = localStorage.getItem(PERSIST_KEY);
+                    if (!raw) return;
+                    const state = JSON.parse(raw);
+
+                    // Expire old state
+                    if (state.saved_at && (Date.now() - state.saved_at) > PERSIST_MAX_AGE_MS) {
+                        localStorage.removeItem(PERSIST_KEY);
+                        return;
+                    }
+
+                    if (state.cart && typeof state.cart === 'object' && !Array.isArray(state.cart)) {
+                        cart = state.cart;
+                    }
+                    if (state.customer_name) customerName.value = state.customer_name;
+                    if (state.customer_email) customerEmail.value = state.customer_email;
+                    if (state.customer_phone) customerPhone.value = state.customer_phone;
+                    if (state.delivery_address) deliveryAddress.value = state.delivery_address;
+                    if (state.preferred_time) preferredTime.value = state.preferred_time;
+                    if (state.order_notes) orderNotes.value = state.order_notes;
+                    if (state.delivery_method && ['pickup', 'delivery', 'dinein'].indexOf(state.delivery_method) !== -1) {
+                        _restoredDeliveryMethod = state.delivery_method;
+                    }
+
+                    console.log('✅ State restored from localStorage:', Object.keys(cart).length, 'cart item(s)');
+                } catch (e) {
+                    console.warn('restoreState failed:', e);
+                }
+            }
+
+            function clearPersistedState() {
+                try {
+                    localStorage.removeItem(PERSIST_KEY);
+                    console.log('🧹 Persisted state cleared');
+                } catch (e) { /* ignore */ }
+            }
+
+            // Restore immediately (DOM refs exist by this point)
+            restoreState();
 
             // ─── Get cart items for delivery calculation ───
             function getCartItemsForDelivery() {
@@ -2986,8 +3292,6 @@
 
                 lastCheckedAddress = address;
 
-                // ─── Try to resolve coordinates via Amazon (frontend) ───
-                // This lets the backend skip its own Nominatim geocoding.
                 let coords = precomputedCoords;
                 if (!coords) {
                     try {
@@ -3079,11 +3383,11 @@
 
                     if (address) {
                         deliveryAddress.value = address;
-                        // Pass GPS coords directly — no need to re-geocode the address
                         await handleDeliveryAddressChange({
                             lat: position.lat,
                             lng: position.lng
                         });
+                        persistState();
                         showToast('📍 Location found!', 'fa-solid fa-check-circle');
                     }
                 } catch (err) {
@@ -3630,7 +3934,7 @@
                 }
             }
 
-            // ─── CART OPERATIONS (UPDATED WITH DELIVERY RECALCULATION) ───
+            // ─── CART OPERATIONS ───
             function addToCart(productId, qty = 1) {
                 const product = products.find(p => p.id == productId);
                 if (!product) return;
@@ -3640,11 +3944,9 @@
                     cart[productId] = { ...product, qty: qty };
                 }
                 updateCartUI();
-                // 🔄 Recalculate delivery fee if delivery is selected and address is set
+                persistState();
                 if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
-                    // Clear the last checked address to force recalculation
                     lastCheckedAddress = '';
-                    // Use a small delay to ensure cart total is updated
                     setTimeout(handleDeliveryAddressChange, 100);
                 }
                 showToast(`${product.name} added to cart!`, 'fa-solid fa-check-circle');
@@ -3654,7 +3956,7 @@
                 if (cart[productId]) {
                     delete cart[productId];
                     updateCartUI();
-                    // 🔄 Recalculate delivery fee if delivery is selected
+                    persistState();
                     if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
                         lastCheckedAddress = '';
                         setTimeout(handleDeliveryAddressChange, 100);
@@ -3670,7 +3972,7 @@
                 } else {
                     cart[productId].qty = newQty;
                     updateCartUI();
-                    // 🔄 Recalculate delivery fee if delivery is selected
+                    persistState();
                     if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
                         lastCheckedAddress = '';
                         setTimeout(handleDeliveryAddressChange, 100);
@@ -3817,6 +4119,7 @@
                 }
                 updateCartUI();
                 updateCheckoutButton();
+                persistState();
             }
 
             // ─── RECEIPT ───
@@ -3869,9 +4172,58 @@
                         </div>
                     </div>
                     <div class="receipt-footer"><i class="fa-regular fa-envelope"></i> A receipt has been sent to your email.<br><span style="font-size:0.65rem;">Payment via Monnify | Transaction ID: ${orderData.payment_reference}</span></div>
+                    <div class="receipt-download-wrap">
+                        <button class="btn-primary" id="receipt-download-btn" type="button">
+                            <i class="fa-solid fa-file-pdf"></i> Download PDF Receipt
+                        </button>
+                    </div>
                 `;
                 receiptOverlay.classList.add('open');
                 document.body.style.overflow = 'hidden';
+
+                const dlBtn = document.getElementById('receipt-download-btn');
+                if (dlBtn) dlBtn.addEventListener('click', downloadReceiptPDF);
+            }
+
+            // ─── RECEIPT PDF DOWNLOAD ───
+            async function downloadReceiptPDF() {
+                if (typeof html2pdf === 'undefined') {
+                    showToast('PDF library not loaded. Please try again.', 'fa-solid fa-exclamation-circle');
+                    return;
+                }
+                const btn = document.getElementById('receipt-download-btn');
+                if (!btn) return;
+                const original = btn.innerHTML;
+                btn.innerHTML = '<span class="loader-small"></span> Generating PDF...';
+                btn.disabled = true;
+
+                try {
+                    // Clone the modal so the PDF doesn't include the close button / download button
+                    const clone = receiptModal.cloneNode(true);
+                    const cClose = clone.querySelector('.receipt-close');
+                    if (cClose) cClose.remove();
+                    const cDl = clone.querySelector('#receipt-download-btn');
+                    if (cDl) cDl.parentElement.remove();
+                    const cHeader = clone.querySelector('.receipt-header');
+                    if (cHeader) cHeader.style.position = 'static';
+
+                    const ref = (lastOrderData && lastOrderData.payment_reference) || ('order-' + Date.now());
+                    await html2pdf().set({
+                        margin: 0,
+                        filename: `HotPortion-Receipt-${ref}.pdf`,
+                        image: { type: 'jpeg', quality: 0.98 },
+                        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+                        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+                    }).from(clone).save();
+
+                    showToast('Receipt downloaded!', 'fa-solid fa-circle-check');
+                } catch (err) {
+                    console.error('PDF generation failed:', err);
+                    showToast('Failed to generate PDF. Please try again.', 'fa-solid fa-exclamation-circle');
+                } finally {
+                    btn.innerHTML = original;
+                    btn.disabled = false;
+                }
             }
 
             function closeReceipt() {
@@ -3893,19 +4245,21 @@
                 updateDeliveryFeeUI(0);
                 deliveryFeeRow.style.display = 'none';
                 deliveryBreakdown.classList.remove('show');
+                clearPersistedState();
                 showToast('✅ Order placed successfully!', 'fa-solid fa-check-circle');
                 refreshProducts();
             }
             receiptClose.addEventListener('click', closeReceipt);
             receiptOverlay.addEventListener('click', function(e) { if (e.target === this) closeReceipt(); });
 
-            // ─── FETCH ORDER BY REFERENCE ───
+            // ─── FETCH ORDER BY REFERENCE (fixed: uses dedicated lookup endpoint) ───
             async function fetchOrderByReference(ref) {
+                if (!ref) return null;
                 try {
-                    const response = await fetch(`${API_BASE}/api/orders?paymentReference=${ref}`);
+                    const response = await fetch(`${API_BASE}/api/orders/by-reference/${encodeURIComponent(ref)}`);
+                    if (response.status === 404) return null;
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                    const data = await response.json();
-                    return data;
+                    return await response.json();
                 } catch (err) {
                     console.warn('Failed to fetch order:', err);
                     return null;
@@ -3998,7 +4352,6 @@
                 const total = subtotal + finalDeliveryFee;
 
                 const orderPayload = {
-                    payment_reference: 'HP-' + Date.now(),
                     customer_name: name,
                     customer_email: email,
                     customer_phone: phone,
@@ -4070,8 +4423,21 @@
                 if (isTyping && sender === 'assistant') {
                     bubble.innerHTML = '<div class="thinking-dots"><span></span><span></span><span></span></div>';
                 } else {
+                    // Sanitize: DOMPurify protects against AI-generated or user-typed HTML
                     const parsed = marked.parse(text);
-                    bubble.innerHTML = parsed + extraHtml;
+                    const combined = parsed + extraHtml;
+                    if (typeof DOMPurify !== 'undefined') {
+                        bubble.innerHTML = DOMPurify.sanitize(combined, { ADD_ATTR: ['data-id'] });
+                    } else {
+                        // Fallback if CDN failed to load: escape everything, keep extraHtml separately
+                        console.warn('DOMPurify unavailable — falling back to text-only rendering');
+                        bubble.textContent = text;
+                        if (extraHtml) {
+                            const extraWrap = document.createElement('div');
+                            extraWrap.innerHTML = extraHtml; // our own server-controlled markup
+                            bubble.appendChild(extraWrap);
+                        }
+                    }
                 }
                 row.appendChild(bubble);
                 chatMessages.appendChild(row);
@@ -4246,7 +4612,6 @@
                 cartOverlay.classList.add('open');
                 document.body.style.overflow = 'hidden';
                 updateCheckoutButton();
-                // 🔄 Refresh delivery fee when cart opens
                 if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
                     lastCheckedAddress = '';
                     setTimeout(handleDeliveryAddressChange, 200);
@@ -4280,17 +4645,19 @@
                     if (chatModal.classList.contains('active')) chatModal.classList.remove('active');
                     if (receiptOverlay.classList.contains('open')) closeReceipt();
                     if (addressDropdown.classList.contains('show')) addressDropdown.classList.remove('show');
+                    if (trackOverlay.classList.contains('open')) closeTrackModal();
                 }
             });
 
             deliveryOptions.forEach(btn => {
                 btn.addEventListener('click', function() { setDeliveryMethod(this.dataset.method); });
             });
-            setDeliveryMethod('pickup');
+            setDeliveryMethod(_restoredDeliveryMethod || 'pickup');
 
             // ─── DELIVERY ADDRESS INPUT WITH AUTOCOMPLETE ───
             deliveryAddress.addEventListener('input', function() {
                 const query = this.value.trim();
+                persistState();
 
                 clearTimeout(addressAutocompleteTimeout);
                 if (query.length < 2) {
@@ -4348,9 +4715,15 @@
             // ─── GPS BUTTON ───
             gpsBtn.addEventListener('click', handleGPSButton);
 
-            // ─── FORM INPUTS FOR CHECKOUT BUTTON STATE ───
+            // ─── FORM INPUTS FOR CHECKOUT BUTTON STATE + PERSISTENCE ───
             [customerName, customerEmail, customerPhone].forEach(input => {
-                input.addEventListener('input', updateCheckoutButton);
+                input.addEventListener('input', function() {
+                    updateCheckoutButton();
+                    persistState();
+                });
+            });
+            [preferredTime, orderNotes].forEach(input => {
+                input.addEventListener('input', persistState);
             });
 
             // ─── Recalculate delivery fee when email changes (for loyalty) ───
@@ -4421,6 +4794,124 @@
                 openCart();
             });
 
+            // ================================================================
+            // ─── TRACK ORDER ───
+            // ================================================================
+            function openTrackModal(prefillRef) {
+                if (!trackOverlay) return;
+                trackOverlay.classList.add('open');
+                document.body.style.overflow = 'hidden';
+                if (prefillRef) trackRefInput.value = prefillRef;
+                setTimeout(function() { trackRefInput.focus(); }, 200);
+            }
+
+            function closeTrackModal() {
+                if (!trackOverlay) return;
+                trackOverlay.classList.remove('open');
+                document.body.style.overflow = '';
+            }
+
+            async function lookupOrder(ref) {
+                try {
+                    const response = await fetch(`${API_BASE}/api/orders/by-reference/${encodeURIComponent(ref)}`);
+                    if (response.status === 404) return { notFound: true };
+                    if (!response.ok) {
+                        const errText = await response.text().catch(function() { return ''; });
+                        throw new Error('HTTP ' + response.status + ' ' + errText.slice(0, 100));
+                    }
+                    return await response.json();
+                } catch (err) {
+                    console.warn('Order lookup failed:', err);
+                    return { error: err.message };
+                }
+            }
+
+            function renderTrackResult(order) {
+                if (!order) {
+                    trackResult.className = 'track-result error';
+                    trackResult.textContent = 'Order not found. Please check the reference and try again.';
+                    return;
+                }
+                const status = (order.status || 'pending').toLowerCase();
+                const statusLabels = {
+                    pending: '⏳ Awaiting Payment',
+                    paid: '✅ Payment Received',
+                    confirmed: '👨‍🍳 Preparing Your Order',
+                    completed: '🎉 Completed',
+                    cancelled: '❌ Cancelled'
+                };
+                const statusLabel = statusLabels[status] || status.toUpperCase();
+                const itemsHtml = (order.items || []).map(function(item) {
+                    return '<div class="item-row">' +
+                        '<span class="name">' + (item.name || 'Item') + ' <small>×' + (item.qty || 0) + '</small></span>' +
+                        '<span class="price">₦' + Number((item.price || 0) * (item.qty || 0)).toLocaleString() + '</span>' +
+                        '</div>';
+                }).join('');
+                const dm = { pickup: '🏃 Pickup', delivery: '🛵 Delivery', dinein: '🍽️ Dine-in' }[order.delivery_method] || 'Pickup';
+                const created = order.created_at ? new Date(order.created_at).toLocaleString() : 'N/A';
+                const ref = order.payment_reference || '—';
+                const deliveryHtml = (order.delivery_method === 'delivery' && order.delivery_address) ?
+                    '<div class="row"><span class="label">Delivery to</span><span class="value">' + order.delivery_address + '</span></div>' +
+                    '<div class="row"><span class="label">Delivery Fee</span><span class="value">₦' + Number(order.delivery_fee || 0).toLocaleString() + '</span></div>'
+                    : '';
+
+                trackResult.className = 'track-result';
+                trackResult.innerHTML =
+                    '<div class="order-status-card">' +
+                    '<span class="order-status-badge ' + status + '">' + statusLabel + '</span>' +
+                    '<div class="row"><span class="label">Reference</span><span class="value" style="font-family:monospace;font-size:0.78rem;">' + ref + '</span></div>' +
+                    '<div class="row"><span class="label">Placed</span><span class="value">' + created + '</span></div>' +
+                    '<div class="row"><span class="label">Method</span><span class="value">' + dm + '</span></div>' +
+                    deliveryHtml +
+                    (itemsHtml ? '<div class="order-items-mini"><h5>Items</h5>' + itemsHtml + '</div>' : '') +
+                    '<div class="total-row"><span>Total</span><span>₦' + Number(order.total || 0).toLocaleString() + '</span></div>' +
+                    '</div>';
+            }
+
+            async function handleTrackSubmit() {
+                const ref = (trackRefInput.value || '').trim();
+                if (!ref) {
+                    trackResult.className = 'track-result error';
+                    trackResult.textContent = 'Please enter an order reference.';
+                    return;
+                }
+                trackSubmit.disabled = true;
+                const originalHtml = trackSubmit.innerHTML;
+                trackSubmit.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Searching...';
+                trackResult.className = 'track-result loading';
+                trackResult.textContent = 'Looking up your order...';
+
+                const result = await lookupOrder(ref);
+
+                trackSubmit.disabled = false;
+                trackSubmit.innerHTML = originalHtml;
+
+                if (result && result.notFound) {
+                    trackResult.className = 'track-result error';
+                    trackResult.textContent = 'No order found for that reference. Please check and try again.';
+                    return;
+                }
+                if (result && result.error) {
+                    trackResult.className = 'track-result error';
+                    trackResult.textContent = 'Lookup failed: ' + result.error;
+                    return;
+                }
+                renderTrackResult(result);
+            }
+
+            if (trackCloseBtn) trackCloseBtn.addEventListener('click', closeTrackModal);
+            if (trackOverlay) trackOverlay.addEventListener('click', function(e) {
+                if (e.target === this) closeTrackModal();
+            });
+            if (trackSubmit) trackSubmit.addEventListener('click', handleTrackSubmit);
+            if (trackRefInput) trackRefInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') { e.preventDefault(); handleTrackSubmit(); }
+            });
+            if (footerTrack) footerTrack.addEventListener('click', function(e) {
+                e.preventDefault();
+                openTrackModal();
+            });
+
             let resizeTimeout;
             window.addEventListener('resize', function() {
                 clearTimeout(resizeTimeout);
@@ -4436,6 +4927,9 @@
                 console.log('📍 Delivery coverage with intelligent fee calculation');
                 console.log('📊 Fee breakdown includes: base + discounts + surcharges');
                 console.log('🔄 Delivery fee recalculates when cart changes');
+                console.log('💾 Cart persists across page reloads');
+                console.log('🧾 Receipt PDF download enabled');
+                console.log('🔎 Order tracking enabled');
             });
 
             console.log('📱 Bottom nav: Home, Menu, Chat, Cart (mobile only)');
