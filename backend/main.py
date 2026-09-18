@@ -7,9 +7,10 @@ import base64
 import logging
 import time
 import re
+import secrets
 import contextvars
 from datetime import datetime, timedelta, date
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 
@@ -36,6 +37,14 @@ try:
     import openai
 except ImportError:
     openai = None
+
+# ---------- Sentry (optional) ----------
+try:
+    import sentry_sdk
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    _SENTRY_AVAILABLE = True
+except ImportError:
+    _SENTRY_AVAILABLE = False
 
 load_dotenv()
 
@@ -78,7 +87,8 @@ class Settings(BaseSettings):
     AI_PRIMARY: str = "groq"
     AI_FALLBACK: str = "gemini"
     ALLOWED_ORIGINS: List[str] = [
-        "https://your-netlify-site.netlify.app",
+        "https://hotportion.netlify.app",
+        "https://hotportion.onrender.com",
         "http://localhost:3000",
         "http://localhost:8000"
     ]
@@ -105,6 +115,19 @@ class Settings(BaseSettings):
     # ─── Amazon Location Service ───
     AWS_LOCATION_API_KEY: Optional[str] = None
     AWS_LOCATION_REGION: str = "eu-north-1"
+    # ─── Security ───
+    # If set, all write/admin endpoints require: Authorization: Bearer <ADMIN_API_TOKEN>
+    # If unset, they remain open (existing behavior preserved) with a startup warning.
+    ADMIN_API_TOKEN: Optional[str] = None
+    # Optional Sentry DSN. If set and sentry_sdk is installed, errors are reported.
+    SENTRY_DSN: Optional[str] = None
+    # DB query timeout (seconds)
+    DB_QUERY_TIMEOUT_SECONDS: float = 15.0
+    # Rate limits per IP, per minute
+    RATE_LIMIT_ORDERS_PER_MINUTE: int = 10
+    RATE_LIMIT_DELIVERY_PER_MINUTE: int = 30
+    RATE_LIMIT_AI_PER_MINUTE: int = 20
+    RATE_LIMIT_PLACES_PER_MINUTE: int = 60
 
     class Config:
         env_file = ".env"
@@ -158,7 +181,93 @@ def get_supabase() -> Client:
 
 async def execute_db(query):
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(_executor, query.execute)
+    future = loop.run_in_executor(_executor, query.execute)
+    return await asyncio.wait_for(future, timeout=settings.DB_QUERY_TIMEOUT_SECONDS)
+
+# ---------- RATE LIMITER (in-memory sliding window) ----------
+# NOTE: this is process-local. If you scale uvicorn to >1 worker, each worker
+# has its own limit; use Redis or similar for cross-worker enforcement.
+_rate_limit_store: Dict[str, List[float]] = {}
+_rate_limit_lock = asyncio.Lock()
+
+async def enforce_rate_limit(request: Request, bucket: str, max_per_minute: int) -> None:
+    """Simple per-IP sliding-window rate limiter."""
+    if max_per_minute <= 0:
+        return
+    client_ip = request.client.host if request.client else "unknown"
+    key = f"{bucket}:{client_ip}"
+    now = time.time()
+    window = 60.0
+    async with _rate_limit_lock:
+        timestamps = _rate_limit_store.get(key, [])
+        cutoff = now - window
+        timestamps = [t for t in timestamps if t > cutoff]
+        if len(timestamps) >= max_per_minute:
+            logger.warning(f"Rate limit hit: bucket={bucket} ip={client_ip} count={len(timestamps)}")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many requests. Please slow down and try again shortly."
+            )
+        timestamps.append(now)
+        _rate_limit_store[key] = timestamps
+        # Opportunistic cleanup
+        if len(_rate_limit_store) > 10000:
+            stale_keys = [k for k, v in _rate_limit_store.items() if not v or v[-1] < cutoff]
+            for k in stale_keys:
+                _rate_limit_store.pop(k, None)
+
+# ---------- ADMIN AUTH ----------
+async def require_admin(authorization: Optional[str] = Header(None, alias="Authorization")):
+    """
+    Require a bearer token matching settings.ADMIN_API_TOKEN for write/admin endpoints.
+
+    If ADMIN_API_TOKEN is NOT configured, endpoints remain open (existing behaviour)
+    so a live deployment isn't broken by this change. A warning is logged on every
+    such call so you can detect and close the gap.
+    """
+    if not settings.ADMIN_API_TOKEN:
+        logger.warning(
+            "Admin-protected endpoint invoked but ADMIN_API_TOKEN is not configured "
+            "— the deployment is currently UNSECURED. Set ADMIN_API_TOKEN to enable auth."
+        )
+        return
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing admin Authorization header",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = authorization.split(" ", 1)[1].strip()
+    if not hmac.compare_digest(token, settings.ADMIN_API_TOKEN):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid admin token")
+
+# ---------- ORDER STATE MACHINE ----------
+_ALLOWED_ORDER_TRANSITIONS: Dict[str, Set[str]] = {
+    "pending":   {"paid", "confirmed", "cancelled"},
+    "paid":      {"confirmed", "completed", "cancelled"},
+    "confirmed": {"completed", "cancelled"},
+    "cancelled": set(),
+    "completed": set(),
+}
+
+def validate_order_transition(current: Optional[str], target: str) -> None:
+    """Raise HTTPException if the transition is clearly disallowed."""
+    if not current or not target:
+        return
+    current_lc = current.lower()
+    target_lc = target.lower()
+    if current_lc == target_lc:
+        return
+    allowed = _ALLOWED_ORDER_TRANSITIONS.get(current_lc)
+    if allowed is None:
+        # Unknown current status — allow but log so legacy data doesn't break.
+        logger.warning(f"Unknown current order status '{current}', allowing transition to '{target}'")
+        return
+    if target_lc not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid status transition: {current} → {target}"
+        )
 
 # ---------- PYDANTIC MODELS ----------
 class ProductBase(BaseModel):
@@ -192,11 +301,14 @@ class OrderItem(BaseModel):
     product_id: int   # added for stock update
 
 class OrderCreate(BaseModel):
-    payment_reference: str
+    # Optional client-supplied value — the server ALWAYS generates its own.
+    payment_reference: Optional[str] = None
     customer_name: str
     customer_email: str
     customer_phone: str
-    total: int
+    # Optional — the server recomputes this from items + delivery fee. Kept optional
+    # so existing clients that still send it don't break.
+    total: Optional[int] = None
     status: Optional[str] = "pending"
     delivery_method: Optional[str] = "pickup"
     delivery_address: Optional[str] = None
@@ -204,7 +316,7 @@ class OrderCreate(BaseModel):
     order_notes: Optional[str] = None
     items: List[OrderItem]
     monnify_transaction_ref: Optional[str] = None
-    delivery_fee: Optional[int] = 0  # Added delivery_fee field
+    delivery_fee: Optional[int] = 0  # Recomputed server-side when possible
 
 class OrderStatusUpdate(BaseModel):
     status: str
@@ -782,13 +894,24 @@ class MonnifyIntegration:
             logger.exception("Monnify init exception")
             return {"success": False, "error": str(e)}
 
-    async def handle_webhook(self, payload: dict, signature: str) -> Dict:
+    async def handle_webhook(self, raw_body: bytes, signature: Optional[str]) -> Dict:
+        """
+        Verify the webhook signature against the RAW request body bytes.
+        Monnify signs the raw body — json.dumps() can reorder keys / change whitespace,
+        so we must not re-serialize before HMAC.
+        """
         if not self.healthy:
             return {"valid": False, "error": "Monnify not ready"}
-        computed = hmac.new(self.secret_key.encode(), json.dumps(payload).encode(), hashlib.sha512).hexdigest()
-        if computed != signature:
+        if not signature:
+            return {"valid": False, "error": "Missing signature"}
+        computed = hmac.new(self.secret_key.encode(), raw_body, hashlib.sha512).hexdigest()
+        if not hmac.compare_digest(computed, signature):
             return {"valid": False, "error": "Invalid signature"}
-        return {"valid": True, "event": payload.get("eventType")}
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            return {"valid": False, "error": f"Invalid JSON body: {e}"}
+        return {"valid": True, "event": payload.get("eventType"), "payload": payload}
 
 # ---------- SINGLETONS ----------
 _brevo = None
@@ -950,7 +1073,7 @@ async def calculate_intelligent_delivery_fee(
     # ─── 1. FETCH PRODUCT DETAILS ───
     product_ids = [item.product_id for item in items]
     db = get_supabase()
-    
+
     # Get product details with safe column selection
     try:
         result = await execute_db(
@@ -969,7 +1092,7 @@ async def calculate_intelligent_delivery_fee(
     total_weight = 0.0
     bulky_count = 0
     total_items = sum(item.qty for item in items)
-    
+
     for item in items:
         pid = item.product_id
         prod = product_map.get(pid)
@@ -980,12 +1103,12 @@ async def calculate_intelligent_delivery_fee(
                 is_main = True
             if is_main:
                 main_count += item.qty
-            
+
             weight = prod.get("weight_kg")
             if weight is None:
                 weight = 0.5
             total_weight += float(weight) * item.qty
-            
+
             is_bulky = prod.get("is_bulky")
             if is_bulky is None:
                 is_bulky = False
@@ -1000,7 +1123,7 @@ async def calculate_intelligent_delivery_fee(
     try:
         thresholds = getattr(settings, 'VOLUME_SURCHARGE_THRESHOLDS', {})
         amounts = getattr(settings, 'VOLUME_SURCHARGE_AMOUNTS', {})
-        
+
         if total_items >= thresholds.get("xxlarge", 10):
             volume_surcharge += amounts.get("xxlarge", 500)
         elif total_items >= thresholds.get("xlarge", 6):
@@ -1136,13 +1259,47 @@ async def calculate_intelligent_delivery_fee(
 # STOCK MANAGEMENT HELPERS
 # =============================================
 
+async def _decrement_stock_atomic(product_id: int, qty: int) -> bool:
+    """
+    Try to decrement stock atomically via a Postgres function.
+    Returns True on success, False if the RPC is unavailable (fallback required).
+    """
+    try:
+        await execute_db(
+            get_supabase().rpc(
+                "decrement_product_stock",
+                {"p_product_id": product_id, "p_qty": qty}
+            )
+        )
+        return True
+    except Exception as e:
+        logger.debug(f"Atomic decrement RPC unavailable, will fall back: {e}")
+        return False
+
+async def _increment_stock_atomic(product_id: int, qty: int) -> bool:
+    try:
+        await execute_db(
+            get_supabase().rpc(
+                "increment_product_stock",
+                {"p_product_id": product_id, "p_qty": qty}
+            )
+        )
+        return True
+    except Exception as e:
+        logger.debug(f"Atomic increment RPC unavailable, will fall back: {e}")
+        return False
+
 async def reduce_order_stock(order: dict):
-    """Reduce stock for all items in an order."""
+    """Reduce stock for all items in an order (atomic when RPC available)."""
     items = order.get("items", [])
     for item in items:
         product_id = item.get("product_id")
         qty = item.get("qty", 0)
-        if product_id and qty > 0:
+        if not product_id or qty <= 0:
+            continue
+        used_atomic = await _decrement_stock_atomic(product_id, qty)
+        if not used_atomic:
+            # Fallback: read-modify-write (non-atomic, legacy behaviour)
             prod_result = await execute_db(
                 get_supabase().table("products").select("stock").eq("id", product_id)
             )
@@ -1164,7 +1321,10 @@ async def restore_order_stock(order: dict):
     for item in items:
         product_id = item.get("product_id")
         qty = item.get("qty", 0)
-        if product_id and qty > 0:
+        if not product_id or qty <= 0:
+            continue
+        used_atomic = await _increment_stock_atomic(product_id, qty)
+        if not used_atomic:
             prod_result = await execute_db(
                 get_supabase().table("products").select("stock").eq("id", product_id)
             )
@@ -1244,15 +1404,36 @@ async def setup_database():
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 updated_at TIMESTAMPTZ DEFAULT NOW()
             );
+            """,
+            # ─── Atomic stock helpers (gap #8) ───
+            """
+            CREATE OR REPLACE FUNCTION decrement_product_stock(p_product_id INTEGER, p_qty INTEGER)
+            RETURNS VOID AS $$
+            BEGIN
+                UPDATE products
+                SET stock = GREATEST(0, stock - p_qty)
+                WHERE id = p_product_id;
+            END;
+            $$ LANGUAGE plpgsql;
+            """,
+            """
+            CREATE OR REPLACE FUNCTION increment_product_stock(p_product_id INTEGER, p_qty INTEGER)
+            RETURNS VOID AS $$
+            BEGIN
+                UPDATE products
+                SET stock = stock + p_qty
+                WHERE id = p_product_id;
+            END;
+            $$ LANGUAGE plpgsql;
             """
         ]
         for sql in create_tables:
             try:
                 await execute_db(db.rpc("exec_sql", {"query": sql}))
             except Exception as e:
-                logger.warning(f"Could not create table: {e}")
+                logger.warning(f"Could not create table/function: {e}")
 
-        logger.info("Database indexes, columns, and tables ensured.")
+        logger.info("Database indexes, columns, tables, and RPC functions ensured.")
     except Exception as e:
         logger.warning(f"Could not create tables/columns (RPC may be disabled): {e}")
 
@@ -1260,6 +1441,30 @@ async def setup_database():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Hot Portion Grill - Full Monolith + AI")
+
+    # Optional Sentry init
+    if settings.SENTRY_DSN:
+        if _SENTRY_AVAILABLE:
+            try:
+                sentry_sdk.init(
+                    dsn=settings.SENTRY_DSN,
+                    integrations=[FastApiIntegration()],
+                    traces_sample_rate=0.1,
+                    environment=os.getenv("RENDER_SERVICE_NAME", "production"),
+                )
+                logger.info("Sentry initialized")
+            except Exception as e:
+                logger.warning(f"Sentry init failed: {e}")
+        else:
+            logger.warning("SENTRY_DSN set but sentry_sdk not installed; skipping Sentry init")
+
+    # Security posture warning
+    if not settings.ADMIN_API_TOKEN:
+        logger.warning(
+            "⚠️  ADMIN_API_TOKEN is NOT set. Admin/write endpoints are UNPROTECTED. "
+            "Set ADMIN_API_TOKEN in the environment to enable bearer-token auth."
+        )
+
     init_results = await asyncio.gather(
         get_brevo().initialize(),
         get_monnify().initialize(),
@@ -1500,21 +1705,21 @@ async def get_products():
     r = await execute_db(get_supabase().table("products").select("*").order("name"))
     return r.data
 
-@app.post("/api/products", response_model=Product, status_code=201)
+@app.post("/api/products", response_model=Product, status_code=201, dependencies=[Depends(require_admin)])
 async def create_product(p: ProductCreate):
     r = await execute_db(get_supabase().table("products").insert(p.dict()))
     if not r.data:
         raise HTTPException(400, "Failed")
     return r.data[0]
 
-@app.put("/api/products/{pid}")
+@app.put("/api/products/{pid}", dependencies=[Depends(require_admin)])
 async def update_product(pid: int, p: ProductUpdate):
     r = await execute_db(get_supabase().table("products").update(p.dict()).eq("id", pid))
     if not r.data:
         raise HTTPException(404, "Not found")
     return r.data[0]
 
-@app.delete("/api/products/{pid}", status_code=204)
+@app.delete("/api/products/{pid}", status_code=204, dependencies=[Depends(require_admin)])
 async def delete_product(pid: int):
     r = await execute_db(get_supabase().table("products").delete().eq("id", pid))
     if not r.data:
@@ -1575,21 +1780,21 @@ async def get_top_products(limit: int = 20):
     return result
 
 
-@app.post("/api/categories", response_model=Category, status_code=201)
+@app.post("/api/categories", response_model=Category, status_code=201, dependencies=[Depends(require_admin)])
 async def create_category(c: CategoryBase):
     r = await execute_db(get_supabase().table("categories").insert(c.dict()))
     if not r.data:
         raise HTTPException(400, "Failed")
     return r.data[0]
 
-@app.put("/api/categories/{cid}")
+@app.put("/api/categories/{cid}", dependencies=[Depends(require_admin)])
 async def update_category(cid: int, c: CategoryBase):
     r = await execute_db(get_supabase().table("categories").update(c.dict()).eq("id", cid))
     if not r.data:
         raise HTTPException(404, "Not found")
     return r.data[0]
 
-@app.delete("/api/categories/{cid}", status_code=204)
+@app.delete("/api/categories/{cid}", status_code=204, dependencies=[Depends(require_admin)])
 async def delete_category(cid: int):
     r = await execute_db(get_supabase().table("categories").delete().eq("id", cid))
     if not r.data:
@@ -1613,11 +1818,107 @@ async def get_order(oid: int):
     return r.data[0]
 
 @app.post("/api/orders", status_code=201)
-async def create_order(order: OrderCreate, bg: BackgroundTasks):
-    """Create a new order with optional delivery_fee."""
-    data = order.dict(exclude={'monnify_transaction_ref'})
-    if "delivery_fee" not in data:
-        data["delivery_fee"] = 0
+async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks):
+    """
+    Create a new order.
+
+    SECURITY: The item subtotal, delivery fee, total, and payment_reference are
+    ALL recomputed server-side. Values supplied by the client are ignored.
+    """
+    await enforce_rate_limit(request, "orders", settings.RATE_LIMIT_ORDERS_PER_MINUTE)
+
+    # ─── 1. VALIDATE ITEMS & RECOMPUTE SUBTOTAL FROM DB PRICES ───
+    if not order.items:
+        raise HTTPException(400, "Order must contain at least one item")
+
+    product_ids = [item.product_id for item in order.items]
+    if any(not pid for pid in product_ids):
+        raise HTTPException(400, "All order items must have a product_id")
+
+    try:
+        prod_result = await execute_db(
+            get_supabase().table("products").select("id, name, price").in_("id", product_ids)
+        )
+    except Exception as e:
+        logger.error(f"Failed to fetch products for order validation: {e}", exc_info=True)
+        raise HTTPException(500, "Could not validate order items")
+
+    product_map = {p["id"]: p for p in (prod_result.data or [])}
+    missing = [pid for pid in product_ids if pid not in product_map]
+    if missing:
+        raise HTTPException(400, f"Invalid product id(s): {missing}")
+
+    validated_items: List[Dict[str, Any]] = []
+    computed_subtotal = 0
+    for item in order.items:
+        product = product_map[item.product_id]
+        if item.qty <= 0:
+            raise HTTPException(400, f"Invalid quantity for product {item.product_id}")
+        server_price = int(product["price"])
+        computed_subtotal += server_price * item.qty
+        validated_items.append({
+            "name": product["name"],
+            "qty": item.qty,
+            "price": server_price,
+            "product_id": item.product_id,
+        })
+
+    # ─── 2. RECOMPUTE DELIVERY FEE SERVER-SIDE ───
+    computed_delivery_fee = 0
+    if order.delivery_method == "delivery" and order.delivery_address:
+        try:
+            geocode_url = "https://nominatim.openstreetmap.org/search"
+            params = {"q": order.delivery_address, "format": "json", "limit": 1}
+            headers = {"User-Agent": "HotPortionGrill/1.0"}
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as session:
+                async with session.get(geocode_url, params=params, headers=headers) as resp:
+                    if resp.status == 200:
+                        geo_data = await resp.json()
+                        if geo_data:
+                            lat = float(geo_data[0].get("lat", 0))
+                            lng = float(geo_data[0].get("lon", 0))
+                            area_result = await execute_db(
+                                get_supabase().rpc("find_delivery_area", {"lat": lat, "lng": lng})
+                            )
+                            if area_result.data:
+                                base_fee = area_result.data[0].get("fee", 0)
+                                calc = await calculate_intelligent_delivery_fee(
+                                    base_fee=base_fee,
+                                    order_value=computed_subtotal,
+                                    items=order.items,
+                                    order_time=datetime.now(),
+                                    customer_email=order.customer_email,
+                                )
+                                computed_delivery_fee = calc["final_fee"]
+                                logger.info(
+                                    f"Server-recomputed delivery fee for '{order.delivery_address}': "
+                                    f"₦{computed_delivery_fee} (base {base_fee})"
+                                )
+        except Exception as e:
+            # Never fail order creation because the delivery computation hiccupped —
+            # fall back to the client-supplied value so the system keeps working.
+            logger.warning(f"Server-side delivery fee computation failed, using client value: {e}")
+            computed_delivery_fee = order.delivery_fee or 0
+
+    # ─── 3. BUILD THE ORDER PAYLOAD WITH SERVER-COMPUTED VALUES ───
+    server_payment_reference = f"HP-{secrets.token_urlsafe(16)}"
+    computed_total = computed_subtotal + computed_delivery_fee
+
+    data = {
+        "payment_reference": server_payment_reference,
+        "customer_name": order.customer_name,
+        "customer_email": order.customer_email,
+        "customer_phone": order.customer_phone,
+        "total": computed_total,
+        "status": "pending",
+        "delivery_method": order.delivery_method or "pickup",
+        "delivery_address": order.delivery_address,
+        "preferred_time": order.preferred_time,
+        "order_notes": order.order_notes,
+        "items": validated_items,
+        "delivery_fee": computed_delivery_fee,
+    }
+
     result = await execute_db(get_supabase().table("orders").insert(data))
     if not result.data:
         raise HTTPException(400, "Failed to create order")
@@ -1626,11 +1927,11 @@ async def create_order(order: OrderCreate, bg: BackgroundTasks):
 
     monnify = get_monnify()
     monnify_result = await monnify.initialize_transaction(
-        amount=order.total,
+        amount=computed_total,
         customer_name=order.customer_name,
         customer_email=order.customer_email,
         customer_phone=order.customer_phone,
-        payment_reference=order.payment_reference,
+        payment_reference=server_payment_reference,
         payment_description="Hot Portion Grill Order"
     )
 
@@ -1649,11 +1950,11 @@ async def create_order(order: OrderCreate, bg: BackgroundTasks):
     return {
         "status": "pending_payment",
         "order_id": order_data["id"],
-        "payment_reference": order.payment_reference,
+        "payment_reference": server_payment_reference,
         "checkout_url": monnify_result["checkout_url"]
     }
 
-@app.patch("/api/orders/{oid}/status")
+@app.patch("/api/orders/{oid}/status", dependencies=[Depends(require_admin)])
 async def update_order_status(oid: int, upd: OrderStatusUpdate):
     # Fetch current order
     order_result = await execute_db(get_supabase().table("orders").select("*").eq("id", oid))
@@ -1661,6 +1962,9 @@ async def update_order_status(oid: int, upd: OrderStatusUpdate):
         raise HTTPException(404, "Order not found")
     order = order_result.data[0]
     current_status = order.get("status")
+
+    # Validate transition (gap #12)
+    validate_order_transition(current_status, upd.status)
 
     # Prepare update payload
     update_data = {"status": upd.status}
@@ -1680,33 +1984,36 @@ async def update_order_status(oid: int, upd: OrderStatusUpdate):
     result = await execute_db(get_supabase().table("orders").update(update_data).eq("id", oid))
     if not result.data:
         raise HTTPException(404, "Order not found")
-    
+
     # Invalidate cache after status change
     invalidate_stats_cache()
-    
+
     return result.data[0]
 
-@app.post("/api/orders/{oid}/confirm-offline")
+@app.post("/api/orders/{oid}/confirm-offline", dependencies=[Depends(require_admin)])
 async def confirm_order_offline(oid: int):
     """Confirm an order offline (e.g., from admin panel) and reduce stock."""
     order_result = await execute_db(get_supabase().table("orders").select("*").eq("id", oid))
     if not order_result.data:
         raise HTTPException(404, "Order not found")
     order = order_result.data[0]
-    
+
     if order.get("status") in ("confirmed", "paid"):
         raise HTTPException(400, "Order already confirmed")
-    
+
+    # Validate transition (gap #12)
+    validate_order_transition(order.get("status"), "confirmed")
+
     await reduce_order_stock(order)
-    
+
     await execute_db(
         get_supabase().table("orders")
         .update({"status": "confirmed"})
         .eq("id", oid)
     )
-    
+
     invalidate_stats_cache()
-    
+
     return {"message": "Order confirmed offline", "status": "confirmed"}
 
 @app.get("/api/stats")
@@ -1732,65 +2039,81 @@ async def get_banner(banner_id: int):
         raise HTTPException(404, "Not found")
     return b
 
-@app.post("/api/v1/banners", response_model=Banner, status_code=201)
+@app.post("/api/v1/banners", response_model=Banner, status_code=201, dependencies=[Depends(require_admin)])
 async def create_banner(banner: BannerCreate):
     return await BannerService().create_banner(banner)
 
-@app.put("/api/v1/banners/{banner_id}", response_model=Banner)
+@app.put("/api/v1/banners/{banner_id}", response_model=Banner, dependencies=[Depends(require_admin)])
 async def update_banner(banner_id: int, banner: BannerUpdate):
     return await BannerService().update_banner(banner_id, banner)
 
-@app.delete("/api/v1/banners/{banner_id}", status_code=204)
+@app.delete("/api/v1/banners/{banner_id}", status_code=204, dependencies=[Depends(require_admin)])
 async def delete_banner(banner_id: int):
     await BannerService().delete_banner(banner_id)
 
-@app.patch("/api/v1/banners/{banner_id}/toggle")
+@app.patch("/api/v1/banners/{banner_id}/toggle", dependencies=[Depends(require_admin)])
 async def toggle_banner(banner_id: int):
     return await BannerService().toggle_banner(banner_id)
 
-@app.post("/api/v1/banners/{banner_id}/duplicate")
+@app.post("/api/v1/banners/{banner_id}/duplicate", dependencies=[Depends(require_admin)])
 async def duplicate_banner(banner_id: int):
     return await BannerService().duplicate_banner(banner_id)
 
-@app.patch("/api/v1/banners/reorder")
+@app.patch("/api/v1/banners/reorder", dependencies=[Depends(require_admin)])
 async def reorder_banners(banner_ids: List[int]):
     return await BannerService().reorder_banners(banner_ids)
 
 @app.post("/api/v1/webhooks/monnify")
 async def monnify_webhook(
-    payload: dict,
+    request: Request,
     x_signature: Optional[str] = Header(None, alias="X-Signature")
 ):
-    result = await get_monnify().handle_webhook(payload, x_signature)
+    # Read raw body BEFORE FastAPI's JSON parsing so we can verify the HMAC correctly.
+    raw_body = await request.body()
+    result = await get_monnify().handle_webhook(raw_body, x_signature)
     if not result["valid"]:
-        raise HTTPException(400, "Invalid signature")
+        logger.warning(f"Monnify webhook rejected: {result.get('error')}")
+        raise HTTPException(400, f"Webhook validation failed: {result.get('error')}")
 
-    if result.get("event") == "SUCCESSFUL_TRANSACTION":
-        data = payload.get("data", {})
-        trans_ref = data.get("transactionReference")
-        payment_ref = data.get("paymentReference")
+    if result.get("event") != "SUCCESSFUL_TRANSACTION":
+        return {"status": "ignored", "event": result.get("event")}
 
-        query = get_supabase().table("orders").select("*")
-        if payment_ref:
-            query = query.eq("payment_reference", payment_ref)
-        else:
-            query = query.eq("monnify_transaction_ref", trans_ref)
-        order_result = await execute_db(query)
-        if not order_result.data:
-            logger.warning(f"Order not found for ref: {payment_ref or trans_ref}")
-            return {"status": "ignored"}
+    payload = result.get("payload", {})
+    data = payload.get("data", {})
+    trans_ref = data.get("transactionReference")
+    payment_ref = data.get("paymentReference")
 
-        order = order_result.data[0]
+    query = get_supabase().table("orders").select("*")
+    if payment_ref:
+        query = query.eq("payment_reference", payment_ref)
+    else:
+        query = query.eq("monnify_transaction_ref", trans_ref)
+    order_result = await execute_db(query)
+    if not order_result.data:
+        logger.warning(f"Order not found for ref: {payment_ref or trans_ref}")
+        return {"status": "ignored"}
 
-        # Reduce stock for each item (using the helper function)
-        await reduce_order_stock(order)
+    order = order_result.data[0]
 
-        if order.get("status") != "paid":
-            await execute_db(
-                get_supabase().table("orders")
-                .update({"status": "paid"})
-                .eq("id", order["id"])
-            )
+    # ─── Idempotency: skip if already paid ───
+    if order.get("status") == "paid":
+        logger.info(f"Webhook duplicate for order {order['id']} (already paid) — ignoring")
+        return {"status": "already_processed"}
+
+    # ─── Atomic claim: flip pending → paid in a single guarded UPDATE ───
+    # If two webhooks arrive simultaneously, only one will change the row.
+    claim_result = await execute_db(
+        get_supabase().table("orders")
+        .update({"status": "paid"})
+        .eq("id", order["id"])
+        .neq("status", "paid")
+    )
+    if not claim_result.data:
+        logger.info(f"Order {order['id']} already claimed by another worker — skipping stock decrement")
+        return {"status": "already_processed"}
+
+    # We own the transition → reduce stock exactly once
+    await reduce_order_stock(order)
 
     return {"status": "received"}
 
@@ -1799,7 +2122,8 @@ async def monnify_webhook(
 # =============================================
 
 @app.post("/api/delivery-fee", response_model=DeliveryFeeResponse)
-async def get_delivery_fee(request: DeliveryFeeRequest):
+async def get_delivery_fee(request: DeliveryFeeRequest, http_request: Request):
+    await enforce_rate_limit(http_request, "delivery", settings.RATE_LIMIT_DELIVERY_PER_MINUTE)
     try:
         # ─── If client provided coordinates (from Amazon Places), use them directly ───
         if request.lat is not None and request.lng is not None:
@@ -1894,7 +2218,7 @@ async def get_all_delivery_areas():
         result = await execute_db(
             db.rpc("get_delivery_areas_geojson", {})
         )
-        
+
         areas = []
         for area_data in result.data:
             area_dict = dict(area_data)
@@ -1902,14 +2226,14 @@ async def get_all_delivery_areas():
                 area_dict["created_at"] = area_dict["created_at"].isoformat()
             if "updated_at" in area_dict and isinstance(area_dict["updated_at"], (datetime, date)):
                 area_dict["updated_at"] = area_dict["updated_at"].isoformat()
-            
+
             if "polygon" in area_dict and isinstance(area_dict["polygon"], str):
                 area_dict["polygon"] = json.loads(area_dict["polygon"])
-            
+
             areas.append(area_dict)
-        
+
         return areas
-        
+
     except Exception as e:
         logger.error(f"Error fetching delivery areas: {str(e)}", exc_info=True)
         raise HTTPException(
@@ -1918,7 +2242,7 @@ async def get_all_delivery_areas():
         )
 
 
-@app.post("/api/delivery-areas", response_model=DeliveryArea, status_code=201)
+@app.post("/api/delivery-areas", response_model=DeliveryArea, status_code=201, dependencies=[Depends(require_admin)])
 async def create_delivery_area(area: DeliveryAreaCreate):
     try:
         if "type" not in area.polygon or area.polygon["type"] != "Polygon":
@@ -1926,20 +2250,20 @@ async def create_delivery_area(area: DeliveryAreaCreate):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid polygon: must be a GeoJSON Polygon"
             )
-        
+
         if "coordinates" not in area.polygon or not area.polygon["coordinates"]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid polygon: missing coordinates"
             )
-        
+
         coords = area.polygon["coordinates"][0]
         if len(coords) < 4:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid polygon: must have at least 4 points"
             )
-        
+
         db = get_supabase()
         result = await execute_db(
             db.rpc(
@@ -1951,23 +2275,23 @@ async def create_delivery_area(area: DeliveryAreaCreate):
                 }
             )
         )
-        
+
         if not result.data:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Failed to create delivery area. Check that the polygon is valid."
             )
-        
+
         created = dict(result.data[0])
         created["polygon"] = area.polygon
-        
+
         if "created_at" in created and isinstance(created["created_at"], (datetime, date)):
             created["created_at"] = created["created_at"].isoformat()
         if "updated_at" in created and isinstance(created["updated_at"], (datetime, date)):
             created["updated_at"] = created["updated_at"].isoformat()
-        
+
         return created
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1978,7 +2302,7 @@ async def create_delivery_area(area: DeliveryAreaCreate):
         )
 
 
-@app.put("/api/delivery-areas/{area_id}", response_model=DeliveryArea)
+@app.put("/api/delivery-areas/{area_id}", response_model=DeliveryArea, dependencies=[Depends(require_admin)])
 async def update_delivery_area(area_id: int, area: DeliveryAreaUpdate):
     try:
         if "type" not in area.polygon or area.polygon["type"] != "Polygon":
@@ -1986,20 +2310,20 @@ async def update_delivery_area(area_id: int, area: DeliveryAreaUpdate):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid polygon: must be a GeoJSON Polygon"
             )
-        
+
         if "coordinates" not in area.polygon or not area.polygon["coordinates"]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid polygon: missing coordinates"
             )
-        
+
         coords = area.polygon["coordinates"][0]
         if len(coords) < 4:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid polygon: must have at least 4 points"
             )
-        
+
         db = get_supabase()
         result = await execute_db(
             db.rpc(
@@ -2012,23 +2336,23 @@ async def update_delivery_area(area_id: int, area: DeliveryAreaUpdate):
                 }
             )
         )
-        
+
         if not result.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Delivery area with ID {area_id} not found"
             )
-        
+
         updated = dict(result.data[0])
         updated["polygon"] = area.polygon
-        
+
         if "created_at" in updated and isinstance(updated["created_at"], (datetime, date)):
             updated["created_at"] = updated["created_at"].isoformat()
         if "updated_at" in updated and isinstance(updated["updated_at"], (datetime, date)):
             updated["updated_at"] = updated["updated_at"].isoformat()
-        
+
         return updated
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2039,7 +2363,7 @@ async def update_delivery_area(area_id: int, area: DeliveryAreaUpdate):
         )
 
 
-@app.delete("/api/delivery-areas/{area_id}", status_code=204)
+@app.delete("/api/delivery-areas/{area_id}", status_code=204, dependencies=[Depends(require_admin)])
 async def delete_delivery_area(area_id: int):
     try:
         db = get_supabase()
@@ -2051,13 +2375,13 @@ async def delete_delivery_area(area_id: int):
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Delivery area with ID {area_id} not found"
             )
-        
+
         await execute_db(
             db.table("delivery_areas").delete().eq("id", area_id)
         )
-        
+
         return None
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2075,7 +2399,7 @@ async def get_area_by_point(lat: float, lng: float):
         result = await execute_db(
             db.rpc("find_delivery_area", {"lat": lat, "lng": lng})
         )
-        
+
         if result.data and len(result.data) > 0:
             return {
                 "covered": True,
@@ -2086,7 +2410,7 @@ async def get_area_by_point(lat: float, lng: float):
                 "covered": False,
                 "message": "Point not in any delivery area"
             }
-            
+
     except Exception as e:
         logger.error(f"Error checking point: {str(e)}", exc_info=True)
         raise HTTPException(
@@ -2100,11 +2424,13 @@ async def get_area_by_point(lat: float, lng: float):
 ALLOWED_PLACES_ENDPOINTS = {"autocomplete", "geocode", "reverse-geocode"}
 
 @app.post("/api/places/{endpoint}")
-async def proxy_amazon_places(endpoint: str, body: Dict[str, Any]):
+async def proxy_amazon_places(endpoint: str, body: Dict[str, Any], request: Request):
     """
     Proxy Amazon Location Service Places v2 calls.
     Keeps the API key server-side so the browser never sees it.
     """
+    await enforce_rate_limit(request, "places", settings.RATE_LIMIT_PLACES_PER_MINUTE)
+
     if endpoint not in ALLOWED_PLACES_ENDPOINTS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2158,13 +2484,13 @@ async def proxy_amazon_places(endpoint: str, body: Dict[str, Any]):
 # =============================================
 
 # ---- VALUE DISCOUNT RULES ----
-@app.get("/api/admin/delivery-rules", response_model=List[DeliveryFeeRule])
+@app.get("/api/admin/delivery-rules", response_model=List[DeliveryFeeRule], dependencies=[Depends(require_admin)])
 async def get_delivery_rules():
     db = get_supabase()
     result = await execute_db(db.table("delivery_fee_rules").select("*").order("min_order_value"))
     return result.data
 
-@app.get("/api/admin/delivery-rules/{rule_id}", response_model=DeliveryFeeRule)
+@app.get("/api/admin/delivery-rules/{rule_id}", response_model=DeliveryFeeRule, dependencies=[Depends(require_admin)])
 async def get_delivery_rule(rule_id: int):
     db = get_supabase()
     result = await execute_db(db.table("delivery_fee_rules").select("*").eq("id", rule_id))
@@ -2172,7 +2498,7 @@ async def get_delivery_rule(rule_id: int):
         raise HTTPException(404, "Rule not found")
     return result.data[0]
 
-@app.post("/api/admin/delivery-rules", response_model=DeliveryFeeRule, status_code=201)
+@app.post("/api/admin/delivery-rules", response_model=DeliveryFeeRule, status_code=201, dependencies=[Depends(require_admin)])
 async def create_delivery_rule(rule: DeliveryFeeRuleCreate):
     db = get_supabase()
     data = rule.dict(exclude={'id', 'created_at', 'updated_at'})
@@ -2182,7 +2508,7 @@ async def create_delivery_rule(rule: DeliveryFeeRuleCreate):
         raise HTTPException(400, "Failed to create rule")
     return result.data[0]
 
-@app.put("/api/admin/delivery-rules/{rule_id}", response_model=DeliveryFeeRule)
+@app.put("/api/admin/delivery-rules/{rule_id}", response_model=DeliveryFeeRule, dependencies=[Depends(require_admin)])
 async def update_delivery_rule(rule_id: int, rule: DeliveryFeeRuleUpdate):
     db = get_supabase()
     data = rule.dict(exclude={'id', 'created_at', 'updated_at'}, exclude_unset=True)
@@ -2192,7 +2518,7 @@ async def update_delivery_rule(rule_id: int, rule: DeliveryFeeRuleUpdate):
         raise HTTPException(404, "Rule not found")
     return result.data[0]
 
-@app.delete("/api/admin/delivery-rules/{rule_id}", status_code=204)
+@app.delete("/api/admin/delivery-rules/{rule_id}", status_code=204, dependencies=[Depends(require_admin)])
 async def delete_delivery_rule(rule_id: int):
     db = get_supabase()
     result = await execute_db(db.table("delivery_fee_rules").delete().eq("id", rule_id))
@@ -2200,13 +2526,13 @@ async def delete_delivery_rule(rule_id: int):
         raise HTTPException(404, "Rule not found")
 
 # ---- PEAK SETTINGS ----
-@app.get("/api/admin/peak-settings", response_model=List[DeliveryPeakSetting])
+@app.get("/api/admin/peak-settings", response_model=List[DeliveryPeakSetting], dependencies=[Depends(require_admin)])
 async def get_peak_settings():
     db = get_supabase()
     result = await execute_db(db.table("delivery_peak_settings").select("*").order("day_of_week"))
     return result.data
 
-@app.get("/api/admin/peak-settings/{setting_id}", response_model=DeliveryPeakSetting)
+@app.get("/api/admin/peak-settings/{setting_id}", response_model=DeliveryPeakSetting, dependencies=[Depends(require_admin)])
 async def get_peak_setting(setting_id: int):
     db = get_supabase()
     result = await execute_db(db.table("delivery_peak_settings").select("*").eq("id", setting_id))
@@ -2214,7 +2540,7 @@ async def get_peak_setting(setting_id: int):
         raise HTTPException(404, "Peak setting not found")
     return result.data[0]
 
-@app.post("/api/admin/peak-settings", response_model=DeliveryPeakSetting, status_code=201)
+@app.post("/api/admin/peak-settings", response_model=DeliveryPeakSetting, status_code=201, dependencies=[Depends(require_admin)])
 async def create_peak_setting(setting: DeliveryPeakSettingCreate):
     db = get_supabase()
     data = setting.dict(exclude={'id', 'created_at', 'updated_at'})
@@ -2224,7 +2550,7 @@ async def create_peak_setting(setting: DeliveryPeakSettingCreate):
         raise HTTPException(400, "Failed to create peak setting")
     return result.data[0]
 
-@app.put("/api/admin/peak-settings/{setting_id}", response_model=DeliveryPeakSetting)
+@app.put("/api/admin/peak-settings/{setting_id}", response_model=DeliveryPeakSetting, dependencies=[Depends(require_admin)])
 async def update_peak_setting(setting_id: int, setting: DeliveryPeakSettingUpdate):
     db = get_supabase()
     data = setting.dict(exclude={'id', 'created_at', 'updated_at'}, exclude_unset=True)
@@ -2234,7 +2560,7 @@ async def update_peak_setting(setting_id: int, setting: DeliveryPeakSettingUpdat
         raise HTTPException(404, "Peak setting not found")
     return result.data[0]
 
-@app.delete("/api/admin/peak-settings/{setting_id}", status_code=204)
+@app.delete("/api/admin/peak-settings/{setting_id}", status_code=204, dependencies=[Depends(require_admin)])
 async def delete_peak_setting(setting_id: int):
     db = get_supabase()
     result = await execute_db(db.table("delivery_peak_settings").delete().eq("id", setting_id))
@@ -2242,13 +2568,13 @@ async def delete_peak_setting(setting_id: int):
         raise HTTPException(404, "Peak setting not found")
 
 # ---- LOYALTY SETTINGS ----
-@app.get("/api/admin/loyalty-settings", response_model=List[DeliveryLoyaltySetting])
+@app.get("/api/admin/loyalty-settings", response_model=List[DeliveryLoyaltySetting], dependencies=[Depends(require_admin)])
 async def get_loyalty_settings():
     db = get_supabase()
     result = await execute_db(db.table("delivery_loyalty_settings").select("*"))
     return result.data
 
-@app.get("/api/admin/loyalty-settings/{setting_id}", response_model=DeliveryLoyaltySetting)
+@app.get("/api/admin/loyalty-settings/{setting_id}", response_model=DeliveryLoyaltySetting, dependencies=[Depends(require_admin)])
 async def get_loyalty_setting(setting_id: int):
     db = get_supabase()
     result = await execute_db(db.table("delivery_loyalty_settings").select("*").eq("id", setting_id))
@@ -2256,7 +2582,7 @@ async def get_loyalty_setting(setting_id: int):
         raise HTTPException(404, "Loyalty setting not found")
     return result.data[0]
 
-@app.post("/api/admin/loyalty-settings", response_model=DeliveryLoyaltySetting, status_code=201)
+@app.post("/api/admin/loyalty-settings", response_model=DeliveryLoyaltySetting, status_code=201, dependencies=[Depends(require_admin)])
 async def create_loyalty_setting(setting: DeliveryLoyaltySettingCreate):
     db = get_supabase()
     data = setting.dict(exclude={'id', 'created_at', 'updated_at'})
@@ -2266,7 +2592,7 @@ async def create_loyalty_setting(setting: DeliveryLoyaltySettingCreate):
         raise HTTPException(400, "Failed to create loyalty setting")
     return result.data[0]
 
-@app.put("/api/admin/loyalty-settings/{setting_id}", response_model=DeliveryLoyaltySetting)
+@app.put("/api/admin/loyalty-settings/{setting_id}", response_model=DeliveryLoyaltySetting, dependencies=[Depends(require_admin)])
 async def update_loyalty_setting(setting_id: int, setting: DeliveryLoyaltySettingUpdate):
     db = get_supabase()
     data = setting.dict(exclude={'id', 'created_at', 'updated_at'}, exclude_unset=True)
@@ -2276,7 +2602,7 @@ async def update_loyalty_setting(setting_id: int, setting: DeliveryLoyaltySettin
         raise HTTPException(404, "Loyalty setting not found")
     return result.data[0]
 
-@app.delete("/api/admin/loyalty-settings/{setting_id}", status_code=204)
+@app.delete("/api/admin/loyalty-settings/{setting_id}", status_code=204, dependencies=[Depends(require_admin)])
 async def delete_loyalty_setting(setting_id: int):
     db = get_supabase()
     result = await execute_db(db.table("delivery_loyalty_settings").delete().eq("id", setting_id))
@@ -2284,13 +2610,13 @@ async def delete_loyalty_setting(setting_id: int):
         raise HTTPException(404, "Loyalty setting not found")
 
 # ---- ITEM SURCHARGE RULES ----
-@app.get("/api/admin/item-surcharge-rules", response_model=List[DeliveryItemSurchargeRule])
+@app.get("/api/admin/item-surcharge-rules", response_model=List[DeliveryItemSurchargeRule], dependencies=[Depends(require_admin)])
 async def get_item_surcharge_rules():
     db = get_supabase()
     result = await execute_db(db.table("delivery_item_surcharge_rules").select("*").order("min_main_items"))
     return result.data
 
-@app.get("/api/admin/item-surcharge-rules/{rule_id}", response_model=DeliveryItemSurchargeRule)
+@app.get("/api/admin/item-surcharge-rules/{rule_id}", response_model=DeliveryItemSurchargeRule, dependencies=[Depends(require_admin)])
 async def get_item_surcharge_rule(rule_id: int):
     db = get_supabase()
     result = await execute_db(db.table("delivery_item_surcharge_rules").select("*").eq("id", rule_id))
@@ -2298,7 +2624,7 @@ async def get_item_surcharge_rule(rule_id: int):
         raise HTTPException(404, "Rule not found")
     return result.data[0]
 
-@app.post("/api/admin/item-surcharge-rules", response_model=DeliveryItemSurchargeRule, status_code=201)
+@app.post("/api/admin/item-surcharge-rules", response_model=DeliveryItemSurchargeRule, status_code=201, dependencies=[Depends(require_admin)])
 async def create_item_surcharge_rule(rule: DeliveryItemSurchargeRuleCreate):
     db = get_supabase()
     data = rule.dict(exclude={'id', 'created_at', 'updated_at'})
@@ -2308,7 +2634,7 @@ async def create_item_surcharge_rule(rule: DeliveryItemSurchargeRuleCreate):
         raise HTTPException(400, "Failed to create item surcharge rule")
     return result.data[0]
 
-@app.put("/api/admin/item-surcharge-rules/{rule_id}", response_model=DeliveryItemSurchargeRule)
+@app.put("/api/admin/item-surcharge-rules/{rule_id}", response_model=DeliveryItemSurchargeRule, dependencies=[Depends(require_admin)])
 async def update_item_surcharge_rule(rule_id: int, rule: DeliveryItemSurchargeRuleUpdate):
     db = get_supabase()
     data = rule.dict(exclude={'id', 'created_at', 'updated_at'}, exclude_unset=True)
@@ -2318,7 +2644,7 @@ async def update_item_surcharge_rule(rule_id: int, rule: DeliveryItemSurchargeRu
         raise HTTPException(404, "Rule not found")
     return result.data[0]
 
-@app.delete("/api/admin/item-surcharge-rules/{rule_id}", status_code=204)
+@app.delete("/api/admin/item-surcharge-rules/{rule_id}", status_code=204, dependencies=[Depends(require_admin)])
 async def delete_item_surcharge_rule(rule_id: int):
     db = get_supabase()
     result = await execute_db(db.table("delivery_item_surcharge_rules").delete().eq("id", rule_id))
@@ -2327,7 +2653,8 @@ async def delete_item_surcharge_rule(rule_id: int):
 
 # ---------- AI ENDPOINTS ----------
 @app.post("/api/ai/chat", response_model=AIChatResponse)
-async def chat_with_ai(req: AIChatRequest, ai_service: AIService = Depends(get_ai_service)):
+async def chat_with_ai(req: AIChatRequest, request: Request, ai_service: AIService = Depends(get_ai_service)):
+    await enforce_rate_limit(request, "ai", settings.RATE_LIMIT_AI_PER_MINUTE)
     result = await ai_service.chat(req.message)
     return AIChatResponse(response=result["response"], provider=result["provider"], model=result["model"])
 
@@ -2342,6 +2669,12 @@ async def ai_health(ai_service: AIService = Depends(get_ai_service)):
     }
 
 # ---------- RUN ----------
+# NOTE ON SCALING (gap #14):
+# This process keeps several in-memory caches (_stats_cache, _rules_cache, _peak_cache,
+# _loyalty_cache, _item_surcharge_cache) and the rate limiter (_rate_limit_store). If you
+# scale `workers` > 1, each worker gets its own copy, which is functionally OK (caches are
+# just re-fetched; rate limits become per-worker) but NOT what you'd want for strict global
+# limits. To scale safely, move those caches and the rate limiter to Redis.
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, workers=1, log_level="info")
