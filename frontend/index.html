@@ -2803,7 +2803,7 @@
             }
 
             // ─── Check delivery coverage with full intelligent fee ───
-            async function checkDeliveryCoverage(address) {
+            async function checkDeliveryCoverage(address, coords = null) {
                 if (!address || address.trim().length < 5) {
                     return { covered: false, error: 'Please enter a full address' };
                 }
@@ -2826,6 +2826,10 @@
                         order_total: cartTotalPrice || 0,
                         customer_email: email || undefined
                     };
+                    if (coords && typeof coords.lat === 'number' && typeof coords.lng === 'number') {
+                        payload.lat = coords.lat;
+                        payload.lng = coords.lng;
+                    }
 
                     console.log('📦 Sending delivery request:', payload);
 
@@ -2968,7 +2972,7 @@
             // ─── DELIVERY ADDRESS HANDLER ───
             let deliveryDebounceTimer = null;
 
-            async function handleDeliveryAddressChange() {
+            async function handleDeliveryAddressChange(precomputedCoords = null) {
                 const address = deliveryAddress.value.trim();
 
                 if (address.length < 5) {
@@ -2976,16 +2980,26 @@
                     return;
                 }
 
-                // Always recalculate if address changed OR cart changed
-                // We'll force recalculation by clearing lastCheckedAddress when cart changes
                 if (address === lastCheckedAddress && isDeliveryCovered && lastBreakdown) {
-                    // But if the cart total changed, we need to recalculate
-                    // This is handled by clearing lastCheckedAddress in cart operations
                     return;
                 }
 
                 lastCheckedAddress = address;
-                const result = await checkDeliveryCoverage(address);
+
+                // ─── Try to resolve coordinates via Amazon (frontend) ───
+                // This lets the backend skip its own Nominatim geocoding.
+                let coords = precomputedCoords;
+                if (!coords) {
+                    try {
+                        const geo = await geocodeAddress(address);
+                        coords = { lat: geo.lat, lng: geo.lng };
+                        console.log('📍 Amazon geocode ok:', coords);
+                    } catch (e) {
+                        console.warn('Amazon geocode failed, backend will fall back to Nominatim:', e.message);
+                    }
+                }
+
+                const result = await checkDeliveryCoverage(address, coords);
 
                 if (result.fallback) {
                     deliveryFee = result.fee;
@@ -3065,7 +3079,11 @@
 
                     if (address) {
                         deliveryAddress.value = address;
-                        await handleDeliveryAddressChange();
+                        // Pass GPS coords directly — no need to re-geocode the address
+                        await handleDeliveryAddressChange({
+                            lat: position.lat,
+                            lng: position.lng
+                        });
                         showToast('📍 Location found!', 'fa-solid fa-check-circle');
                     }
                 } catch (err) {
