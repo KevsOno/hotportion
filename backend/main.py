@@ -15,6 +15,8 @@ from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
+import jwt
+from jwt import PyJWTError
 from fastapi import FastAPI, HTTPException, Depends, Query, status, BackgroundTasks, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -51,10 +53,6 @@ load_dotenv()
 
 # ---------- HELPER FUNCTION ----------
 def convert_datetime_to_iso(obj):
-    """
-    Recursively convert all datetime and date objects in obj to ISO format strings.
-    Handles dicts, lists, and any object with a __dict__ attribute.
-    """
     if isinstance(obj, (datetime, date)):
         return obj.isoformat()
     elif isinstance(obj, dict):
@@ -71,6 +69,9 @@ def convert_datetime_to_iso(obj):
 class Settings(BaseSettings):
     SUPABASE_URL: str = Field(..., min_length=1)
     SUPABASE_SERVICE_KEY: str = Field(..., min_length=1)
+    # JWT secret from Supabase → Project Settings → API → JWT Settings → JWT Secret
+    SUPABASE_JWT_SECRET: Optional[str] = None
+    SUPABASE_JWT_AUDIENCE: str = "authenticated"
     BREVO_API_KEY: str = Field(..., min_length=1)
     BREVO_SENDER_EMAIL: str = Field(..., min_length=1)
     BREVO_SENDER_NAME: str = "Hot Portion Grill"
@@ -95,35 +96,18 @@ class Settings(BaseSettings):
     MAX_DB_THREADS: int = 25
     STATS_CACHE_TTL_SECONDS: int = 10
     DEBUG: bool = False
-    # Delivery settings
     MINIMUM_DELIVERY_FEE: int = 500
     MAX_LOYALTY_DISCOUNT_PERCENT: int = 15
-    VOLUME_SURCHARGE_THRESHOLDS: Dict[str, int] = {
-        "large": 4,      # 4+ items
-        "xlarge": 6,     # 6+ items
-        "xxlarge": 10    # 10+ items
-    }
-    VOLUME_SURCHARGE_AMOUNTS: Dict[str, int] = {
-        "large": 150,
-        "xlarge": 300,
-        "xxlarge": 500
-    }
+    VOLUME_SURCHARGE_THRESHOLDS: Dict[str, int] = {"large": 4, "xlarge": 6, "xxlarge": 10}
+    VOLUME_SURCHARGE_AMOUNTS: Dict[str, int] = {"large": 150, "xlarge": 300, "xxlarge": 500}
     WEIGHT_THRESHOLD_KG: float = 5.0
     WEIGHT_SURCHARGE_PER_KG: int = 100
     BULKY_ITEM_SURCHARGE: int = 200
     PEAK_SURCHARGE: int = 200
-    # ─── Amazon Location Service ───
     AWS_LOCATION_API_KEY: Optional[str] = None
     AWS_LOCATION_REGION: str = "eu-north-1"
-    # ─── Security ───
-    # If set, all write/admin endpoints require: Authorization: Bearer <ADMIN_API_TOKEN>
-    # If unset, they remain open (existing behavior preserved) with a startup warning.
-    ADMIN_API_TOKEN: Optional[str] = None
-    # Optional Sentry DSN. If set and sentry_sdk is installed, errors are reported.
     SENTRY_DSN: Optional[str] = None
-    # DB query timeout (seconds)
     DB_QUERY_TIMEOUT_SECONDS: float = 15.0
-    # Rate limits per IP, per minute
     RATE_LIMIT_ORDERS_PER_MINUTE: int = 10
     RATE_LIMIT_DELIVERY_PER_MINUTE: int = 30
     RATE_LIMIT_AI_PER_MINUTE: int = 20
@@ -184,14 +168,11 @@ async def execute_db(query):
     future = loop.run_in_executor(_executor, query.execute)
     return await asyncio.wait_for(future, timeout=settings.DB_QUERY_TIMEOUT_SECONDS)
 
-# ---------- RATE LIMITER (in-memory sliding window) ----------
-# NOTE: this is process-local. If you scale uvicorn to >1 worker, each worker
-# has its own limit; use Redis or similar for cross-worker enforcement.
+# ---------- RATE LIMITER ----------
 _rate_limit_store: Dict[str, List[float]] = {}
 _rate_limit_lock = asyncio.Lock()
 
 async def enforce_rate_limit(request: Request, bucket: str, max_per_minute: int) -> None:
-    """Simple per-IP sliding-window rate limiter."""
     if max_per_minute <= 0:
         return
     client_ip = request.client.host if request.client else "unknown"
@@ -210,36 +191,161 @@ async def enforce_rate_limit(request: Request, bucket: str, max_per_minute: int)
             )
         timestamps.append(now)
         _rate_limit_store[key] = timestamps
-        # Opportunistic cleanup
         if len(_rate_limit_store) > 10000:
             stale_keys = [k for k, v in _rate_limit_store.items() if not v or v[-1] < cutoff]
             for k in stale_keys:
                 _rate_limit_store.pop(k, None)
 
-# ---------- ADMIN AUTH ----------
-async def require_admin(authorization: Optional[str] = Header(None, alias="Authorization")):
-    """
-    Require a bearer token matching settings.ADMIN_API_TOKEN for write/admin endpoints.
+# ============================================================
+# AUTHENTICATION & AUTHORIZATION (role-based)
+# ============================================================
 
-    If ADMIN_API_TOKEN is NOT configured, endpoints remain open (existing behaviour)
-    so a live deployment isn't broken by this change. A warning is logged on every
-    such call so you can detect and close the gap.
-    """
-    if not settings.ADMIN_API_TOKEN:
-        logger.warning(
-            "Admin-protected endpoint invoked but ADMIN_API_TOKEN is not configured "
-            "— the deployment is currently UNSECURED. Set ADMIN_API_TOKEN to enable auth."
+# Role → set of permissions. "*" means everything.
+PERMISSIONS: Dict[str, Set[str]] = {
+    "owner": {"*"},
+    "manager": {
+        "products:read", "products:write",
+        "categories:read", "categories:write",
+        "banners:read", "banners:write",
+        "orders:read", "orders:update_status",
+        "delivery_rules:read", "delivery_rules:write",
+        "delivery_areas:read", "delivery_areas:write",
+        "stats:read",
+        "audit:read",
+    },
+    "kitchen": {
+        "orders:read", "orders:update_status",
+        "products:read",
+    },
+    "delivery": {
+        "orders:read", "orders:update_status",
+    },
+}
+
+ALLOWED_ROLES = set(PERMISSIONS.keys())
+
+
+async def verify_supabase_jwt(token: str) -> Dict[str, Any]:
+    """Verify a Supabase JWT locally using the shared secret."""
+    if not settings.SUPABASE_JWT_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication is not configured on this server (SUPABASE_JWT_SECRET missing)"
         )
-        return
+    try:
+        payload = jwt.decode(
+            token,
+            settings.SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            audience=settings.SUPABASE_JWT_AUDIENCE,
+            options={"verify_exp": True},
+        )
+        return payload
+    except PyJWTError as e:
+        logger.warning(f"JWT verification failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+async def get_current_user(authorization: Optional[str] = Header(None, alias="Authorization")) -> Dict[str, Any]:
+    """Extract and verify the Supabase JWT from the Authorization header."""
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing admin Authorization header",
+            detail="Missing Authorization header",
             headers={"WWW-Authenticate": "Bearer"},
         )
     token = authorization.split(" ", 1)[1].strip()
-    if not hmac.compare_digest(token, settings.ADMIN_API_TOKEN):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid admin token")
+    payload = await verify_supabase_jwt(token)
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token missing 'sub' claim")
+    return payload
+
+
+async def get_current_staff(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """Look up the staff row for the authenticated user and verify it's active."""
+    user_id = user.get("sub")
+    try:
+        r = await execute_db(
+            get_supabase().table("staff").select("*").eq("id", user_id).limit(1)
+        )
+    except Exception as e:
+        logger.error(f"Staff lookup failed for {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Could not verify staff account")
+
+    if not r.data:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account is not registered as staff. Contact an owner."
+        )
+    staff_row = r.data[0]
+    if not staff_row.get("is_active", True):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your staff account has been deactivated")
+    return staff_row
+
+
+def require_permission(permission: str):
+    """Return a FastAPI dependency that enforces a specific permission."""
+    async def checker(staff: Dict[str, Any] = Depends(get_current_staff)):
+        role = staff.get("role")
+        perms = PERMISSIONS.get(role, set())
+        if "*" not in perms and permission not in perms:
+            logger.warning(f"Permission denied: staff={staff.get('email')} role={role} needed={permission}")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Your role ('{role}') does not permit this action."
+            )
+        return staff
+    return checker
+
+
+async def audit_log(
+    staff: Dict[str, Any],
+    action: str,
+    resource_type: str,
+    resource_id: Optional[Any] = None,
+    payload: Optional[Dict[str, Any]] = None,
+    request: Optional[Request] = None,
+) -> None:
+    """Record an admin mutation. Never raises — a failed audit must not break the operation."""
+    try:
+        await execute_db(get_supabase().table("staff_audit_log").insert({
+            "staff_id": staff.get("id"),
+            "staff_email": staff.get("email"),
+            "action": action,
+            "resource_type": resource_type,
+            "resource_id": str(resource_id) if resource_id is not None else None,
+            "payload": payload,
+            "ip_address": request.client.host if request and request.client else None,
+            "user_agent": request.headers.get("user-agent") if request else None,
+        }))
+    except Exception as e:
+        logger.warning(f"Audit log write failed: {e}")
+
+
+# ---------- STAFF PYDANTIC MODELS ----------
+class StaffCreate(BaseModel):
+    email: str
+    full_name: str
+    role: str
+
+class StaffUpdate(BaseModel):
+    full_name: Optional[str] = None
+    role: Optional[str] = None
+
+class StaffMember(BaseModel):
+    id: str
+    email: str
+    full_name: str
+    role: str
+    is_active: bool
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
 
 # ---------- ORDER STATE MACHINE ----------
 _ALLOWED_ORDER_TRANSITIONS: Dict[str, Set[str]] = {
@@ -251,7 +357,6 @@ _ALLOWED_ORDER_TRANSITIONS: Dict[str, Set[str]] = {
 }
 
 def validate_order_transition(current: Optional[str], target: str) -> None:
-    """Raise HTTPException if the transition is clearly disallowed."""
     if not current or not target:
         return
     current_lc = current.lower()
@@ -260,7 +365,6 @@ def validate_order_transition(current: Optional[str], target: str) -> None:
         return
     allowed = _ALLOWED_ORDER_TRANSITIONS.get(current_lc)
     if allowed is None:
-        # Unknown current status — allow but log so legacy data doesn't break.
         logger.warning(f"Unknown current order status '{current}', allowing transition to '{target}'")
         return
     if target_lc not in allowed:
@@ -279,7 +383,6 @@ class ProductBase(BaseModel):
     emoji: str = "🍽️"
     image: Optional[str] = None
     tagColor: str = "primary"
-    # New fields for intelligent delivery
     is_main_item: bool = True
     weight_kg: float = 0.5
     is_bulky: bool = False
@@ -298,16 +401,13 @@ class OrderItem(BaseModel):
     name: str
     qty: int
     price: int
-    product_id: int   # added for stock update
+    product_id: int
 
 class OrderCreate(BaseModel):
-    # Optional client-supplied value — the server ALWAYS generates its own.
     payment_reference: Optional[str] = None
     customer_name: str
     customer_email: str
     customer_phone: str
-    # Optional — the server recomputes this from items + delivery fee. Kept optional
-    # so existing clients that still send it don't break.
     total: Optional[int] = None
     status: Optional[str] = "pending"
     delivery_method: Optional[str] = "pickup"
@@ -316,13 +416,12 @@ class OrderCreate(BaseModel):
     order_notes: Optional[str] = None
     items: List[OrderItem]
     monnify_transaction_ref: Optional[str] = None
-    delivery_fee: Optional[int] = 0  # Recomputed server-side when possible
-    # Fee breakdown audit trail (optional, stored as JSONB when provided)
+    delivery_fee: Optional[int] = 0
     delivery_breakdown: Optional[Dict[str, Any]] = None
 
 class OrderStatusUpdate(BaseModel):
     status: str
-    reason: Optional[str] = None   # For cancellation
+    reason: Optional[str] = None
 
 class BannerBase(BaseModel):
     title: str
@@ -379,27 +478,22 @@ class AIChatResponse(BaseModel):
     provider: str
     model: str
 
-# =============================================
-# DELIVERY AREA MODELS (Existing + Extended)
-# =============================================
-
 class DeliveryAreaBase(BaseModel):
     name: str
     fee: int
 
 class DeliveryAreaCreate(DeliveryAreaBase):
-    polygon: Dict[str, Any]  # GeoJSON Polygon
+    polygon: Dict[str, Any]
 
 class DeliveryAreaUpdate(DeliveryAreaBase):
-    polygon: Dict[str, Any]  # GeoJSON Polygon
+    polygon: Dict[str, Any]
 
 class DeliveryArea(DeliveryAreaBase):
     id: int
-    polygon: Dict[str, Any]  # GeoJSON representation
+    polygon: Dict[str, Any]
     created_at: datetime
     updated_at: datetime
 
-# -------- New Intelligent Delivery Models --------
 class DeliveryFeeRule(BaseModel):
     id: Optional[int] = None
     min_order_value: int
@@ -419,8 +513,8 @@ class DeliveryFeeRuleUpdate(DeliveryFeeRule):
 
 class DeliveryPeakSetting(BaseModel):
     id: Optional[int] = None
-    day_of_week: Optional[int] = None  # 0=Sunday, 1=Monday...
-    start_time: Optional[str] = None   # 'HH:MM'
+    day_of_week: Optional[int] = None
+    start_time: Optional[str] = None
     end_time: Optional[str] = None
     surcharge_amount: int = 200
     is_active: bool = True
@@ -447,7 +541,6 @@ class DeliveryLoyaltySettingCreate(DeliveryLoyaltySetting):
 class DeliveryLoyaltySettingUpdate(DeliveryLoyaltySetting):
     pass
 
-# ---- New: Item Surcharge Rules ----
 class DeliveryItemSurchargeRule(BaseModel):
     id: Optional[int] = None
     min_main_items: Optional[int] = None
@@ -467,12 +560,12 @@ class DeliveryItemSurchargeRuleUpdate(DeliveryItemSurchargeRule):
 
 class DeliveryFeeRequest(BaseModel):
     address: str
-    items: List[OrderItem]  # Items with product_id and qty
+    items: List[OrderItem]
     order_total: int
     order_time: Optional[datetime] = None
-    customer_email: Optional[str] = None  # to check loyalty
-    lat: Optional[float] = None  # client-provided coordinates (from Amazon Places)
-    lng: Optional[float] = None  # client-provided coordinates (from Amazon Places)
+    customer_email: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
 
 class DeliveryFeeResponse(BaseModel):
     covered: bool
@@ -488,8 +581,6 @@ class DeliveryFeeResponse(BaseModel):
     message: Optional[str] = None
 
 # ---------- AI SERVICE ----------
-logger = logging.getLogger(__name__)
-
 class AIService:
     def __init__(self):
         self.groq_client = None
@@ -559,17 +650,14 @@ class AIService:
         current_time = time.time()
         if self._context_cache and (current_time - self._cache_timestamp < self._cache_ttl):
             return self._context_cache
-
         if not self.supabase_client:
             logger.warning("Supabase client unavailable, skipping database context fetch.")
             return ""
-
         try:
             products_res = self.supabase_client.table("products").select("*").execute()
             products = products_res.data if products_res.data else []
             knowledge_res = self.supabase_client.table("knowledge").select("*").execute()
             knowledge = knowledge_res.data if knowledge_res.data else []
-
             context = "\n\n=== PRODUCTS / MENU ===\n"
             for p in products:
                 name = p.get('name', 'Item')
@@ -577,18 +665,15 @@ class AIService:
                 desc = p.get('description', 'N/A')
                 status = p.get('status', 'available')
                 context += f"- {name}: {price} | Desc: {desc} | Status: {status}\n"
-
             context += "\n=== KNOWLEDGE BASE & STORE INFO ===\n"
             for k in knowledge:
                 topic = k.get('topic', 'Information')
                 content = k.get('content', '')
                 context += f"- {topic}: {content}\n"
-
             self._context_cache = context
             self._cache_timestamp = current_time
             logger.info("Supabase menu & knowledge base context refreshed")
             return context
-
         except Exception as e:
             logger.error(f"Error fetching Supabase context: {e}")
             return self._context_cache or ""
@@ -599,10 +684,7 @@ class AIService:
 
     def _normalize(self, text: str) -> str:
         text = text.lower()
-        replacements = {
-            '3': 'e', '4': 'a', '0': 'o',
-            '@': 'a', '$': 's', '5': 's'
-        }
+        replacements = {'3': 'e', '4': 'a', '0': 'o', '@': 'a', '$': 's', '5': 's'}
         for old, new in replacements.items():
             text = text.replace(old, new)
         return text
@@ -619,7 +701,6 @@ class AIService:
             if re.search(p, text, re.IGNORECASE):
                 logger.warning(f"Prompt injection attempt blocked: {text[:50]}...")
                 return False
-
         norm_text = self._normalize(text)
         words = set(re.findall(r'\b\w+\b', norm_text))
         if words.intersection(self.banned_words):
@@ -644,15 +725,11 @@ class AIService:
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history)
         messages.append({"role": "user", "content": msg})
-
         resp = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: self.groq_client.chat.completions.create(
-                model=settings.GROQ_MODEL,
-                messages=messages,
-                temperature=0.3,
-                max_tokens=700,
-                timeout=10.0
+                model=settings.GROQ_MODEL, messages=messages, temperature=0.3,
+                max_tokens=700, timeout=10.0
             )
         )
         return resp.choices[0].message.content
@@ -665,7 +742,6 @@ class AIService:
         for h in history:
             role = "User" if h.get("role") == "user" else "Assistant"
             formatted_history += f"\n{role}: {h.get('content', '')}"
-
         full = f"{system_prompt}\n{formatted_history}\nUser: {msg}\nAssistant:"
         response = await asyncio.get_event_loop().run_in_executor(
             None, self.genai_client.generate_content, full
@@ -679,15 +755,11 @@ class AIService:
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history)
         messages.append({"role": "user", "content": msg})
-
         resp = await asyncio.get_event_loop().run_in_executor(
             None,
             lambda: self.openai_client.chat.completions.create(
-                model=settings.OPENAI_MODEL,
-                messages=messages,
-                temperature=0.3,
-                max_tokens=700,
-                timeout=10.0
+                model=settings.OPENAI_MODEL, messages=messages, temperature=0.3,
+                max_tokens=700, timeout=10.0
             )
         )
         return resp.choices[0].message.content
@@ -695,10 +767,8 @@ class AIService:
     async def chat(self, msg: str, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         if not self._guard_input(msg):
             return {"response": "I cannot process that request.", "provider": "guardrail", "model": "blocked"}
-
         conversation_history = history[-6:] if history else []
         system_prompt = self._build_system_prompt()
-
         available = []
         if self.groq_client:
             available.append(("groq", self.query_groq, settings.GROQ_MODEL))
@@ -706,10 +776,8 @@ class AIService:
             available.append(("gemini", self.query_gemini, settings.GEMINI_MODEL))
         if self.openai_client:
             available.append(("openai", self.query_openai, settings.OPENAI_MODEL))
-
         if not available:
             return {"response": "No AI provider available.", "provider": "error", "model": "none"}
-
         ordered = []
         for p in available:
             if p[0] == settings.AI_PRIMARY:
@@ -723,7 +791,6 @@ class AIService:
         for p in available:
             if p not in ordered:
                 ordered.append(p)
-
         for name, func, model in ordered:
             try:
                 content = await func(msg, system_prompt, conversation_history)
@@ -732,7 +799,6 @@ class AIService:
             except Exception as e:
                 logger.warning(f"Provider {name} failed: {e}")
                 continue
-
         return {"response": "I'm currently unable to respond. Please try again.", "provider": "error", "model": "none"}
 
 # ---------- BREVO ----------
@@ -839,26 +905,16 @@ class MonnifyIntegration:
             raise RuntimeError(f"Monnify auth failed: {data}")
 
     async def initialize_transaction(
-        self,
-        amount: int,
-        customer_name: str,
-        customer_email: str,
-        customer_phone: str,
-        payment_reference: str,
-        payment_description: str = "Hot Portion Grill Order"
+        self, amount: int, customer_name: str, customer_email: str, customer_phone: str,
+        payment_reference: str, payment_description: str = "Hot Portion Grill Order"
     ) -> Dict[str, Any]:
         if not self.healthy:
             try:
                 await self.initialize()
             except Exception as e:
                 return {"success": False, "error": f"Monnify not healthy: {e}"}
-
         token = await self._get_access_token()
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         payload = {
             "amount": amount,
             "customerName": customer_name,
@@ -872,13 +928,11 @@ class MonnifyIntegration:
             "redirectUrl": "https://hotportion.netlify.app/?status=success",
             "webhookUrl": "https://hotportion.onrender.com/api/v1/webhooks/monnify",
         }
-
         sess = await self._get_session()
         try:
             async with sess.post(
                 f"{self.base_url}/api/v1/merchant/transactions/init-transaction",
-                json=payload,
-                headers=headers
+                json=payload, headers=headers
             ) as resp:
                 data = await resp.json()
                 if resp.status == 200 and data.get("requestSuccessful"):
@@ -897,13 +951,6 @@ class MonnifyIntegration:
             return {"success": False, "error": str(e)}
 
     async def handle_webhook(self, raw_body: bytes, signature: Optional[str]) -> Dict:
-        """
-        Verify the webhook signature against the RAW request body bytes.
-        Monnify signs the raw body — json.dumps() can reorder keys / change whitespace,
-        so we must not re-serialize before HMAC.
-        """
-        if not self.healthy:
-            return {"valid": False, "error": "Monnify not ready"}
         if not signature:
             return {"valid": False, "error": "Missing signature"}
         computed = hmac.new(self.secret_key.encode(), raw_body, hashlib.sha512).hexdigest()
@@ -966,45 +1013,36 @@ def invalidate_stats_cache():
     _stats_cache["timestamp"] = 0
 
 # =============================================
-# INTELLIGENT DELIVERY FEE ENGINE (UPDATED)
+# INTELLIGENT DELIVERY FEE ENGINE
 # =============================================
-
-# Caches for rules (TTL 60 seconds)
 _rules_cache = {"data": None, "timestamp": 0}
 _peak_cache = {"data": None, "timestamp": 0}
 _loyalty_cache = {"data": None, "timestamp": 0}
 _item_surcharge_cache = {"data": None, "timestamp": 0}
 
 async def get_delivery_fee_rules() -> List[Dict]:
-    """Fetch active value‑discount rules from DB."""
     now = time.time()
     if now - _rules_cache["timestamp"] < 60 and _rules_cache["data"] is not None:
         return _rules_cache["data"]
     db = get_supabase()
-    result = await execute_db(
-        db.table("delivery_fee_rules").select("*").order("min_order_value")
-    )
+    result = await execute_db(db.table("delivery_fee_rules").select("*").order("min_order_value"))
     rules = result.data or []
     _rules_cache["data"] = rules
     _rules_cache["timestamp"] = now
     return rules
 
 async def get_peak_settings() -> List[Dict]:
-    """Fetch active peak hour settings."""
     now = time.time()
     if now - _peak_cache["timestamp"] < 60 and _peak_cache["data"] is not None:
         return _peak_cache["data"]
     db = get_supabase()
-    result = await execute_db(
-        db.table("delivery_peak_settings").select("*").eq("is_active", True)
-    )
+    result = await execute_db(db.table("delivery_peak_settings").select("*").eq("is_active", True))
     settings_list = result.data or []
     _peak_cache["data"] = settings_list
     _peak_cache["timestamp"] = now
     return settings_list
 
 async def get_loyalty_setting() -> Optional[Dict]:
-    """Fetch the active loyalty discount setting."""
     now = time.time()
     if now - _loyalty_cache["timestamp"] < 60 and _loyalty_cache["data"] is not None:
         return _loyalty_cache["data"]
@@ -1018,14 +1056,11 @@ async def get_loyalty_setting() -> Optional[Dict]:
     return setting
 
 async def get_item_surcharge_rules() -> List[Dict]:
-    """Fetch item surcharge rules from DB."""
     now = time.time()
     if now - _item_surcharge_cache["timestamp"] < 60 and _item_surcharge_cache["data"] is not None:
         return _item_surcharge_cache["data"]
     db = get_supabase()
-    result = await execute_db(
-        db.table("delivery_item_surcharge_rules").select("*").order("min_main_items")
-    )
+    result = await execute_db(db.table("delivery_item_surcharge_rules").select("*").order("min_main_items"))
     rules = result.data or []
     _item_surcharge_cache["data"] = rules
     _item_surcharge_cache["timestamp"] = now
@@ -1046,24 +1081,11 @@ def is_peak_hour(order_time: datetime, peak_settings: List[Dict]) -> bool:
                 return True
     return False
 
-# =============================================
-# CORRECTED calculate_intelligent_delivery_fee
-# =============================================
+
 async def calculate_intelligent_delivery_fee(
-    base_fee: int,
-    order_value: int,
-    items: List[OrderItem],
-    order_time: Optional[datetime] = None,
-    customer_email: Optional[str] = None
+    base_fee: int, order_value: int, items: List[OrderItem],
+    order_time: Optional[datetime] = None, customer_email: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    Calculate delivery fee with business-friendly logic:
-    - Base fee increases with order weight/value
-    - Volume surcharge for large orders (more logistics cost)
-    - Small loyalty discount (capped at 15%)
-    - Peak surcharge during busy hours
-    - Minimum fee to cover logistics costs
-    """
     fee = base_fee
     value_discount = 0
     item_surcharge = 0
@@ -1072,24 +1094,17 @@ async def calculate_intelligent_delivery_fee(
     volume_surcharge = 0
     minimum_fee = getattr(settings, 'MINIMUM_DELIVERY_FEE', 500)
 
-    # ─── 1. FETCH PRODUCT DETAILS ───
     product_ids = [item.product_id for item in items]
     db = get_supabase()
-
-    # Get product details with safe column selection
     try:
         result = await execute_db(
-            db.table("products")
-            .select("id, is_main_item, weight_kg, is_bulky")
-            .in_("id", product_ids)
+            db.table("products").select("id, is_main_item, weight_kg, is_bulky").in_("id", product_ids)
         )
         product_map = {p["id"]: p for p in result.data} if result.data else {}
     except Exception as e:
         logger.warning(f"Could not fetch product delivery details: {e}")
-        # Fallback: use default values
         product_map = {}
 
-    # ─── 2. CALCULATE ITEM METRICS ───
     main_count = 0
     total_weight = 0.0
     bulky_count = 0
@@ -1099,33 +1114,27 @@ async def calculate_intelligent_delivery_fee(
         pid = item.product_id
         prod = product_map.get(pid)
         if prod:
-            # Safe access with defaults
             is_main = prod.get("is_main_item")
             if is_main is None:
                 is_main = True
             if is_main:
                 main_count += item.qty
-
             weight = prod.get("weight_kg")
             if weight is None:
                 weight = 0.5
             total_weight += float(weight) * item.qty
-
             is_bulky = prod.get("is_bulky")
             if is_bulky is None:
                 is_bulky = False
             if is_bulky:
                 bulky_count += item.qty
         else:
-            # Default values for unknown products
             main_count += item.qty
             total_weight += 0.5 * item.qty
 
-    # ─── 3. VOLUME SURCHARGE (more items = higher logistics cost) ───
     try:
         thresholds = getattr(settings, 'VOLUME_SURCHARGE_THRESHOLDS', {})
         amounts = getattr(settings, 'VOLUME_SURCHARGE_AMOUNTS', {})
-
         if total_items >= thresholds.get("xxlarge", 10):
             volume_surcharge += amounts.get("xxlarge", 500)
         elif total_items >= thresholds.get("xlarge", 6):
@@ -1135,7 +1144,6 @@ async def calculate_intelligent_delivery_fee(
     except Exception as e:
         logger.warning(f"Error calculating volume surcharge: {e}")
 
-    # ─── 4. WEIGHT SURCHARGE ───
     try:
         weight_threshold = getattr(settings, 'WEIGHT_THRESHOLD_KG', 5.0)
         weight_surcharge_per_kg = getattr(settings, 'WEIGHT_SURCHARGE_PER_KG', 100)
@@ -1145,7 +1153,6 @@ async def calculate_intelligent_delivery_fee(
     except Exception as e:
         logger.warning(f"Error calculating weight surcharge: {e}")
 
-    # ─── 5. BULKY ITEM SURCHARGE ───
     try:
         bulky_surcharge = getattr(settings, 'BULKY_ITEM_SURCHARGE', 200)
         if bulky_count > 0:
@@ -1153,7 +1160,6 @@ async def calculate_intelligent_delivery_fee(
     except Exception as e:
         logger.warning(f"Error calculating bulky surcharge: {e}")
 
-    # ─── 6. ITEM SURCHARGE RULES (from database) ───
     try:
         surcharge_rules = await get_item_surcharge_rules()
         for rule in surcharge_rules:
@@ -1162,7 +1168,6 @@ async def calculate_intelligent_delivery_fee(
             if (min_items is None or main_count >= min_items) and (max_items is None or main_count <= max_items):
                 item_surcharge += rule.get("surcharge_amount", 0)
                 break
-        # Weight surcharge from database rules
         for rule in surcharge_rules:
             threshold = rule.get("weight_threshold_kg")
             per_kg = rule.get("surcharge_per_kg")
@@ -1173,7 +1178,6 @@ async def calculate_intelligent_delivery_fee(
     except Exception as e:
         logger.warning(f"Error applying item surcharge rules: {e}")
 
-    # ─── 7. PEAK SURCHARGE ───
     try:
         peak_settings = await get_peak_settings()
         peak_surcharge_amount = getattr(settings, 'PEAK_SURCHARGE', 200)
@@ -1182,7 +1186,6 @@ async def calculate_intelligent_delivery_fee(
     except Exception as e:
         logger.warning(f"Error calculating peak surcharge: {e}")
 
-    # ─── 8. LOYALTY DISCOUNT (capped at MAX_LOYALTY_DISCOUNT_PERCENT) ───
     try:
         if customer_email:
             loyalty_setting = await get_loyalty_setting()
@@ -1191,8 +1194,7 @@ async def calculate_intelligent_delivery_fee(
                 max_discount = getattr(settings, 'MAX_LOYALTY_DISCOUNT_PERCENT', 15)
                 discount_pct = min(loyalty_setting.get("discount_percentage", 20), max_discount)
                 count_result = await execute_db(
-                    db.table("orders")
-                    .select("id", count="exact")
+                    db.table("orders").select("id", count="exact")
                     .eq("customer_email", customer_email)
                     .in_("status", ["paid", "confirmed", "completed"])
                 )
@@ -1203,10 +1205,8 @@ async def calculate_intelligent_delivery_fee(
     except Exception as e:
         logger.warning(f"Error calculating loyalty discount: {e}")
 
-    # ─── 9. APPLY SURCHARGES ───
     fee = fee + volume_surcharge + item_surcharge + peak_surcharge
 
-    # ─── 10. APPLY FREE DELIVERY RULES (promotional) ───
     try:
         rules = await get_delivery_fee_rules()
         for rule in rules:
@@ -1226,11 +1226,9 @@ async def calculate_intelligent_delivery_fee(
     except Exception as e:
         logger.warning(f"Error applying value discount rules: {e}")
 
-    # ─── 11. ENSURE MINIMUM FEE ───
     if fee > 0 and fee < minimum_fee:
         fee = minimum_fee
 
-    # ─── 12. ROUND ALL NUMERIC VALUES TO AVOID FLOATING-POINT FRACTIONS ───
     final_fee = max(0, round(fee))
     value_discount = round(value_discount)
     item_surcharge = round(item_surcharge)
@@ -1262,17 +1260,8 @@ async def calculate_intelligent_delivery_fee(
 # =============================================
 
 async def _decrement_stock_atomic(product_id: int, qty: int) -> bool:
-    """
-    Try to decrement stock atomically via a Postgres function.
-    Returns True on success, False if the RPC is unavailable (fallback required).
-    """
     try:
-        await execute_db(
-            get_supabase().rpc(
-                "decrement_product_stock",
-                {"p_product_id": product_id, "p_qty": qty}
-            )
-        )
+        await execute_db(get_supabase().rpc("decrement_product_stock", {"p_product_id": product_id, "p_qty": qty}))
         return True
     except Exception as e:
         logger.debug(f"Atomic decrement RPC unavailable, will fall back: {e}")
@@ -1280,19 +1269,13 @@ async def _decrement_stock_atomic(product_id: int, qty: int) -> bool:
 
 async def _increment_stock_atomic(product_id: int, qty: int) -> bool:
     try:
-        await execute_db(
-            get_supabase().rpc(
-                "increment_product_stock",
-                {"p_product_id": product_id, "p_qty": qty}
-            )
-        )
+        await execute_db(get_supabase().rpc("increment_product_stock", {"p_product_id": product_id, "p_qty": qty}))
         return True
     except Exception as e:
         logger.debug(f"Atomic increment RPC unavailable, will fall back: {e}")
         return False
 
 async def reduce_order_stock(order: dict):
-    """Reduce stock for all items in an order (atomic when RPC available)."""
     items = order.get("items", [])
     for item in items:
         product_id = item.get("product_id")
@@ -1301,24 +1284,17 @@ async def reduce_order_stock(order: dict):
             continue
         used_atomic = await _decrement_stock_atomic(product_id, qty)
         if not used_atomic:
-            # Fallback: read-modify-write (non-atomic, legacy behaviour)
-            prod_result = await execute_db(
-                get_supabase().table("products").select("stock").eq("id", product_id)
-            )
+            prod_result = await execute_db(get_supabase().table("products").select("stock").eq("id", product_id))
             if prod_result.data:
                 current_stock = prod_result.data[0].get("stock", 0)
                 new_stock = max(0, current_stock - qty)
                 await execute_db(
-                    get_supabase().table("products")
-                    .update({"stock": new_stock})
-                    .eq("id", product_id)
+                    get_supabase().table("products").update({"stock": new_stock}).eq("id", product_id)
                 )
                 logger.info(f"Stock updated for product {product_id}: {current_stock} → {new_stock}")
     invalidate_stats_cache()
 
-
 async def restore_order_stock(order: dict):
-    """Restore stock for all items in an order (for cancellations)."""
     items = order.get("items", [])
     for item in items:
         product_id = item.get("product_id")
@@ -1327,16 +1303,12 @@ async def restore_order_stock(order: dict):
             continue
         used_atomic = await _increment_stock_atomic(product_id, qty)
         if not used_atomic:
-            prod_result = await execute_db(
-                get_supabase().table("products").select("stock").eq("id", product_id)
-            )
+            prod_result = await execute_db(get_supabase().table("products").select("stock").eq("id", product_id))
             if prod_result.data:
                 current_stock = prod_result.data[0].get("stock", 0)
                 new_stock = current_stock + qty
                 await execute_db(
-                    get_supabase().table("products")
-                    .update({"stock": new_stock})
-                    .eq("id", product_id)
+                    get_supabase().table("products").update({"stock": new_stock}).eq("id", product_id)
                 )
                 logger.info(f"Stock restored for product {product_id}: {current_stock} → {new_stock}")
     invalidate_stats_cache()
@@ -1410,14 +1382,11 @@ async def setup_database():
                 updated_at TIMESTAMPTZ DEFAULT NOW()
             );
             """,
-            # ─── Atomic stock helpers (gap #8) ───
             """
             CREATE OR REPLACE FUNCTION decrement_product_stock(p_product_id INTEGER, p_qty INTEGER)
             RETURNS VOID AS $$
             BEGIN
-                UPDATE products
-                SET stock = GREATEST(0, stock - p_qty)
-                WHERE id = p_product_id;
+                UPDATE products SET stock = GREATEST(0, stock - p_qty) WHERE id = p_product_id;
             END;
             $$ LANGUAGE plpgsql;
             """,
@@ -1425,9 +1394,7 @@ async def setup_database():
             CREATE OR REPLACE FUNCTION increment_product_stock(p_product_id INTEGER, p_qty INTEGER)
             RETURNS VOID AS $$
             BEGIN
-                UPDATE products
-                SET stock = stock + p_qty
-                WHERE id = p_product_id;
+                UPDATE products SET stock = stock + p_qty WHERE id = p_product_id;
             END;
             $$ LANGUAGE plpgsql;
             """
@@ -1445,9 +1412,8 @@ async def setup_database():
 # ---------- LIFESPAN ----------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting Hot Portion Grill - Full Monolith + AI")
+    logger.info("Starting Hot Portion Grill - Full Monolith + AI + RBAC")
 
-    # Optional Sentry init
     if settings.SENTRY_DSN:
         if _SENTRY_AVAILABLE:
             try:
@@ -1463,11 +1429,10 @@ async def lifespan(app: FastAPI):
         else:
             logger.warning("SENTRY_DSN set but sentry_sdk not installed; skipping Sentry init")
 
-    # Security posture warning
-    if not settings.ADMIN_API_TOKEN:
+    if not settings.SUPABASE_JWT_SECRET:
         logger.warning(
-            "⚠️  ADMIN_API_TOKEN is NOT set. Admin/write endpoints are UNPROTECTED. "
-            "Set ADMIN_API_TOKEN in the environment to enable bearer-token auth."
+            "⚠️  SUPABASE_JWT_SECRET is NOT set. Authenticated endpoints will return 503. "
+            "Set it from Supabase → Settings → API → JWT Secret."
         )
 
     init_results = await asyncio.gather(
@@ -1540,15 +1505,10 @@ class BannerService:
             query = query.eq("is_hero", is_hero)
         if is_featured is not None:
             query = query.eq("is_featured", is_featured)
-
         count_res = await execute_db(query)
         total = count_res.count
-
         result = await execute_db(query.order("display_order").range(offset, offset + limit - 1))
-
         now = datetime.now().isoformat()
-
-        # Filter by date range in Python
         filtered_data = []
         for banner in result.data:
             start = banner.get('start_date')
@@ -1558,25 +1518,16 @@ class BannerService:
             if end and end < now:
                 continue
             filtered_data.append(banner)
-
-        # Enrich with categories and products
         for b in filtered_data:
             b['categories'] = await self._get_categories(b['id'])
             b['products'] = await self._get_products(b['id'])
-
-        # ─── CONVERT ALL DATETIME OBJECTS TO ISO STRINGS ───
         filtered_data = [convert_datetime_to_iso(b) for b in filtered_data]
-
         active_count = len([x for x in filtered_data if x.get('is_active', True)])
         hero_count = len([x for x in filtered_data if x.get('is_hero', False)])
         featured_count = len([x for x in filtered_data if x.get('is_featured', False)])
-
         return BannerResponse(
-            banners=filtered_data,
-            total=len(filtered_data),
-            active_count=active_count,
-            hero_count=hero_count,
-            featured_count=featured_count
+            banners=filtered_data, total=len(filtered_data),
+            active_count=active_count, hero_count=hero_count, featured_count=featured_count
         )
 
     async def get_active(self, is_hero=None, is_featured=None):
@@ -1585,11 +1536,8 @@ class BannerService:
             query = query.eq("is_hero", is_hero)
         if is_featured is not None:
             query = query.eq("is_featured", is_featured)
-
         result = await execute_db(query.order("display_order"))
-
         now = datetime.now().isoformat()
-
         filtered_data = []
         for banner in result.data:
             start = banner.get('start_date')
@@ -1599,15 +1547,10 @@ class BannerService:
             if end and end < now:
                 continue
             filtered_data.append(banner)
-
-        # Enrich with categories and products
         for b in filtered_data:
             b['categories'] = await self._get_categories(b['id'])
             b['products'] = await self._get_products(b['id'])
-
-        # ─── CONVERT ALL DATETIME OBJECTS TO ISO STRINGS ───
         filtered_data = [convert_datetime_to_iso(b) for b in filtered_data]
-
         return filtered_data
 
     async def get_banner(self, banner_id: int):
@@ -1617,19 +1560,13 @@ class BannerService:
         b = result.data[0]
         b['categories'] = await self._get_categories(b['id'])
         b['products'] = await self._get_products(b['id'])
-
-        # ─── CONVERT ALL DATETIME OBJECTS TO ISO STRINGS ───
         b = convert_datetime_to_iso(b)
-
         return b
 
     async def create_banner(self, banner: BannerCreate):
         data = banner.dict(exclude={'categories', 'products'})
         data["created_at"] = data["updated_at"] = datetime.now().isoformat()
-
-        # ─── CONVERT ALL DATETIME OBJECTS TO ISO STRINGS ───
         data = convert_datetime_to_iso(data)
-
         result = await execute_db(self.db.table(self.table).insert(data))
         if not result.data:
             raise HTTPException(400, "Create failed")
@@ -1645,10 +1582,7 @@ class BannerService:
     async def update_banner(self, banner_id: int, banner: BannerUpdate):
         data = banner.dict(exclude={'categories', 'products'}, exclude_unset=True)
         data["updated_at"] = datetime.now().isoformat()
-
-        # ─── CONVERT ALL DATETIME OBJECTS TO ISO STRINGS ───
         data = convert_datetime_to_iso(data)
-
         result = await execute_db(self.db.table(self.table).update(data).eq("id", banner_id))
         if not result.data:
             raise HTTPException(404, "Not found")
@@ -1700,7 +1634,10 @@ class BannerService:
         r = await execute_db(self.db.table("banner_products").select("product_id").eq("banner_id", bid))
         return [x['product_id'] for x in r.data]
 
-# ---------- API ROUTES ----------
+# =============================================
+# PUBLIC API ROUTES
+# =============================================
+
 @app.get("/health")
 async def health():
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
@@ -1710,26 +1647,6 @@ async def get_products():
     r = await execute_db(get_supabase().table("products").select("*").order("name"))
     return r.data
 
-@app.post("/api/products", response_model=Product, status_code=201, dependencies=[Depends(require_admin)])
-async def create_product(p: ProductCreate):
-    r = await execute_db(get_supabase().table("products").insert(p.dict()))
-    if not r.data:
-        raise HTTPException(400, "Failed")
-    return r.data[0]
-
-@app.put("/api/products/{pid}", dependencies=[Depends(require_admin)])
-async def update_product(pid: int, p: ProductUpdate):
-    r = await execute_db(get_supabase().table("products").update(p.dict()).eq("id", pid))
-    if not r.data:
-        raise HTTPException(404, "Not found")
-    return r.data[0]
-
-@app.delete("/api/products/{pid}", status_code=204, dependencies=[Depends(require_admin)])
-async def delete_product(pid: int):
-    r = await execute_db(get_supabase().table("products").delete().eq("id", pid))
-    if not r.data:
-        raise HTTPException(404, "Not found")
-
 @app.get("/api/categories", response_model=List[Category])
 async def get_categories():
     r = await execute_db(get_supabase().table("categories").select("*").order("name"))
@@ -1737,15 +1654,10 @@ async def get_categories():
 
 @app.get("/api/top-products")
 async def get_top_products(limit: int = 20):
-    """
-    Returns the top N products by total quantity sold (from paid/confirmed/completed orders).
-    Also includes total revenue for each product.
-    """
     query = get_supabase().table("orders").select("items").in_("status", ["paid", "confirmed", "completed"])
     r = await execute_db(query)
     orders = r.data
-
-    totals = {}  # product_id -> {'qty': total, 'revenue': total}
+    totals = {}
     for order in orders:
         for item in order.get('items', []):
             pid = item.get('product_id')
@@ -1757,20 +1669,15 @@ async def get_top_products(limit: int = 20):
                 totals[pid] = {'qty': 0, 'revenue': 0}
             totals[pid]['qty'] += qty
             totals[pid]['revenue'] += price * qty
-
     sorted_items = sorted(totals.items(), key=lambda x: x[1]['qty'], reverse=True)[:limit]
     product_ids = [pid for pid, _ in sorted_items]
-
     if product_ids:
         prod_res = await execute_db(
-            get_supabase().table("products")
-            .select("id, name, price, emoji")
-            .in_("id", product_ids)
+            get_supabase().table("products").select("id, name, price, emoji").in_("id", product_ids)
         )
         products_map = {p['id']: p for p in prod_res.data}
     else:
         products_map = {}
-
     result = []
     for pid, data in sorted_items:
         product_info = products_map.get(pid, {})
@@ -1781,97 +1688,35 @@ async def get_top_products(limit: int = 20):
             "quantity_sold": data['qty'],
             "revenue": data['revenue']
         })
-
     return result
-
-
-@app.post("/api/categories", response_model=Category, status_code=201, dependencies=[Depends(require_admin)])
-async def create_category(c: CategoryBase):
-    r = await execute_db(get_supabase().table("categories").insert(c.dict()))
-    if not r.data:
-        raise HTTPException(400, "Failed")
-    return r.data[0]
-
-@app.put("/api/categories/{cid}", dependencies=[Depends(require_admin)])
-async def update_category(cid: int, c: CategoryBase):
-    r = await execute_db(get_supabase().table("categories").update(c.dict()).eq("id", cid))
-    if not r.data:
-        raise HTTPException(404, "Not found")
-    return r.data[0]
-
-@app.delete("/api/categories/{cid}", status_code=204, dependencies=[Depends(require_admin)])
-async def delete_category(cid: int):
-    r = await execute_db(get_supabase().table("categories").delete().eq("id", cid))
-    if not r.data:
-        raise HTTPException(404, "Not found")
-
-@app.get("/api/orders", response_model=List[Dict])
-async def get_orders(since: Optional[str] = Query(None)):
-    query = get_supabase().table("orders").select("*").order("created_at", desc=True)
-    if since:
-        query = query.gt("created_at", since)
-    r = await execute_db(query)
-    for o in r.data:
-        o["itemCount"] = len(o.get("items", []))
-    return r.data
-
-@app.get("/api/orders/{oid}")
-async def get_order(oid: int):
-    r = await execute_db(get_supabase().table("orders").select("*").eq("id", oid))
-    if not r.data:
-        raise HTTPException(404, "Not found")
-    return r.data[0]
 
 @app.get("/api/orders/by-reference/{ref}")
 async def get_order_by_reference(ref: str, email: Optional[str] = Query(None)):
-    """
-    Look up an order by either payment_reference or monnify_transaction_ref.
-    Used by the customer-facing order tracking page and the Monnify redirect fallback.
-
-    Optionally accepts an `email` query parameter: when provided, the lookup is
-    additionally filtered by customer_email to reduce enumeration risk.
-    """
     if not ref or len(ref) > 128:
         raise HTTPException(400, "Invalid reference")
-
     db = get_supabase()
-
-    # Try payment_reference first (this is what customers see on receipts)
     query = db.table("orders").select("*").eq("payment_reference", ref)
     if email:
         query = query.eq("customer_email", email.strip().lower())
     r = await execute_db(query.limit(1))
     if r.data:
         return r.data[0]
-
-    # Fall back to Monnify's transactionReference (used by the redirect URL)
     query = db.table("orders").select("*").eq("monnify_transaction_ref", ref)
     if email:
         query = query.eq("customer_email", email.strip().lower())
     r = await execute_db(query.limit(1))
     if r.data:
         return r.data[0]
-
     raise HTTPException(404, "Order not found")
 
 @app.post("/api/orders", status_code=201)
 async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks):
-    """
-    Create a new order.
-
-    SECURITY: The item subtotal, delivery fee, total, and payment_reference are
-    ALL recomputed server-side. Values supplied by the client are ignored.
-    """
     await enforce_rate_limit(request, "orders", settings.RATE_LIMIT_ORDERS_PER_MINUTE)
-
-    # ─── 1. VALIDATE ITEMS & RECOMPUTE SUBTOTAL FROM DB PRICES ───
     if not order.items:
         raise HTTPException(400, "Order must contain at least one item")
-
     product_ids = [item.product_id for item in order.items]
     if any(not pid for pid in product_ids):
         raise HTTPException(400, "All order items must have a product_id")
-
     try:
         prod_result = await execute_db(
             get_supabase().table("products").select("id, name, price").in_("id", product_ids)
@@ -1879,12 +1724,10 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
     except Exception as e:
         logger.error(f"Failed to fetch products for order validation: {e}", exc_info=True)
         raise HTTPException(500, "Could not validate order items")
-
     product_map = {p["id"]: p for p in (prod_result.data or [])}
     missing = [pid for pid in product_ids if pid not in product_map]
     if missing:
         raise HTTPException(400, f"Invalid product id(s): {missing}")
-
     validated_items: List[Dict[str, Any]] = []
     computed_subtotal = 0
     for item in order.items:
@@ -1894,13 +1737,9 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
         server_price = int(product["price"])
         computed_subtotal += server_price * item.qty
         validated_items.append({
-            "name": product["name"],
-            "qty": item.qty,
-            "price": server_price,
-            "product_id": item.product_id,
+            "name": product["name"], "qty": item.qty,
+            "price": server_price, "product_id": item.product_id,
         })
-
-    # ─── 2. RECOMPUTE DELIVERY FEE SERVER-SIDE ───
     computed_delivery_fee = 0
     if order.delivery_method == "delivery" and order.delivery_address:
         try:
@@ -1920,10 +1759,8 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
                             if area_result.data:
                                 base_fee = area_result.data[0].get("fee", 0)
                                 calc = await calculate_intelligent_delivery_fee(
-                                    base_fee=base_fee,
-                                    order_value=computed_subtotal,
-                                    items=order.items,
-                                    order_time=datetime.now(),
+                                    base_fee=base_fee, order_value=computed_subtotal,
+                                    items=order.items, order_time=datetime.now(),
                                     customer_email=order.customer_email,
                                 )
                                 computed_delivery_fee = calc["final_fee"]
@@ -1932,15 +1769,10 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
                                     f"₦{computed_delivery_fee} (base {base_fee})"
                                 )
         except Exception as e:
-            # Never fail order creation because the delivery computation hiccupped —
-            # fall back to the client-supplied value so the system keeps working.
             logger.warning(f"Server-side delivery fee computation failed, using client value: {e}")
             computed_delivery_fee = order.delivery_fee or 0
-
-    # ─── 3. BUILD THE ORDER PAYLOAD WITH SERVER-COMPUTED VALUES ───
     server_payment_reference = f"HP-{secrets.token_urlsafe(16)}"
     computed_total = computed_subtotal + computed_delivery_fee
-
     data = {
         "payment_reference": server_payment_reference,
         "customer_name": order.customer_name,
@@ -1956,13 +1788,10 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
         "delivery_fee": computed_delivery_fee,
         "delivery_breakdown": order.delivery_breakdown,
     }
-
     result = await execute_db(get_supabase().table("orders").insert(data))
     if not result.data:
         raise HTTPException(400, "Failed to create order")
-
     order_data = result.data[0]
-
     monnify = get_monnify()
     monnify_result = await monnify.initialize_transaction(
         amount=computed_total,
@@ -1972,19 +1801,15 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
         payment_reference=server_payment_reference,
         payment_description="Hot Portion Grill Order"
     )
-
     if not monnify_result["success"]:
         await execute_db(get_supabase().table("orders").delete().eq("id", order_data["id"]))
         raise HTTPException(400, f"Payment initialization failed: {monnify_result.get('error', 'Unknown error')}")
-
     await execute_db(
         get_supabase().table("orders")
         .update({"monnify_transaction_ref": monnify_result["transaction_reference"]})
         .eq("id", order_data["id"])
     )
-
     bg.add_task(get_brevo().send_order_confirmation, order_data)
-
     return {
         "status": "pending_payment",
         "order_id": order_data["id"],
@@ -1992,79 +1817,117 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
         "checkout_url": monnify_result["checkout_url"]
     }
 
-@app.patch("/api/orders/{oid}/status", dependencies=[Depends(require_admin)])
-async def update_order_status(oid: int, upd: OrderStatusUpdate):
-    # Fetch current order
-    order_result = await execute_db(get_supabase().table("orders").select("*").eq("id", oid))
-    if not order_result.data:
-        raise HTTPException(404, "Order not found")
-    order = order_result.data[0]
-    current_status = order.get("status")
+@app.post("/api/delivery-fee", response_model=DeliveryFeeResponse)
+async def get_delivery_fee(request: DeliveryFeeRequest, http_request: Request):
+    await enforce_rate_limit(http_request, "delivery", settings.RATE_LIMIT_DELIVERY_PER_MINUTE)
+    try:
+        if request.lat is not None and request.lng is not None:
+            lat = float(request.lat)
+            lng = float(request.lng)
+            logger.info(f"Using client-provided coords: lat={lat}, lng={lng} for '{request.address}'")
+        else:
+            geocode_url = "https://nominatim.openstreetmap.org/search"
+            params = {"q": request.address, "format": "json", "limit": 1}
+            headers = {"User-Agent": "HotPortionGrill/1.0"}
+            async with aiohttp.ClientSession() as session:
+                async with session.get(geocode_url, params=params, headers=headers) as resp:
+                    if resp.status != 200:
+                        logger.error(f"Geocoding API error: {resp.status}")
+                        raise HTTPException(502, "Geocoding service temporarily unavailable")
+                    data = await resp.json()
+                    if not data or len(data) == 0:
+                        return DeliveryFeeResponse(covered=False, message="Address not found. Please check the address and try again.")
+                    lat = float(data[0].get("lat", 0))
+                    lng = float(data[0].get("lon", 0))
+                    logger.info(f"Geocoded '{request.address}' to lat={lat}, lng={lng}")
+        db = get_supabase()
+        result = await execute_db(db.rpc("find_delivery_area", {"lat": lat, "lng": lng}))
+        if not result.data or len(result.data) == 0:
+            return DeliveryFeeResponse(covered=False, message="Address not in any delivery area.")
+        area = result.data[0]
+        base_fee = area.get("fee", 0)
+        area_name = area.get("name", "Unknown Area")
+        order_time = request.order_time or datetime.now()
+        calculation = await calculate_intelligent_delivery_fee(
+            base_fee=base_fee, order_value=request.order_total, items=request.items,
+            order_time=order_time, customer_email=request.customer_email
+        )
+        return DeliveryFeeResponse(
+            covered=True, base_fee=base_fee, area_name=area_name,
+            volume_surcharge=calculation.get("volume_surcharge", 0),
+            value_discount=calculation["value_discount"],
+            item_surcharge=calculation["item_surcharge"],
+            peak_surcharge=calculation["peak_surcharge"],
+            loyalty_discount=calculation["loyalty_discount"],
+            total_fee=calculation["final_fee"],
+            breakdown=calculation["breakdown"]
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_delivery_fee: {str(e)}", exc_info=True)
+        raise HTTPException(500, "Error processing delivery fee request")
 
-    # Validate transition (gap #12)
-    validate_order_transition(current_status, upd.status)
+@app.get("/api/delivery-areas", response_model=List[DeliveryArea])
+async def get_all_delivery_areas():
+    try:
+        db = get_supabase()
+        result = await execute_db(db.rpc("get_delivery_areas_geojson", {}))
+        areas = []
+        for area_data in result.data:
+            area_dict = dict(area_data)
+            if "created_at" in area_dict and isinstance(area_dict["created_at"], (datetime, date)):
+                area_dict["created_at"] = area_dict["created_at"].isoformat()
+            if "updated_at" in area_dict and isinstance(area_dict["updated_at"], (datetime, date)):
+                area_dict["updated_at"] = area_dict["updated_at"].isoformat()
+            if "polygon" in area_dict and isinstance(area_dict["polygon"], str):
+                area_dict["polygon"] = json.loads(area_dict["polygon"])
+            areas.append(area_dict)
+        return areas
+    except Exception as e:
+        logger.error(f"Error fetching delivery areas: {str(e)}", exc_info=True)
+        raise HTTPException(500, "Error fetching delivery areas")
 
-    # Prepare update payload
-    update_data = {"status": upd.status}
-    if upd.reason is not None:
-        update_data["cancellation_reason"] = upd.reason
+@app.get("/api/delivery-areas/point")
+async def get_area_by_point(lat: float, lng: float):
+    try:
+        db = get_supabase()
+        result = await execute_db(db.rpc("find_delivery_area", {"lat": lat, "lng": lng}))
+        if result.data and len(result.data) > 0:
+            return {"covered": True, "area": result.data[0]}
+        else:
+            return {"covered": False, "message": "Point not in any delivery area"}
+    except Exception as e:
+        logger.error(f"Error checking point: {str(e)}", exc_info=True)
+        raise HTTPException(500, "Error checking delivery area coverage")
 
-    # If status changes to "cancelled", restore stock
-    if upd.status == "cancelled" and current_status not in ("cancelled",):
-        await restore_order_stock(order)
-        logger.info(f"Stock restored for cancelled order {oid}")
+ALLOWED_PLACES_ENDPOINTS = {"autocomplete", "geocode", "reverse-geocode"}
 
-    # If status changes to "confirmed" or "paid" and wasn't already, reduce stock
-    if upd.status in ("confirmed", "paid") and current_status not in ("confirmed", "paid"):
-        await reduce_order_stock(order)
-
-    # Execute update
-    result = await execute_db(get_supabase().table("orders").update(update_data).eq("id", oid))
-    if not result.data:
-        raise HTTPException(404, "Order not found")
-
-    # Invalidate cache after status change
-    invalidate_stats_cache()
-
-    return result.data[0]
-
-@app.post("/api/orders/{oid}/confirm-offline", dependencies=[Depends(require_admin)])
-async def confirm_order_offline(oid: int):
-    """Confirm an order offline (e.g., from admin panel) and reduce stock."""
-    order_result = await execute_db(get_supabase().table("orders").select("*").eq("id", oid))
-    if not order_result.data:
-        raise HTTPException(404, "Order not found")
-    order = order_result.data[0]
-
-    if order.get("status") in ("confirmed", "paid"):
-        raise HTTPException(400, "Order already confirmed")
-
-    # Validate transition (gap #12)
-    validate_order_transition(order.get("status"), "confirmed")
-
-    await reduce_order_stock(order)
-
-    await execute_db(
-        get_supabase().table("orders")
-        .update({"status": "confirmed"})
-        .eq("id", oid)
-    )
-
-    invalidate_stats_cache()
-
-    return {"message": "Order confirmed offline", "status": "confirmed"}
-
-@app.get("/api/stats")
-async def get_stats():
-    return await get_cached_stats()
-
-@app.get("/api/v1/banners", response_model=BannerResponse)
-async def list_banners(
-    is_active: Optional[bool] = Query(None), is_hero: Optional[bool] = Query(None),
-    is_featured: Optional[bool] = Query(None), category: Optional[str] = Query(None),
-    limit: int = 50, offset: int = 0
-):
-    return await BannerService().get_banners(is_active, is_hero, is_featured, category, limit, offset)
+@app.post("/api/places/{endpoint}")
+async def proxy_amazon_places(endpoint: str, body: Dict[str, Any], request: Request):
+    await enforce_rate_limit(request, "places", settings.RATE_LIMIT_PLACES_PER_MINUTE)
+    if endpoint not in ALLOWED_PLACES_ENDPOINTS:
+        raise HTTPException(400, f"Invalid endpoint: {endpoint}")
+    if not settings.AWS_LOCATION_API_KEY:
+        logger.error("AWS_LOCATION_API_KEY not configured")
+        raise HTTPException(500, "Amazon Location key not configured on server")
+    url = f"https://places.geo.{settings.AWS_LOCATION_REGION}.amazonaws.com/v2/{endpoint}"
+    params = {"key": settings.AWS_LOCATION_API_KEY}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            async with session.post(url, params=params, json=body) as resp:
+                text = await resp.text()
+                if resp.status != 200:
+                    logger.warning(f"Amazon Places {endpoint} -> {resp.status}: {text[:200]}")
+                try:
+                    return JSONResponse(content=json.loads(text), status_code=resp.status)
+                except json.JSONDecodeError:
+                    raise HTTPException(502, f"Invalid response from Amazon: {text[:200]}")
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "Amazon Places request timed out")
+    except aiohttp.ClientError as e:
+        logger.error(f"Amazon Places request failed: {e}")
+        raise HTTPException(502, "Amazon Places unavailable")
 
 @app.get("/api/v1/banners/active", response_model=List[Banner])
 async def list_active_banners(is_hero: Optional[bool] = Query(None), is_featured: Optional[bool] = Query(None)):
@@ -2077,50 +1940,22 @@ async def get_banner(banner_id: int):
         raise HTTPException(404, "Not found")
     return b
 
-@app.post("/api/v1/banners", response_model=Banner, status_code=201, dependencies=[Depends(require_admin)])
-async def create_banner(banner: BannerCreate):
-    return await BannerService().create_banner(banner)
-
-@app.put("/api/v1/banners/{banner_id}", response_model=Banner, dependencies=[Depends(require_admin)])
-async def update_banner(banner_id: int, banner: BannerUpdate):
-    return await BannerService().update_banner(banner_id, banner)
-
-@app.delete("/api/v1/banners/{banner_id}", status_code=204, dependencies=[Depends(require_admin)])
-async def delete_banner(banner_id: int):
-    await BannerService().delete_banner(banner_id)
-
-@app.patch("/api/v1/banners/{banner_id}/toggle", dependencies=[Depends(require_admin)])
-async def toggle_banner(banner_id: int):
-    return await BannerService().toggle_banner(banner_id)
-
-@app.post("/api/v1/banners/{banner_id}/duplicate", dependencies=[Depends(require_admin)])
-async def duplicate_banner(banner_id: int):
-    return await BannerService().duplicate_banner(banner_id)
-
-@app.patch("/api/v1/banners/reorder", dependencies=[Depends(require_admin)])
-async def reorder_banners(banner_ids: List[int]):
-    return await BannerService().reorder_banners(banner_ids)
-
 @app.post("/api/v1/webhooks/monnify")
 async def monnify_webhook(
     request: Request,
     x_signature: Optional[str] = Header(None, alias="X-Signature")
 ):
-    # Read raw body BEFORE FastAPI's JSON parsing so we can verify the HMAC correctly.
     raw_body = await request.body()
     result = await get_monnify().handle_webhook(raw_body, x_signature)
     if not result["valid"]:
         logger.warning(f"Monnify webhook rejected: {result.get('error')}")
         raise HTTPException(400, f"Webhook validation failed: {result.get('error')}")
-
     if result.get("event") != "SUCCESSFUL_TRANSACTION":
         return {"status": "ignored", "event": result.get("event")}
-
     payload = result.get("payload", {})
     data = payload.get("data", {})
     trans_ref = data.get("transactionReference")
     payment_ref = data.get("paymentReference")
-
     query = get_supabase().table("orders").select("*")
     if payment_ref:
         query = query.eq("payment_reference", payment_ref)
@@ -2130,566 +1965,20 @@ async def monnify_webhook(
     if not order_result.data:
         logger.warning(f"Order not found for ref: {payment_ref or trans_ref}")
         return {"status": "ignored"}
-
     order = order_result.data[0]
-
-    # ─── Idempotency: skip if already paid ───
     if order.get("status") == "paid":
         logger.info(f"Webhook duplicate for order {order['id']} (already paid) — ignoring")
         return {"status": "already_processed"}
-
-    # ─── Atomic claim: flip pending → paid in a single guarded UPDATE ───
-    # If two webhooks arrive simultaneously, only one will change the row.
     claim_result = await execute_db(
         get_supabase().table("orders")
-        .update({"status": "paid"})
-        .eq("id", order["id"])
-        .neq("status", "paid")
+        .update({"status": "paid"}).eq("id", order["id"]).neq("status", "paid")
     )
     if not claim_result.data:
         logger.info(f"Order {order['id']} already claimed by another worker — skipping stock decrement")
         return {"status": "already_processed"}
-
-    # We own the transition → reduce stock exactly once
     await reduce_order_stock(order)
-
     return {"status": "received"}
 
-# =============================================
-# DELIVERY AREA ENDPOINTS (UPDATED WITH INTELLIGENCE)
-# =============================================
-
-@app.post("/api/delivery-fee", response_model=DeliveryFeeResponse)
-async def get_delivery_fee(request: DeliveryFeeRequest, http_request: Request):
-    await enforce_rate_limit(http_request, "delivery", settings.RATE_LIMIT_DELIVERY_PER_MINUTE)
-    try:
-        # ─── If client provided coordinates (from Amazon Places), use them directly ───
-        if request.lat is not None and request.lng is not None:
-            lat = float(request.lat)
-            lng = float(request.lng)
-            logger.info(f"Using client-provided coords: lat={lat}, lng={lng} for '{request.address}'")
-        else:
-            # ─── Fallback: geocode via Nominatim ───
-            geocode_url = "https://nominatim.openstreetmap.org/search"
-            params = {
-                "q": request.address,
-                "format": "json",
-                "limit": 1
-            }
-            headers = {
-                "User-Agent": "HotPortionGrill/1.0"
-            }
-
-            async with aiohttp.ClientSession() as session:
-                async with session.get(geocode_url, params=params, headers=headers) as resp:
-                    if resp.status != 200:
-                        logger.error(f"Geocoding API error: {resp.status}")
-                        raise HTTPException(
-                            status_code=status.HTTP_502_BAD_GATEWAY,
-                            detail="Geocoding service temporarily unavailable"
-                        )
-
-                    data = await resp.json()
-
-                    if not data or len(data) == 0:
-                        return DeliveryFeeResponse(
-                            covered=False,
-                            message="Address not found. Please check the address and try again."
-                        )
-
-                    lat = float(data[0].get("lat", 0))
-                    lng = float(data[0].get("lon", 0))
-
-                    logger.info(f"Geocoded '{request.address}' to lat={lat}, lng={lng}")
-
-        db = get_supabase()
-        result = await execute_db(
-            db.rpc("find_delivery_area", {"lat": lat, "lng": lng})
-        )
-
-        if not result.data or len(result.data) == 0:
-            return DeliveryFeeResponse(
-                covered=False,
-                message="Address not in any delivery area."
-            )
-
-        area = result.data[0]
-        base_fee = area.get("fee", 0)
-        area_name = area.get("name", "Unknown Area")
-
-        order_time = request.order_time or datetime.now()
-        calculation = await calculate_intelligent_delivery_fee(
-            base_fee=base_fee,
-            order_value=request.order_total,
-            items=request.items,
-            order_time=order_time,
-            customer_email=request.customer_email
-        )
-
-        return DeliveryFeeResponse(
-            covered=True,
-            base_fee=base_fee,
-            area_name=area_name,
-            volume_surcharge=calculation.get("volume_surcharge", 0),
-            value_discount=calculation["value_discount"],
-            item_surcharge=calculation["item_surcharge"],
-            peak_surcharge=calculation["peak_surcharge"],
-            loyalty_discount=calculation["loyalty_discount"],
-            total_fee=calculation["final_fee"],
-            breakdown=calculation["breakdown"]
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in get_delivery_fee: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error processing delivery fee request"
-        )
-
-
-@app.get("/api/delivery-areas", response_model=List[DeliveryArea])
-async def get_all_delivery_areas():
-    try:
-        db = get_supabase()
-        result = await execute_db(
-            db.rpc("get_delivery_areas_geojson", {})
-        )
-
-        areas = []
-        for area_data in result.data:
-            area_dict = dict(area_data)
-            if "created_at" in area_dict and isinstance(area_dict["created_at"], (datetime, date)):
-                area_dict["created_at"] = area_dict["created_at"].isoformat()
-            if "updated_at" in area_dict and isinstance(area_dict["updated_at"], (datetime, date)):
-                area_dict["updated_at"] = area_dict["updated_at"].isoformat()
-
-            if "polygon" in area_dict and isinstance(area_dict["polygon"], str):
-                area_dict["polygon"] = json.loads(area_dict["polygon"])
-
-            areas.append(area_dict)
-
-        return areas
-
-    except Exception as e:
-        logger.error(f"Error fetching delivery areas: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error fetching delivery areas"
-        )
-
-
-@app.post("/api/delivery-areas", response_model=DeliveryArea, status_code=201, dependencies=[Depends(require_admin)])
-async def create_delivery_area(area: DeliveryAreaCreate):
-    try:
-        if "type" not in area.polygon or area.polygon["type"] != "Polygon":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid polygon: must be a GeoJSON Polygon"
-            )
-
-        if "coordinates" not in area.polygon or not area.polygon["coordinates"]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid polygon: missing coordinates"
-            )
-
-        coords = area.polygon["coordinates"][0]
-        if len(coords) < 4:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid polygon: must have at least 4 points"
-            )
-
-        db = get_supabase()
-        result = await execute_db(
-            db.rpc(
-                "insert_delivery_area",
-                {
-                    "_name": area.name,
-                    "_fee": area.fee,
-                    "_geojson": json.dumps(area.polygon)
-                }
-            )
-        )
-
-        if not result.data:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to create delivery area. Check that the polygon is valid."
-            )
-
-        created = dict(result.data[0])
-        created["polygon"] = area.polygon
-
-        if "created_at" in created and isinstance(created["created_at"], (datetime, date)):
-            created["created_at"] = created["created_at"].isoformat()
-        if "updated_at" in created and isinstance(created["updated_at"], (datetime, date)):
-            created["updated_at"] = created["updated_at"].isoformat()
-
-        return created
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error creating delivery area: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error creating delivery area: {str(e)}"
-        )
-
-
-@app.put("/api/delivery-areas/{area_id}", response_model=DeliveryArea, dependencies=[Depends(require_admin)])
-async def update_delivery_area(area_id: int, area: DeliveryAreaUpdate):
-    try:
-        if "type" not in area.polygon or area.polygon["type"] != "Polygon":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid polygon: must be a GeoJSON Polygon"
-            )
-
-        if "coordinates" not in area.polygon or not area.polygon["coordinates"]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid polygon: missing coordinates"
-            )
-
-        coords = area.polygon["coordinates"][0]
-        if len(coords) < 4:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid polygon: must have at least 4 points"
-            )
-
-        db = get_supabase()
-        result = await execute_db(
-            db.rpc(
-                "update_delivery_area",
-                {
-                    "_id": area_id,
-                    "_name": area.name,
-                    "_fee": area.fee,
-                    "_geojson": json.dumps(area.polygon)
-                }
-            )
-        )
-
-        if not result.data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Delivery area with ID {area_id} not found"
-            )
-
-        updated = dict(result.data[0])
-        updated["polygon"] = area.polygon
-
-        if "created_at" in updated and isinstance(updated["created_at"], (datetime, date)):
-            updated["created_at"] = updated["created_at"].isoformat()
-        if "updated_at" in updated and isinstance(updated["updated_at"], (datetime, date)):
-            updated["updated_at"] = updated["updated_at"].isoformat()
-
-        return updated
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error updating delivery area: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error updating delivery area: {str(e)}"
-        )
-
-
-@app.delete("/api/delivery-areas/{area_id}", status_code=204, dependencies=[Depends(require_admin)])
-async def delete_delivery_area(area_id: int):
-    try:
-        db = get_supabase()
-        check_result = await execute_db(
-            db.table("delivery_areas").select("id").eq("id", area_id)
-        )
-        if not check_result.data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Delivery area with ID {area_id} not found"
-            )
-
-        await execute_db(
-            db.table("delivery_areas").delete().eq("id", area_id)
-        )
-
-        return None
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting delivery area: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error deleting delivery area: {str(e)}"
-        )
-
-
-@app.get("/api/delivery-areas/point")
-async def get_area_by_point(lat: float, lng: float):
-    try:
-        db = get_supabase()
-        result = await execute_db(
-            db.rpc("find_delivery_area", {"lat": lat, "lng": lng})
-        )
-
-        if result.data and len(result.data) > 0:
-            return {
-                "covered": True,
-                "area": result.data[0]
-            }
-        else:
-            return {
-                "covered": False,
-                "message": "Point not in any delivery area"
-            }
-
-    except Exception as e:
-        logger.error(f"Error checking point: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error checking delivery area coverage"
-        )
-
-# =============================================
-# AMAZON LOCATION PLACES PROXY
-# =============================================
-ALLOWED_PLACES_ENDPOINTS = {"autocomplete", "geocode", "reverse-geocode"}
-
-@app.post("/api/places/{endpoint}")
-async def proxy_amazon_places(endpoint: str, body: Dict[str, Any], request: Request):
-    """
-    Proxy Amazon Location Service Places v2 calls.
-    Keeps the API key server-side so the browser never sees it.
-    """
-    await enforce_rate_limit(request, "places", settings.RATE_LIMIT_PLACES_PER_MINUTE)
-
-    if endpoint not in ALLOWED_PLACES_ENDPOINTS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid endpoint: {endpoint}"
-        )
-
-    if not settings.AWS_LOCATION_API_KEY:
-        logger.error("AWS_LOCATION_API_KEY not configured")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Amazon Location key not configured on server"
-        )
-
-    url = (
-        f"https://places.geo.{settings.AWS_LOCATION_REGION}"
-        f".amazonaws.com/v2/{endpoint}"
-    )
-    params = {"key": settings.AWS_LOCATION_API_KEY}
-
-    try:
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=10)
-        ) as session:
-            async with session.post(url, params=params, json=body) as resp:
-                text = await resp.text()
-                if resp.status != 200:
-                    logger.warning(
-                        f"Amazon Places {endpoint} -> {resp.status}: {text[:200]}"
-                    )
-                try:
-                    return JSONResponse(content=json.loads(text), status_code=resp.status)
-                except json.JSONDecodeError:
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail=f"Invalid response from Amazon: {text[:200]}"
-                    )
-    except asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="Amazon Places request timed out"
-        )
-    except aiohttp.ClientError as e:
-        logger.error(f"Amazon Places request failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Amazon Places unavailable"
-        )
-
-# =============================================
-# ADMIN ENDPOINTS FOR DELIVERY RULES & SETTINGS
-# =============================================
-
-# ---- VALUE DISCOUNT RULES ----
-@app.get("/api/admin/delivery-rules", response_model=List[DeliveryFeeRule], dependencies=[Depends(require_admin)])
-async def get_delivery_rules():
-    db = get_supabase()
-    result = await execute_db(db.table("delivery_fee_rules").select("*").order("min_order_value"))
-    return result.data
-
-@app.get("/api/admin/delivery-rules/{rule_id}", response_model=DeliveryFeeRule, dependencies=[Depends(require_admin)])
-async def get_delivery_rule(rule_id: int):
-    db = get_supabase()
-    result = await execute_db(db.table("delivery_fee_rules").select("*").eq("id", rule_id))
-    if not result.data:
-        raise HTTPException(404, "Rule not found")
-    return result.data[0]
-
-@app.post("/api/admin/delivery-rules", response_model=DeliveryFeeRule, status_code=201, dependencies=[Depends(require_admin)])
-async def create_delivery_rule(rule: DeliveryFeeRuleCreate):
-    db = get_supabase()
-    data = rule.dict(exclude={'id', 'created_at', 'updated_at'})
-    data["created_at"] = data["updated_at"] = datetime.now().isoformat()
-    result = await execute_db(db.table("delivery_fee_rules").insert(data))
-    if not result.data:
-        raise HTTPException(400, "Failed to create rule")
-    return result.data[0]
-
-@app.put("/api/admin/delivery-rules/{rule_id}", response_model=DeliveryFeeRule, dependencies=[Depends(require_admin)])
-async def update_delivery_rule(rule_id: int, rule: DeliveryFeeRuleUpdate):
-    db = get_supabase()
-    data = rule.dict(exclude={'id', 'created_at', 'updated_at'}, exclude_unset=True)
-    data["updated_at"] = datetime.now().isoformat()
-    result = await execute_db(db.table("delivery_fee_rules").update(data).eq("id", rule_id))
-    if not result.data:
-        raise HTTPException(404, "Rule not found")
-    return result.data[0]
-
-@app.delete("/api/admin/delivery-rules/{rule_id}", status_code=204, dependencies=[Depends(require_admin)])
-async def delete_delivery_rule(rule_id: int):
-    db = get_supabase()
-    result = await execute_db(db.table("delivery_fee_rules").delete().eq("id", rule_id))
-    if not result.data:
-        raise HTTPException(404, "Rule not found")
-
-# ---- PEAK SETTINGS ----
-@app.get("/api/admin/peak-settings", response_model=List[DeliveryPeakSetting], dependencies=[Depends(require_admin)])
-async def get_peak_settings():
-    db = get_supabase()
-    result = await execute_db(db.table("delivery_peak_settings").select("*").order("day_of_week"))
-    return result.data
-
-@app.get("/api/admin/peak-settings/{setting_id}", response_model=DeliveryPeakSetting, dependencies=[Depends(require_admin)])
-async def get_peak_setting(setting_id: int):
-    db = get_supabase()
-    result = await execute_db(db.table("delivery_peak_settings").select("*").eq("id", setting_id))
-    if not result.data:
-        raise HTTPException(404, "Peak setting not found")
-    return result.data[0]
-
-@app.post("/api/admin/peak-settings", response_model=DeliveryPeakSetting, status_code=201, dependencies=[Depends(require_admin)])
-async def create_peak_setting(setting: DeliveryPeakSettingCreate):
-    db = get_supabase()
-    data = setting.dict(exclude={'id', 'created_at', 'updated_at'})
-    data["created_at"] = data["updated_at"] = datetime.now().isoformat()
-    result = await execute_db(db.table("delivery_peak_settings").insert(data))
-    if not result.data:
-        raise HTTPException(400, "Failed to create peak setting")
-    return result.data[0]
-
-@app.put("/api/admin/peak-settings/{setting_id}", response_model=DeliveryPeakSetting, dependencies=[Depends(require_admin)])
-async def update_peak_setting(setting_id: int, setting: DeliveryPeakSettingUpdate):
-    db = get_supabase()
-    data = setting.dict(exclude={'id', 'created_at', 'updated_at'}, exclude_unset=True)
-    data["updated_at"] = datetime.now().isoformat()
-    result = await execute_db(db.table("delivery_peak_settings").update(data).eq("id", setting_id))
-    if not result.data:
-        raise HTTPException(404, "Peak setting not found")
-    return result.data[0]
-
-@app.delete("/api/admin/peak-settings/{setting_id}", status_code=204, dependencies=[Depends(require_admin)])
-async def delete_peak_setting(setting_id: int):
-    db = get_supabase()
-    result = await execute_db(db.table("delivery_peak_settings").delete().eq("id", setting_id))
-    if not result.data:
-        raise HTTPException(404, "Peak setting not found")
-
-# ---- LOYALTY SETTINGS ----
-@app.get("/api/admin/loyalty-settings", response_model=List[DeliveryLoyaltySetting], dependencies=[Depends(require_admin)])
-async def get_loyalty_settings():
-    db = get_supabase()
-    result = await execute_db(db.table("delivery_loyalty_settings").select("*"))
-    return result.data
-
-@app.get("/api/admin/loyalty-settings/{setting_id}", response_model=DeliveryLoyaltySetting, dependencies=[Depends(require_admin)])
-async def get_loyalty_setting(setting_id: int):
-    db = get_supabase()
-    result = await execute_db(db.table("delivery_loyalty_settings").select("*").eq("id", setting_id))
-    if not result.data:
-        raise HTTPException(404, "Loyalty setting not found")
-    return result.data[0]
-
-@app.post("/api/admin/loyalty-settings", response_model=DeliveryLoyaltySetting, status_code=201, dependencies=[Depends(require_admin)])
-async def create_loyalty_setting(setting: DeliveryLoyaltySettingCreate):
-    db = get_supabase()
-    data = setting.dict(exclude={'id', 'created_at', 'updated_at'})
-    data["created_at"] = data["updated_at"] = datetime.now().isoformat()
-    result = await execute_db(db.table("delivery_loyalty_settings").insert(data))
-    if not result.data:
-        raise HTTPException(400, "Failed to create loyalty setting")
-    return result.data[0]
-
-@app.put("/api/admin/loyalty-settings/{setting_id}", response_model=DeliveryLoyaltySetting, dependencies=[Depends(require_admin)])
-async def update_loyalty_setting(setting_id: int, setting: DeliveryLoyaltySettingUpdate):
-    db = get_supabase()
-    data = setting.dict(exclude={'id', 'created_at', 'updated_at'}, exclude_unset=True)
-    data["updated_at"] = datetime.now().isoformat()
-    result = await execute_db(db.table("delivery_loyalty_settings").update(data).eq("id", setting_id))
-    if not result.data:
-        raise HTTPException(404, "Loyalty setting not found")
-    return result.data[0]
-
-@app.delete("/api/admin/loyalty-settings/{setting_id}", status_code=204, dependencies=[Depends(require_admin)])
-async def delete_loyalty_setting(setting_id: int):
-    db = get_supabase()
-    result = await execute_db(db.table("delivery_loyalty_settings").delete().eq("id", setting_id))
-    if not result.data:
-        raise HTTPException(404, "Loyalty setting not found")
-
-# ---- ITEM SURCHARGE RULES ----
-@app.get("/api/admin/item-surcharge-rules", response_model=List[DeliveryItemSurchargeRule], dependencies=[Depends(require_admin)])
-async def get_item_surcharge_rules():
-    db = get_supabase()
-    result = await execute_db(db.table("delivery_item_surcharge_rules").select("*").order("min_main_items"))
-    return result.data
-
-@app.get("/api/admin/item-surcharge-rules/{rule_id}", response_model=DeliveryItemSurchargeRule, dependencies=[Depends(require_admin)])
-async def get_item_surcharge_rule(rule_id: int):
-    db = get_supabase()
-    result = await execute_db(db.table("delivery_item_surcharge_rules").select("*").eq("id", rule_id))
-    if not result.data:
-        raise HTTPException(404, "Rule not found")
-    return result.data[0]
-
-@app.post("/api/admin/item-surcharge-rules", response_model=DeliveryItemSurchargeRule, status_code=201, dependencies=[Depends(require_admin)])
-async def create_item_surcharge_rule(rule: DeliveryItemSurchargeRuleCreate):
-    db = get_supabase()
-    data = rule.dict(exclude={'id', 'created_at', 'updated_at'})
-    data["created_at"] = data["updated_at"] = datetime.now().isoformat()
-    result = await execute_db(db.table("delivery_item_surcharge_rules").insert(data))
-    if not result.data:
-        raise HTTPException(400, "Failed to create item surcharge rule")
-    return result.data[0]
-
-@app.put("/api/admin/item-surcharge-rules/{rule_id}", response_model=DeliveryItemSurchargeRule, dependencies=[Depends(require_admin)])
-async def update_item_surcharge_rule(rule_id: int, rule: DeliveryItemSurchargeRuleUpdate):
-    db = get_supabase()
-    data = rule.dict(exclude={'id', 'created_at', 'updated_at'}, exclude_unset=True)
-    data["updated_at"] = datetime.now().isoformat()
-    result = await execute_db(db.table("delivery_item_surcharge_rules").update(data).eq("id", rule_id))
-    if not result.data:
-        raise HTTPException(404, "Rule not found")
-    return result.data[0]
-
-@app.delete("/api/admin/item-surcharge-rules/{rule_id}", status_code=204, dependencies=[Depends(require_admin)])
-async def delete_item_surcharge_rule(rule_id: int):
-    db = get_supabase()
-    result = await execute_db(db.table("delivery_item_surcharge_rules").delete().eq("id", rule_id))
-    if not result.data:
-        raise HTTPException(404, "Rule not found")
-
-# ---------- AI ENDPOINTS ----------
 @app.post("/api/ai/chat", response_model=AIChatResponse)
 async def chat_with_ai(req: AIChatRequest, request: Request, ai_service: AIService = Depends(get_ai_service)):
     await enforce_rate_limit(request, "ai", settings.RATE_LIMIT_AI_PER_MINUTE)
@@ -2706,13 +1995,746 @@ async def ai_health(ai_service: AIService = Depends(get_ai_service)):
         "fallback": settings.AI_FALLBACK
     }
 
+# =============================================
+# AUTHENTICATED ENDPOINTS (RBAC)
+# =============================================
+
+@app.get("/api/auth/me")
+async def whoami(staff: Dict[str, Any] = Depends(get_current_staff)):
+    """Return the currently-authenticated staff member's profile + permissions."""
+    role = staff.get("role")
+    perms = sorted(list(PERMISSIONS.get(role, set())))
+    return {
+        "id": staff["id"],
+        "email": staff["email"],
+        "full_name": staff["full_name"],
+        "role": role,
+        "is_active": staff.get("is_active", True),
+        "permissions": perms,
+    }
+
+# ---------- STAFF MANAGEMENT (owner only) ----------
+
+@app.get("/api/staff", response_model=List[StaffMember])
+async def list_staff(staff: Dict[str, Any] = Depends(require_permission("staff:read"))):
+    r = await execute_db(get_supabase().table("staff").select("*").order("created_at"))
+    return r.data
+
+@app.post("/api/staff", status_code=201)
+async def create_staff(
+    payload: StaffCreate,
+    staff: Dict[str, Any] = Depends(require_permission("staff:write")),
+    request: Request = None,
+):
+    """Invite a new staff member via Supabase Auth and create their staff record."""
+    email = payload.email.strip().lower()
+    role = payload.role.strip().lower()
+    if role not in ALLOWED_ROLES:
+        raise HTTPException(400, f"Invalid role. Must be one of: {sorted(ALLOWED_ROLES)}")
+    if role == "owner" and staff.get("role") != "owner":
+        raise HTTPException(403, "Only an owner can create another owner")
+
+    existing = await execute_db(get_supabase().table("staff").select("id").eq("email", email))
+    if existing.data:
+        raise HTTPException(400, "A staff member with this email already exists")
+
+    # Send the Supabase invite. Uses the admin REST endpoint with service_role key.
+    invite_url = f"{settings.SUPABASE_URL}/auth/v1/invite"
+    headers = {
+        "apikey": settings.SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json",
+    }
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+        async with session.post(
+            invite_url, headers=headers,
+            json={"email": email, "data": {"full_name": payload.full_name, "role": role}}
+        ) as resp:
+            text = await resp.text()
+            if resp.status not in (200, 201):
+                logger.error(f"Supabase invite failed: {resp.status} {text[:200]}")
+                raise HTTPException(502, f"Failed to send invite: {text[:200]}")
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                raise HTTPException(502, "Invalid response from Supabase invite")
+            user_id = data.get("id")
+            if not user_id:
+                raise HTTPException(500, "Supabase invite did not return a user id")
+
+    row = {
+        "id": user_id,
+        "email": email,
+        "full_name": payload.full_name,
+        "role": role,
+        "is_active": True,
+    }
+    r = await execute_db(get_supabase().table("staff").insert(row))
+    if not r.data:
+        raise HTTPException(500, "Failed to create staff record")
+    await audit_log(staff, "invite", "staff", user_id, {"email": email, "role": role}, request)
+    return r.data[0]
+
+@app.patch("/api/staff/{staff_id}")
+async def update_staff(
+    staff_id: str,
+    payload: StaffUpdate,
+    staff: Dict[str, Any] = Depends(require_permission("staff:write")),
+    request: Request = None,
+):
+    update_data: Dict[str, Any] = {}
+    if payload.full_name is not None:
+        update_data["full_name"] = payload.full_name
+    if payload.role is not None:
+        new_role = payload.role.strip().lower()
+        if new_role not in ALLOWED_ROLES:
+            raise HTTPException(400, f"Invalid role. Must be one of: {sorted(ALLOWED_ROLES)}")
+        if new_role == "owner" and staff.get("role") != "owner":
+            raise HTTPException(403, "Only an owner can promote someone to owner")
+        # Prevent the last owner from being demoted
+        if new_role != "owner":
+            existing = await execute_db(
+                get_supabase().table("staff").select("role").eq("id", staff_id)
+            )
+            if existing.data and existing.data[0].get("role") == "owner":
+                owners = await execute_db(
+                    get_supabase().table("staff").select("id", count="exact").eq("role", "owner")
+                )
+                if (owners.count or 0) <= 1:
+                    raise HTTPException(400, "Cannot demote the last remaining owner")
+        update_data["role"] = new_role
+
+    if not update_data:
+        raise HTTPException(400, "No fields to update")
+    update_data["updated_at"] = datetime.now().isoformat()
+
+    r = await execute_db(get_supabase().table("staff").update(update_data).eq("id", staff_id))
+    if not r.data:
+        raise HTTPException(404, "Staff member not found")
+    await audit_log(staff, "update", "staff", staff_id, update_data, request)
+    return r.data[0]
+
+@app.delete("/api/staff/{staff_id}", status_code=200)
+async def deactivate_staff(
+    staff_id: str,
+    staff: Dict[str, Any] = Depends(require_permission("staff:write")),
+    request: Request = None,
+):
+    if staff_id == staff.get("id"):
+        raise HTTPException(400, "You cannot deactivate your own account")
+    existing = await execute_db(get_supabase().table("staff").select("*").eq("id", staff_id))
+    if not existing.data:
+        raise HTTPException(404, "Staff member not found")
+    target = existing.data[0]
+    if target.get("role") == "owner":
+        owners = await execute_db(
+            get_supabase().table("staff").select("id", count="exact").eq("role", "owner").eq("is_active", True)
+        )
+        if (owners.count or 0) <= 1:
+            raise HTTPException(400, "Cannot deactivate the last remaining active owner")
+    r = await execute_db(
+        get_supabase().table("staff").update({
+            "is_active": False,
+            "updated_at": datetime.now().isoformat()
+        }).eq("id", staff_id)
+    )
+    if not r.data:
+        raise HTTPException(500, "Failed to deactivate staff member")
+    await audit_log(staff, "deactivate", "staff", staff_id, None, request)
+    return {"message": "Staff member deactivated", "id": staff_id, "is_active": False}
+
+@app.post("/api/staff/{staff_id}/reactivate")
+async def reactivate_staff(
+    staff_id: str,
+    staff: Dict[str, Any] = Depends(require_permission("staff:write")),
+    request: Request = None,
+):
+    r = await execute_db(
+        get_supabase().table("staff").update({
+            "is_active": True,
+            "updated_at": datetime.now().isoformat()
+        }).eq("id", staff_id)
+    )
+    if not r.data:
+        raise HTTPException(404, "Staff member not found")
+    await audit_log(staff, "reactivate", "staff", staff_id, None, request)
+    return r.data[0]
+
+@app.get("/api/admin/audit-log")
+async def get_audit_log(
+    limit: int = 100,
+    offset: int = 0,
+    staff_id: Optional[str] = Query(None),
+    resource_type: Optional[str] = Query(None),
+    staff: Dict[str, Any] = Depends(require_permission("audit:read")),
+):
+    limit = max(1, min(limit, 500))
+    query = get_supabase().table("staff_audit_log").select("*", count="exact")
+    if staff_id:
+        query = query.eq("staff_id", staff_id)
+    if resource_type:
+        query = query.eq("resource_type", resource_type)
+    r = await execute_db(query.order("created_at", desc=True).range(offset, offset + limit - 1))
+    return {"entries": r.data, "count": r.count}
+
+# ---------- PRODUCTS (RBAC) ----------
+
+@app.post("/api/products", response_model=Product, status_code=201)
+async def create_product(
+    p: ProductCreate,
+    staff: Dict[str, Any] = Depends(require_permission("products:write")),
+    request: Request = None,
+):
+    r = await execute_db(get_supabase().table("products").insert(p.dict()))
+    if not r.data:
+        raise HTTPException(400, "Failed")
+    await audit_log(staff, "create", "product", r.data[0].get("id"), p.dict(), request)
+    return r.data[0]
+
+@app.put("/api/products/{pid}")
+async def update_product(
+    pid: int,
+    p: ProductUpdate,
+    staff: Dict[str, Any] = Depends(require_permission("products:write")),
+    request: Request = None,
+):
+    r = await execute_db(get_supabase().table("products").update(p.dict()).eq("id", pid))
+    if not r.data:
+        raise HTTPException(404, "Not found")
+    await audit_log(staff, "update", "product", pid, p.dict(), request)
+    return r.data[0]
+
+@app.delete("/api/products/{pid}", status_code=204)
+async def delete_product(
+    pid: int,
+    staff: Dict[str, Any] = Depends(require_permission("products:write")),
+    request: Request = None,
+):
+    r = await execute_db(get_supabase().table("products").delete().eq("id", pid))
+    if not r.data:
+        raise HTTPException(404, "Not found")
+    await audit_log(staff, "delete", "product", pid, None, request)
+
+# ---------- CATEGORIES (RBAC) ----------
+
+@app.post("/api/categories", response_model=Category, status_code=201)
+async def create_category(
+    c: CategoryBase,
+    staff: Dict[str, Any] = Depends(require_permission("categories:write")),
+    request: Request = None,
+):
+    r = await execute_db(get_supabase().table("categories").insert(c.dict()))
+    if not r.data:
+        raise HTTPException(400, "Failed")
+    await audit_log(staff, "create", "category", r.data[0].get("id"), c.dict(), request)
+    return r.data[0]
+
+@app.put("/api/categories/{cid}")
+async def update_category(
+    cid: int,
+    c: CategoryBase,
+    staff: Dict[str, Any] = Depends(require_permission("categories:write")),
+    request: Request = None,
+):
+    r = await execute_db(get_supabase().table("categories").update(c.dict()).eq("id", cid))
+    if not r.data:
+        raise HTTPException(404, "Not found")
+    await audit_log(staff, "update", "category", cid, c.dict(), request)
+    return r.data[0]
+
+@app.delete("/api/categories/{cid}", status_code=204)
+async def delete_category(
+    cid: int,
+    staff: Dict[str, Any] = Depends(require_permission("categories:write")),
+    request: Request = None,
+):
+    r = await execute_db(get_supabase().table("categories").delete().eq("id", cid))
+    if not r.data:
+        raise HTTPException(404, "Not found")
+    await audit_log(staff, "delete", "category", cid, None, request)
+
+# ---------- ORDERS (RBAC) ----------
+
+@app.get("/api/orders", response_model=List[Dict])
+async def get_orders(
+    since: Optional[str] = Query(None),
+    staff: Dict[str, Any] = Depends(require_permission("orders:read")),
+):
+    query = get_supabase().table("orders").select("*").order("created_at", desc=True)
+    if since:
+        query = query.gt("created_at", since)
+    r = await execute_db(query)
+    for o in r.data:
+        o["itemCount"] = len(o.get("items", []))
+    return r.data
+
+@app.get("/api/orders/{oid}")
+async def get_order(
+    oid: int,
+    staff: Dict[str, Any] = Depends(require_permission("orders:read")),
+):
+    r = await execute_db(get_supabase().table("orders").select("*").eq("id", oid))
+    if not r.data:
+        raise HTTPException(404, "Not found")
+    return r.data[0]
+
+@app.patch("/api/orders/{oid}/status")
+async def update_order_status(
+    oid: int,
+    upd: OrderStatusUpdate,
+    staff: Dict[str, Any] = Depends(require_permission("orders:update_status")),
+    request: Request = None,
+):
+    order_result = await execute_db(get_supabase().table("orders").select("*").eq("id", oid))
+    if not order_result.data:
+        raise HTTPException(404, "Order not found")
+    order = order_result.data[0]
+    current_status = order.get("status")
+    validate_order_transition(current_status, upd.status)
+    update_data = {"status": upd.status}
+    if upd.reason is not None:
+        update_data["cancellation_reason"] = upd.reason
+    if upd.status == "cancelled" and current_status not in ("cancelled",):
+        await restore_order_stock(order)
+        logger.info(f"Stock restored for cancelled order {oid}")
+    if upd.status in ("confirmed", "paid") and current_status not in ("confirmed", "paid"):
+        await reduce_order_stock(order)
+    result = await execute_db(get_supabase().table("orders").update(update_data).eq("id", oid))
+    if not result.data:
+        raise HTTPException(404, "Order not found")
+    invalidate_stats_cache()
+    await audit_log(staff, "status_change", "order", oid, update_data, request)
+    return result.data[0]
+
+@app.post("/api/orders/{oid}/confirm-offline")
+async def confirm_order_offline(
+    oid: int,
+    staff: Dict[str, Any] = Depends(require_permission("orders:update_status")),
+    request: Request = None,
+):
+    order_result = await execute_db(get_supabase().table("orders").select("*").eq("id", oid))
+    if not order_result.data:
+        raise HTTPException(404, "Order not found")
+    order = order_result.data[0]
+    if order.get("status") in ("confirmed", "paid"):
+        raise HTTPException(400, "Order already confirmed")
+    validate_order_transition(order.get("status"), "confirmed")
+    await reduce_order_stock(order)
+    await execute_db(get_supabase().table("orders").update({"status": "confirmed"}).eq("id", oid))
+    invalidate_stats_cache()
+    await audit_log(staff, "confirm_offline", "order", oid, None, request)
+    return {"message": "Order confirmed offline", "status": "confirmed"}
+
+@app.get("/api/stats")
+async def get_stats(staff: Dict[str, Any] = Depends(require_permission("stats:read"))):
+    return await get_cached_stats()
+
+# ---------- BANNERS (RBAC) ----------
+
+@app.get("/api/v1/banners", response_model=BannerResponse)
+async def list_banners(
+    is_active: Optional[bool] = Query(None),
+    is_hero: Optional[bool] = Query(None),
+    is_featured: Optional[bool] = Query(None),
+    category: Optional[str] = Query(None),
+    limit: int = 50,
+    offset: int = 0,
+    staff: Dict[str, Any] = Depends(require_permission("banners:read")),
+):
+    return await BannerService().get_banners(is_active, is_hero, is_featured, category, limit, offset)
+
+@app.post("/api/v1/banners", response_model=Banner, status_code=201)
+async def create_banner(
+    banner: BannerCreate,
+    staff: Dict[str, Any] = Depends(require_permission("banners:write")),
+    request: Request = None,
+):
+    created = await BannerService().create_banner(banner)
+    await audit_log(staff, "create", "banner", created.get("id"), None, request)
+    return created
+
+@app.put("/api/v1/banners/{banner_id}", response_model=Banner)
+async def update_banner(
+    banner_id: int,
+    banner: BannerUpdate,
+    staff: Dict[str, Any] = Depends(require_permission("banners:write")),
+    request: Request = None,
+):
+    updated = await BannerService().update_banner(banner_id, banner)
+    await audit_log(staff, "update", "banner", banner_id, None, request)
+    return updated
+
+@app.delete("/api/v1/banners/{banner_id}", status_code=204)
+async def delete_banner(
+    banner_id: int,
+    staff: Dict[str, Any] = Depends(require_permission("banners:write")),
+    request: Request = None,
+):
+    await BannerService().delete_banner(banner_id)
+    await audit_log(staff, "delete", "banner", banner_id, None, request)
+
+@app.patch("/api/v1/banners/{banner_id}/toggle")
+async def toggle_banner(
+    banner_id: int,
+    staff: Dict[str, Any] = Depends(require_permission("banners:write")),
+    request: Request = None,
+):
+    result = await BannerService().toggle_banner(banner_id)
+    await audit_log(staff, "toggle", "banner", banner_id, result, request)
+    return result
+
+@app.post("/api/v1/banners/{banner_id}/duplicate")
+async def duplicate_banner(
+    banner_id: int,
+    staff: Dict[str, Any] = Depends(require_permission("banners:write")),
+    request: Request = None,
+):
+    result = await BannerService().duplicate_banner(banner_id)
+    await audit_log(staff, "duplicate", "banner", banner_id, {"new_id": result.get("id")}, request)
+    return result
+
+@app.patch("/api/v1/banners/reorder")
+async def reorder_banners(
+    banner_ids: List[int],
+    staff: Dict[str, Any] = Depends(require_permission("banners:write")),
+    request: Request = None,
+):
+    result = await BannerService().reorder_banners(banner_ids)
+    await audit_log(staff, "reorder", "banner", None, {"order": banner_ids}, request)
+    return result
+
+# ---------- DELIVERY AREAS (RBAC) ----------
+
+@app.post("/api/delivery-areas", response_model=DeliveryArea, status_code=201)
+async def create_delivery_area(
+    area: DeliveryAreaCreate,
+    staff: Dict[str, Any] = Depends(require_permission("delivery_areas:write")),
+    request: Request = None,
+):
+    try:
+        if "type" not in area.polygon or area.polygon["type"] != "Polygon":
+            raise HTTPException(400, "Invalid polygon: must be a GeoJSON Polygon")
+        if "coordinates" not in area.polygon or not area.polygon["coordinates"]:
+            raise HTTPException(400, "Invalid polygon: missing coordinates")
+        coords = area.polygon["coordinates"][0]
+        if len(coords) < 4:
+            raise HTTPException(400, "Invalid polygon: must have at least 4 points")
+        db = get_supabase()
+        result = await execute_db(db.rpc("insert_delivery_area", {
+            "_name": area.name, "_fee": area.fee, "_geojson": json.dumps(area.polygon)
+        }))
+        if not result.data:
+            raise HTTPException(400, "Failed to create delivery area. Check that the polygon is valid.")
+        created = dict(result.data[0])
+        created["polygon"] = area.polygon
+        if "created_at" in created and isinstance(created["created_at"], (datetime, date)):
+            created["created_at"] = created["created_at"].isoformat()
+        if "updated_at" in created and isinstance(created["updated_at"], (datetime, date)):
+            created["updated_at"] = created["updated_at"].isoformat()
+        await audit_log(staff, "create", "delivery_area", created.get("id"), {"name": area.name, "fee": area.fee}, request)
+        return created
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating delivery area: {str(e)}", exc_info=True)
+        raise HTTPException(500, f"Error creating delivery area: {str(e)}")
+
+@app.put("/api/delivery-areas/{area_id}", response_model=DeliveryArea)
+async def update_delivery_area(
+    area_id: int,
+    area: DeliveryAreaUpdate,
+    staff: Dict[str, Any] = Depends(require_permission("delivery_areas:write")),
+    request: Request = None,
+):
+    try:
+        if "type" not in area.polygon or area.polygon["type"] != "Polygon":
+            raise HTTPException(400, "Invalid polygon: must be a GeoJSON Polygon")
+        if "coordinates" not in area.polygon or not area.polygon["coordinates"]:
+            raise HTTPException(400, "Invalid polygon: missing coordinates")
+        coords = area.polygon["coordinates"][0]
+        if len(coords) < 4:
+            raise HTTPException(400, "Invalid polygon: must have at least 4 points")
+        db = get_supabase()
+        result = await execute_db(db.rpc("update_delivery_area", {
+            "_id": area_id, "_name": area.name, "_fee": area.fee,
+            "_geojson": json.dumps(area.polygon)
+        }))
+        if not result.data:
+            raise HTTPException(404, f"Delivery area with ID {area_id} not found")
+        updated = dict(result.data[0])
+        updated["polygon"] = area.polygon
+        if "created_at" in updated and isinstance(updated["created_at"], (datetime, date)):
+            updated["created_at"] = updated["created_at"].isoformat()
+        if "updated_at" in updated and isinstance(updated["updated_at"], (datetime, date)):
+            updated["updated_at"] = updated["updated_at"].isoformat()
+        await audit_log(staff, "update", "delivery_area", area_id, {"name": area.name, "fee": area.fee}, request)
+        return updated
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating delivery area: {str(e)}", exc_info=True)
+        raise HTTPException(500, f"Error updating delivery area: {str(e)}")
+
+@app.delete("/api/delivery-areas/{area_id}", status_code=204)
+async def delete_delivery_area(
+    area_id: int,
+    staff: Dict[str, Any] = Depends(require_permission("delivery_areas:write")),
+    request: Request = None,
+):
+    try:
+        db = get_supabase()
+        check_result = await execute_db(db.table("delivery_areas").select("id").eq("id", area_id))
+        if not check_result.data:
+            raise HTTPException(404, f"Delivery area with ID {area_id} not found")
+        await execute_db(db.table("delivery_areas").delete().eq("id", area_id))
+        await audit_log(staff, "delete", "delivery_area", area_id, None, request)
+        return None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting delivery area: {str(e)}", exc_info=True)
+        raise HTTPException(500, f"Error deleting delivery area: {str(e)}")
+
+# =============================================
+# ADMIN ENDPOINTS FOR DELIVERY RULES & SETTINGS
+# =============================================
+
+# ---- VALUE DISCOUNT RULES ----
+@app.get("/api/admin/delivery-rules", response_model=List[DeliveryFeeRule])
+async def get_delivery_rules(staff: Dict[str, Any] = Depends(require_permission("delivery_rules:read"))):
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_fee_rules").select("*").order("min_order_value"))
+    return result.data
+
+@app.get("/api/admin/delivery-rules/{rule_id}", response_model=DeliveryFeeRule)
+async def get_delivery_rule(rule_id: int, staff: Dict[str, Any] = Depends(require_permission("delivery_rules:read"))):
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_fee_rules").select("*").eq("id", rule_id))
+    if not result.data:
+        raise HTTPException(404, "Rule not found")
+    return result.data[0]
+
+@app.post("/api/admin/delivery-rules", response_model=DeliveryFeeRule, status_code=201)
+async def create_delivery_rule(
+    rule: DeliveryFeeRuleCreate,
+    staff: Dict[str, Any] = Depends(require_permission("delivery_rules:write")),
+    request: Request = None,
+):
+    db = get_supabase()
+    data = rule.dict(exclude={'id', 'created_at', 'updated_at'})
+    data["created_at"] = data["updated_at"] = datetime.now().isoformat()
+    result = await execute_db(db.table("delivery_fee_rules").insert(data))
+    if not result.data:
+        raise HTTPException(400, "Failed to create rule")
+    await audit_log(staff, "create", "delivery_rule", result.data[0].get("id"), data, request)
+    return result.data[0]
+
+@app.put("/api/admin/delivery-rules/{rule_id}", response_model=DeliveryFeeRule)
+async def update_delivery_rule(
+    rule_id: int,
+    rule: DeliveryFeeRuleUpdate,
+    staff: Dict[str, Any] = Depends(require_permission("delivery_rules:write")),
+    request: Request = None,
+):
+    db = get_supabase()
+    data = rule.dict(exclude={'id', 'created_at', 'updated_at'}, exclude_unset=True)
+    data["updated_at"] = datetime.now().isoformat()
+    result = await execute_db(db.table("delivery_fee_rules").update(data).eq("id", rule_id))
+    if not result.data:
+        raise HTTPException(404, "Rule not found")
+    await audit_log(staff, "update", "delivery_rule", rule_id, data, request)
+    return result.data[0]
+
+@app.delete("/api/admin/delivery-rules/{rule_id}", status_code=204)
+async def delete_delivery_rule(
+    rule_id: int,
+    staff: Dict[str, Any] = Depends(require_permission("delivery_rules:write")),
+    request: Request = None,
+):
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_fee_rules").delete().eq("id", rule_id))
+    if not result.data:
+        raise HTTPException(404, "Rule not found")
+    await audit_log(staff, "delete", "delivery_rule", rule_id, None, request)
+
+# ---- PEAK SETTINGS ----
+@app.get("/api/admin/peak-settings", response_model=List[DeliveryPeakSetting])
+async def get_peak_settings_admin(staff: Dict[str, Any] = Depends(require_permission("delivery_rules:read"))):
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_peak_settings").select("*").order("day_of_week"))
+    return result.data
+
+@app.get("/api/admin/peak-settings/{setting_id}", response_model=DeliveryPeakSetting)
+async def get_peak_setting_admin(setting_id: int, staff: Dict[str, Any] = Depends(require_permission("delivery_rules:read"))):
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_peak_settings").select("*").eq("id", setting_id))
+    if not result.data:
+        raise HTTPException(404, "Peak setting not found")
+    return result.data[0]
+
+@app.post("/api/admin/peak-settings", response_model=DeliveryPeakSetting, status_code=201)
+async def create_peak_setting_admin(
+    setting: DeliveryPeakSettingCreate,
+    staff: Dict[str, Any] = Depends(require_permission("delivery_rules:write")),
+    request: Request = None,
+):
+    db = get_supabase()
+    data = setting.dict(exclude={'id', 'created_at', 'updated_at'})
+    data["created_at"] = data["updated_at"] = datetime.now().isoformat()
+    result = await execute_db(db.table("delivery_peak_settings").insert(data))
+    if not result.data:
+        raise HTTPException(400, "Failed to create peak setting")
+    await audit_log(staff, "create", "peak_setting", result.data[0].get("id"), data, request)
+    return result.data[0]
+
+@app.put("/api/admin/peak-settings/{setting_id}", response_model=DeliveryPeakSetting)
+async def update_peak_setting_admin(
+    setting_id: int,
+    setting: DeliveryPeakSettingUpdate,
+    staff: Dict[str, Any] = Depends(require_permission("delivery_rules:write")),
+    request: Request = None,
+):
+    db = get_supabase()
+    data = setting.dict(exclude={'id', 'created_at', 'updated_at'}, exclude_unset=True)
+    data["updated_at"] = datetime.now().isoformat()
+    result = await execute_db(db.table("delivery_peak_settings").update(data).eq("id", setting_id))
+    if not result.data:
+        raise HTTPException(404, "Peak setting not found")
+    await audit_log(staff, "update", "peak_setting", setting_id, data, request)
+    return result.data[0]
+
+@app.delete("/api/admin/peak-settings/{setting_id}", status_code=204)
+async def delete_peak_setting_admin(
+    setting_id: int,
+    staff: Dict[str, Any] = Depends(require_permission("delivery_rules:write")),
+    request: Request = None,
+):
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_peak_settings").delete().eq("id", setting_id))
+    if not result.data:
+        raise HTTPException(404, "Peak setting not found")
+    await audit_log(staff, "delete", "peak_setting", setting_id, None, request)
+
+# ---- LOYALTY SETTINGS ----
+@app.get("/api/admin/loyalty-settings", response_model=List[DeliveryLoyaltySetting])
+async def get_loyalty_settings_admin(staff: Dict[str, Any] = Depends(require_permission("delivery_rules:read"))):
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_loyalty_settings").select("*"))
+    return result.data
+
+@app.get("/api/admin/loyalty-settings/{setting_id}", response_model=DeliveryLoyaltySetting)
+async def get_loyalty_setting_admin(setting_id: int, staff: Dict[str, Any] = Depends(require_permission("delivery_rules:read"))):
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_loyalty_settings").select("*").eq("id", setting_id))
+    if not result.data:
+        raise HTTPException(404, "Loyalty setting not found")
+    return result.data[0]
+
+@app.post("/api/admin/loyalty-settings", response_model=DeliveryLoyaltySetting, status_code=201)
+async def create_loyalty_setting_admin(
+    setting: DeliveryLoyaltySettingCreate,
+    staff: Dict[str, Any] = Depends(require_permission("delivery_rules:write")),
+    request: Request = None,
+):
+    db = get_supabase()
+    data = setting.dict(exclude={'id', 'created_at', 'updated_at'})
+    data["created_at"] = data["updated_at"] = datetime.now().isoformat()
+    result = await execute_db(db.table("delivery_loyalty_settings").insert(data))
+    if not result.data:
+        raise HTTPException(400, "Failed to create loyalty setting")
+    await audit_log(staff, "create", "loyalty_setting", result.data[0].get("id"), data, request)
+    return result.data[0]
+
+@app.put("/api/admin/loyalty-settings/{setting_id}", response_model=DeliveryLoyaltySetting)
+async def update_loyalty_setting_admin(
+    setting_id: int,
+    setting: DeliveryLoyaltySettingUpdate,
+    staff: Dict[str, Any] = Depends(require_permission("delivery_rules:write")),
+    request: Request = None,
+):
+    db = get_supabase()
+    data = setting.dict(exclude={'id', 'created_at', 'updated_at'}, exclude_unset=True)
+    data["updated_at"] = datetime.now().isoformat()
+    result = await execute_db(db.table("delivery_loyalty_settings").update(data).eq("id", setting_id))
+    if not result.data:
+        raise HTTPException(404, "Loyalty setting not found")
+    await audit_log(staff, "update", "loyalty_setting", setting_id, data, request)
+    return result.data[0]
+
+@app.delete("/api/admin/loyalty-settings/{setting_id}", status_code=204)
+async def delete_loyalty_setting_admin(
+    setting_id: int,
+    staff: Dict[str, Any] = Depends(require_permission("delivery_rules:write")),
+    request: Request = None,
+):
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_loyalty_settings").delete().eq("id", setting_id))
+    if not result.data:
+        raise HTTPException(404, "Loyalty setting not found")
+    await audit_log(staff, "delete", "loyalty_setting", setting_id, None, request)
+
+# ---- ITEM SURCHARGE RULES ----
+@app.get("/api/admin/item-surcharge-rules", response_model=List[DeliveryItemSurchargeRule])
+async def get_item_surcharge_rules_admin(staff: Dict[str, Any] = Depends(require_permission("delivery_rules:read"))):
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_item_surcharge_rules").select("*").order("min_main_items"))
+    return result.data
+
+@app.get("/api/admin/item-surcharge-rules/{rule_id}", response_model=DeliveryItemSurchargeRule)
+async def get_item_surcharge_rule_admin(rule_id: int, staff: Dict[str, Any] = Depends(require_permission("delivery_rules:read"))):
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_item_surcharge_rules").select("*").eq("id", rule_id))
+    if not result.data:
+        raise HTTPException(404, "Rule not found")
+    return result.data[0]
+
+@app.post("/api/admin/item-surcharge-rules", response_model=DeliveryItemSurchargeRule, status_code=201)
+async def create_item_surcharge_rule_admin(
+    rule: DeliveryItemSurchargeRuleCreate,
+    staff: Dict[str, Any] = Depends(require_permission("delivery_rules:write")),
+    request: Request = None,
+):
+    db = get_supabase()
+    data = rule.dict(exclude={'id', 'created_at', 'updated_at'})
+    data["created_at"] = data["updated_at"] = datetime.now().isoformat()
+    result = await execute_db(db.table("delivery_item_surcharge_rules").insert(data))
+    if not result.data:
+        raise HTTPException(400, "Failed to create item surcharge rule")
+    await audit_log(staff, "create", "item_surcharge_rule", result.data[0].get("id"), data, request)
+    return result.data[0]
+
+@app.put("/api/admin/item-surcharge-rules/{rule_id}", response_model=DeliveryItemSurchargeRule)
+async def update_item_surcharge_rule_admin(
+    rule_id: int,
+    rule: DeliveryItemSurchargeRuleUpdate,
+    staff: Dict[str, Any] = Depends(require_permission("delivery_rules:write")),
+    request: Request = None,
+):
+    db = get_supabase()
+    data = rule.dict(exclude={'id', 'created_at', 'updated_at'}, exclude_unset=True)
+    data["updated_at"] = datetime.now().isoformat()
+    result = await execute_db(db.table("delivery_item_surcharge_rules").update(data).eq("id", rule_id))
+    if not result.data:
+        raise HTTPException(404, "Rule not found")
+    await audit_log(staff, "update", "item_surcharge_rule", rule_id, data, request)
+    return result.data[0]
+
+@app.delete("/api/admin/item-surcharge-rules/{rule_id}", status_code=204)
+async def delete_item_surcharge_rule_admin(
+    rule_id: int,
+    staff: Dict[str, Any] = Depends(require_permission("delivery_rules:write")),
+    request: Request = None,
+):
+    db = get_supabase()
+    result = await execute_db(db.table("delivery_item_surcharge_rules").delete().eq("id", rule_id))
+    if not result.data:
+        raise HTTPException(404, "Rule not found")
+    await audit_log(staff, "delete", "item_surcharge_rule", rule_id, None, request)
+
 # ---------- RUN ----------
-# NOTE ON SCALING (gap #14):
-# This process keeps several in-memory caches (_stats_cache, _rules_cache, _peak_cache,
-# _loyalty_cache, _item_surcharge_cache) and the rate limiter (_rate_limit_store). If you
-# scale `workers` > 1, each worker gets its own copy, which is functionally OK (caches are
-# just re-fetched; rate limits become per-worker) but NOT what you'd want for strict global
-# limits. To scale safely, move those caches and the rate limiter to Redis.
+# NOTE ON SCALING:
+# In-memory caches + rate limiter are per-process. To scale workers >1, move
+# to Redis. For a single small restaurant instance this is not a concern.
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, workers=1, log_level="info")
