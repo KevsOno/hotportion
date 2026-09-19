@@ -10,7 +10,7 @@ import re
 import secrets
 import contextvars
 from datetime import datetime, timedelta, date, timezone
-from typing import List, Optional, Dict, Any, Set
+from typing import List, Optional, Dict, Any, Set, Tuple
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from zoneinfo import ZoneInfo
@@ -112,7 +112,16 @@ class Settings(BaseSettings):
     BULKY_ITEM_SURCHARGE: int = 200
     PEAK_SURCHARGE: int = 200
     AWS_LOCATION_API_KEY: Optional[str] = None
+    # Optional: separate key for server-side Geocoding API. Falls back to
+    # AWS_LOCATION_API_KEY if not provided.
+    AWS_GEOCODING_API_KEY: Optional[str] = None
     AWS_LOCATION_REGION: str = "eu-north-1"
+    # Nominatim is a last-resort fallback only (OSM public server has a strict
+    # usage policy). Keep this False in production once AWS geocoding is live.
+    NOMINATIM_FALLBACK_ENABLED: bool = True
+    # Geocode cache (address -> lat/lng). In-memory, per-process.
+    GEOCODE_CACHE_TTL_SECONDS: int = 86400       # 24h
+    GEOCODE_CACHE_MAX_ENTRIES: int = 5000
     SENTRY_DSN: Optional[str] = None
     # Where invite and password-reset links should redirect after verification
     INVITE_REDIRECT_URL: str = "https://hotportion.netlify.app/admin"
@@ -493,6 +502,10 @@ class OrderCreate(BaseModel):
     monnify_transaction_ref: Optional[str] = None
     delivery_fee: Optional[int] = 0
     delivery_breakdown: Optional[Dict[str, Any]] = None
+    # Client-resolved coordinates (from AWS Places autocomplete). When present,
+    # the server trusts these and skips geocoding entirely.
+    lat: Optional[float] = None
+    lng: Optional[float] = None
 
 class OrderStatusUpdate(BaseModel):
     status: str
@@ -1076,10 +1089,201 @@ class MonnifyIntegration:
             logger.warning(f"Monnify query_transaction({transaction_reference}) failed: {e}")
             return {"success": False, "error": str(e)}
 
+# ---------- AWS LOCATION (server-side geocoding) ----------
+# Wraps the AWS Location Service v2 Geocoding / Reverse-Geocoding APIs. The
+# same API key that powers the frontend Places autocomplete can be used here,
+# but a separate AWS_GEOCODING_API_KEY is honoured if configured (AWS allows
+# scoping keys per API — a good practice).
+class AWSService:
+    def __init__(self):
+        self.region = settings.AWS_LOCATION_REGION
+        self.places_api_key = settings.AWS_LOCATION_API_KEY
+        self.geocoding_api_key = settings.AWS_GEOCODING_API_KEY or settings.AWS_LOCATION_API_KEY
+        self._session: Optional[aiohttp.ClientSession] = None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+        return self._session
+
+    @property
+    def geocoding_configured(self) -> bool:
+        return bool(self.geocoding_api_key)
+
+    async def geocode(self, address: str) -> Optional[Tuple[float, float]]:
+        """
+        Forward-geocode a free-form address via AWS Location Service v2
+        (`/geocode`). Returns (lat, lng) or None if not found / not configured.
+
+        AWS response shape (v2):
+          {
+            "ResultItems": [
+              {"PlaceId": "...", "PlaceType": "...", "Title": "...",
+               "Position": [lng, lat], "Address": {...}, ...}
+            ]
+          }
+        """
+        if not self.geocoding_configured:
+            logger.warning("AWS geocoding not configured (missing AWS_LOCATION_API_KEY / AWS_GEOCODING_API_KEY)")
+            return None
+        url = f"https://places.geo.{self.region}.amazonaws.com/v2/geocode"
+        params = {"key": self.geocoding_api_key}
+        body = {"QueryText": address, "MaxResults": 1}
+        try:
+            sess = await self._get_session()
+            async with sess.post(url, params=params, json=body) as resp:
+                text = await resp.text()
+                if resp.status != 200:
+                    logger.warning(f"AWS geocode -> {resp.status}: {text[:200]}")
+                    return None
+                try:
+                    data = json.loads(text)
+                except json.JSONDecodeError:
+                    logger.warning(f"AWS geocode returned non-JSON: {text[:200]}")
+                    return None
+                items = data.get("ResultItems") or []
+                if not items:
+                    return None
+                pos = items[0].get("Position")  # [lng, lat]
+                if not pos or len(pos) < 2:
+                    return None
+                lng, lat = float(pos[0]), float(pos[1])
+                return (lat, lng)
+        except asyncio.TimeoutError:
+            logger.warning(f"AWS geocode timed out for address: {address[:80]}")
+            return None
+        except aiohttp.ClientError as e:
+            logger.warning(f"AWS geocode client error: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"AWS geocode unexpected error: {e}")
+            return None
+
+    async def close(self):
+        if self._session and not self._session.closed:
+            await self._session.close()
+
+# ---------- GEOCODING (AWS-first, cached, Nominatim last-resort) ----------
+# Single source of truth for turning an address string into (lat, lng). Order:
+#   1. In-memory cache (normalized address key).
+#   2. AWS Location Service geocode.
+#   3. Nominatim (only if NOMINATIM_FALLBACK_ENABLED=true).
+# Every successful result is cached so preview + checkout agree and we don't
+# hammer upstream providers.
+_geocode_cache: Dict[str, Dict[str, Any]] = {}
+_geocode_cache_lock = asyncio.Lock()
+
+def _normalize_address_key(address: str) -> str:
+    """Lowercase, collapse whitespace, strip trailing punctuation."""
+    if not address:
+        return ""
+    s = address.strip().lower()
+    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"[.,;]+$", "", s)
+    return s
+
+async def _geocode_cache_get(key: str) -> Optional[Tuple[float, float]]:
+    if not key:
+        return None
+    async with _geocode_cache_lock:
+        entry = _geocode_cache.get(key)
+        if not entry:
+            return None
+        if entry["expires_at"] < time.time():
+            _geocode_cache.pop(key, None)
+            return None
+        return entry["coords"]
+
+async def _geocode_cache_put(key: str, coords: Tuple[float, float]) -> None:
+    if not key or not coords:
+        return
+    async with _geocode_cache_lock:
+        _geocode_cache[key] = {
+            "coords": coords,
+            "expires_at": time.time() + settings.GEOCODE_CACHE_TTL_SECONDS,
+        }
+        # Evict expired entries if we're over the cap
+        if len(_geocode_cache) > settings.GEOCODE_CACHE_MAX_ENTRIES:
+            now = time.time()
+            stale = [k for k, v in _geocode_cache.items() if v["expires_at"] < now]
+            for k in stale:
+                _geocode_cache.pop(k, None)
+            # Still over cap? Drop oldest by expiry.
+            if len(_geocode_cache) > settings.GEOCODE_CACHE_MAX_ENTRIES:
+                ordered = sorted(_geocode_cache.items(), key=lambda kv: kv[1]["expires_at"])
+                overflow = len(_geocode_cache) - settings.GEOCODE_CACHE_MAX_ENTRIES
+                for k, _ in ordered[:overflow]:
+                    _geocode_cache.pop(k, None)
+
+async def _nominatim_geocode(address: str) -> Optional[Tuple[float, float]]:
+    """Last-resort fallback. Only used when AWS geocoding fails and fallback is enabled."""
+    if not settings.NOMINATIM_FALLBACK_ENABLED:
+        return None
+    try:
+        geocode_url = "https://nominatim.openstreetmap.org/search"
+        params = {"q": address, "format": "json", "limit": 1}
+        headers = {"User-Agent": "HotPortionGrill/1.0"}
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as session:
+            async with session.get(geocode_url, params=params, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.warning(f"Nominatim fallback -> {resp.status}")
+                    return None
+                data = await resp.json()
+                if not data:
+                    return None
+                return (float(data[0].get("lat", 0)), float(data[0].get("lon", 0)))
+    except Exception as e:
+        logger.warning(f"Nominatim fallback failed: {e}")
+        return None
+
+async def geocode_address(address: str) -> Optional[Tuple[float, float]]:
+    """
+    Resolve a free-form address string to (lat, lng).
+
+    Strategy (in order):
+      1. Cache hit (normalized address key).
+      2. AWS Location Service geocode.
+      3. Nominatim (only if enabled) — logged at WARNING so operators see when
+         the fallback is being exercised.
+
+    Returns None if no provider could resolve the address.
+    """
+    if not address or not address.strip():
+        return None
+    key = _normalize_address_key(address)
+
+    cached = await _geocode_cache_get(key)
+    if cached:
+        return cached
+
+    # 1. AWS
+    aws = get_aws()
+    coords = await aws.geocode(address)
+    if coords:
+        await _geocode_cache_put(key, coords)
+        return coords
+
+    # 2. Nominatim fallback
+    if settings.NOMINATIM_FALLBACK_ENABLED:
+        logger.warning(
+            f"AWS geocode failed for '{address[:80]}' — falling back to Nominatim "
+            f"(this path violates OSM usage policy if used frequently; investigate "
+            f"AWS geocoding failures)."
+        )
+        coords = await _nominatim_geocode(address)
+        if coords:
+            await _geocode_cache_put(key, coords)
+            return coords
+    else:
+        logger.warning(f"AWS geocode failed for '{address[:80]}' and Nominatim fallback is disabled")
+
+    return None
+
 # ---------- SINGLETONS ----------
 _brevo = None
 _monnify = None
 _ai_service = None
+_aws = None
 
 def get_brevo():
     global _brevo
@@ -1098,6 +1302,12 @@ def get_ai_service():
     if _ai_service is None:
         _ai_service = AIService()
     return _ai_service
+
+def get_aws() -> AWSService:
+    global _aws
+    if _aws is None:
+        _aws = AWSService()
+    return _aws
 
 # ---------- CACHE ----------
 _stats_cache = {"data": None, "timestamp": 0}
@@ -1753,6 +1963,14 @@ async def lifespan(app: FastAPI):
             "Set it from Supabase → Settings → API → JWT Secret."
         )
 
+    # Warn if server-side geocoding isn't configured — deliveries will fall
+    # back to Nominatim (or fail if the fallback is disabled).
+    if not get_aws().geocoding_configured:
+        logger.warning(
+            "⚠️  AWS geocoding is NOT configured (AWS_LOCATION_API_KEY / AWS_GEOCODING_API_KEY). "
+            "Server-side geocoding will rely on Nominatim — set AWS_LOCATION_API_KEY to fix."
+        )
+
     # Surface the multi-worker hazard explicitly. The rate limiter and stats
     # cache live in process memory; under N workers each gets its own copy, so
     # effective limits become N× the configured value.
@@ -1798,6 +2016,8 @@ async def lifespan(app: FastAPI):
             await _brevo._session.close()
         if _monnify and _monnify._session:
             await _monnify._session.close()
+        if _aws:
+            await _aws.close()
         _executor.shutdown(wait=True)
 
 # ---------- FASTAPI APP ----------
@@ -1996,6 +2216,11 @@ async def health():
         "schema_ready": _schema_state["ready"],
         "schema_errors": _schema_state["errors"][:5],  # cap to avoid huge payloads
         "schema_last_run": _schema_state["last_run"],
+        "geocoding": {
+            "aws_configured": get_aws().geocoding_configured,
+            "nominatim_fallback_enabled": settings.NOMINATIM_FALLBACK_ENABLED,
+            "cache_entries": len(_geocode_cache),
+        },
         "reconciliation": {
             "enabled": settings.RECONCILIATION_ENABLED,
             "last_run": _reconciliation_stats["last_run"],
@@ -2108,31 +2333,45 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
     computed_delivery_fee = 0
     if order.delivery_method == "delivery" and order.delivery_address:
         try:
-            geocode_url = "https://nominatim.openstreetmap.org/search"
-            params = {"q": order.delivery_address, "format": "json", "limit": 1}
-            headers = {"User-Agent": "HotPortionGrill/1.0"}
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as session:
-                async with session.get(geocode_url, params=params, headers=headers) as resp:
-                    if resp.status == 200:
-                        geo_data = await resp.json()
-                        if geo_data:
-                            lat = float(geo_data[0].get("lat", 0))
-                            lng = float(geo_data[0].get("lon", 0))
-                            area_result = await execute_db(
-                                get_supabase().rpc("find_delivery_area", {"lat": lat, "lng": lng})
-                            )
-                            if area_result.data:
-                                base_fee = area_result.data[0].get("fee", 0)
-                                calc = await calculate_intelligent_delivery_fee(
-                                    base_fee=base_fee, order_value=computed_subtotal,
-                                    items=order.items, order_time=datetime.now(),
-                                    customer_email=order.customer_email,
-                                )
-                                computed_delivery_fee = calc["final_fee"]
-                                logger.info(
-                                    f"Server-recomputed delivery fee for '{order.delivery_address}': "
-                                    f"₦{computed_delivery_fee} (base {base_fee})"
-                                )
+            # Prefer client-resolved coordinates (from AWS Places autocomplete).
+            # Only geocode server-side if the frontend didn't send them.
+            if order.lat is not None and order.lng is not None:
+                lat = float(order.lat)
+                lng = float(order.lng)
+                logger.info(
+                    f"Order {order.customer_email}: using client-provided coords "
+                    f"lat={lat}, lng={lng} for '{order.delivery_address}'"
+                )
+            else:
+                coords = await geocode_address(order.delivery_address)
+                if coords:
+                    lat, lng = coords
+                    logger.info(
+                        f"Order {order.customer_email}: server-geocoded "
+                        f"'{order.delivery_address}' → lat={lat}, lng={lng}"
+                    )
+                else:
+                    lat = lng = None
+                    logger.warning(
+                        f"Order {order.customer_email}: could not geocode "
+                        f"'{order.delivery_address}'; using client fee value"
+                    )
+            if lat is not None and lng is not None:
+                area_result = await execute_db(
+                    get_supabase().rpc("find_delivery_area", {"lat": lat, "lng": lng})
+                )
+                if area_result.data:
+                    base_fee = area_result.data[0].get("fee", 0)
+                    calc = await calculate_intelligent_delivery_fee(
+                        base_fee=base_fee, order_value=computed_subtotal,
+                        items=order.items, order_time=datetime.now(),
+                        customer_email=order.customer_email,
+                    )
+                    computed_delivery_fee = calc["final_fee"]
+                    logger.info(
+                        f"Server-recomputed delivery fee for '{order.delivery_address}': "
+                        f"₦{computed_delivery_fee} (base {base_fee})"
+                    )
         except Exception as e:
             logger.warning(f"Server-side delivery fee computation failed, using client value: {e}")
             computed_delivery_fee = order.delivery_fee or 0
@@ -2191,20 +2430,14 @@ async def get_delivery_fee(request: DeliveryFeeRequest, http_request: Request):
             lng = float(request.lng)
             logger.info(f"Using client-provided coords: lat={lat}, lng={lng} for '{request.address}'")
         else:
-            geocode_url = "https://nominatim.openstreetmap.org/search"
-            params = {"q": request.address, "format": "json", "limit": 1}
-            headers = {"User-Agent": "HotPortionGrill/1.0"}
-            async with aiohttp.ClientSession() as session:
-                async with session.get(geocode_url, params=params, headers=headers) as resp:
-                    if resp.status != 200:
-                        logger.error(f"Geocoding API error: {resp.status}")
-                        raise HTTPException(502, "Geocoding service temporarily unavailable")
-                    data = await resp.json()
-                    if not data or len(data) == 0:
-                        return DeliveryFeeResponse(covered=False, message="Address not found. Please check the address and try again.")
-                    lat = float(data[0].get("lat", 0))
-                    lng = float(data[0].get("lon", 0))
-                    logger.info(f"Geocoded '{request.address}' to lat={lat}, lng={lng}")
+            coords = await geocode_address(request.address)
+            if not coords:
+                return DeliveryFeeResponse(
+                    covered=False,
+                    message="Address not found. Please check the address and try again."
+                )
+            lat, lng = coords
+            logger.info(f"Geocoded '{request.address}' to lat={lat}, lng={lng}")
         db = get_supabase()
         result = await execute_db(db.rpc("find_delivery_area", {"lat": lat, "lng": lng}))
         if not result.data or len(result.data) == 0:
@@ -2266,7 +2499,9 @@ async def get_area_by_point(lat: float, lng: float):
         logger.error(f"Error checking point: {str(e)}", exc_info=True)
         raise HTTPException(500, "Error checking delivery area coverage")
 
-ALLOWED_PLACES_ENDPOINTS = {"autocomplete", "geocode", "reverse-geocode"}
+# Note: `reverse-geocode` removed — the server never reverse-geocodes, and the
+# frontend shouldn't need it either. Keeping the surface small.
+ALLOWED_PLACES_ENDPOINTS = {"autocomplete", "geocode"}
 
 @app.post("/api/places/{endpoint}")
 async def proxy_amazon_places(endpoint: str, body: Dict[str, Any], request: Request):
