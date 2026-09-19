@@ -106,6 +106,8 @@ class Settings(BaseSettings):
     AWS_LOCATION_API_KEY: Optional[str] = None
     AWS_LOCATION_REGION: str = "eu-north-1"
     SENTRY_DSN: Optional[str] = None
+    # Where invite and password-reset links should redirect after verification
+    INVITE_REDIRECT_URL: str = "https://hotportion.netlify.app/admin"
     DB_QUERY_TIMEOUT_SECONDS: float = 15.0
     RATE_LIMIT_ORDERS_PER_MINUTE: int = 10
     RATE_LIMIT_DELIVERY_PER_MINUTE: int = 30
@@ -2100,10 +2102,17 @@ async def create_staff(
         "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
         "Content-Type": "application/json",
     }
+    # Where Supabase should redirect the user after verifying the invite token.
+    # This URL MUST be whitelisted in Supabase Dashboard → Authentication → URL Configuration.
+    invite_redirect = settings.INVITE_REDIRECT_URL
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
         async with session.post(
             invite_url, headers=headers,
-            json={"email": email, "data": {"full_name": payload.full_name, "role": role}}
+            json={
+                "email": email,
+                "data": {"full_name": payload.full_name, "role": role},
+                "redirect_to": invite_redirect,
+            }
         ) as resp:
             text = await resp.text()
             if resp.status not in (200, 201):
