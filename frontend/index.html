@@ -2924,9 +2924,14 @@
 
             // ─── Delivery Coverage State ───
             let isDeliveryCovered = false;
+            let isDeliveryAvailable = true;   // false = pricing API unreachable
             let isCheckingDelivery = false;
             let lastCheckedAddress = '';
             let lastBreakdown = null;
+
+            // ─── Delivery fee API retry config ───
+            const DELIVERY_FEE_MAX_RETRIES = 1;
+            const DELIVERY_FEE_RETRY_DELAY_MS = 800;
 
             // ─── Autocomplete State ───
             let addressAutocompleteTimeout = null;
@@ -3109,13 +3114,15 @@
             }
 
             // ─── Check delivery coverage with full intelligent fee ───
-            async function checkDeliveryCoverage(address, coords = null) {
+            async function checkDeliveryCoverage(address, coords = null, attempt = 0) {
                 if (!address || address.trim().length < 5) {
                     return { covered: false, error: 'Please enter a full address' };
                 }
 
-                isCheckingDelivery = true;
-                updateDeliveryStatus('loading', 'Checking delivery availability...');
+                if (attempt === 0) {
+                    isCheckingDelivery = true;
+                    updateDeliveryStatus('loading', 'Checking delivery availability...');
+                }
 
                 const items = getCartItemsForDelivery();
                 const email = customerEmail.value.trim();
@@ -3137,48 +3144,43 @@
                         payload.lng = coords.lng;
                     }
 
-                    console.log('📦 Sending delivery request:', payload);
-
                     const response = await fetch(`${API_BASE}/api/delivery-fee`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
                     });
 
-                    console.log('📥 Response status:', response.status);
-
-                    if (!response.ok) {
-                        let errorText = '';
+                    // 4xx = a real answer ("not covered" / "bad address") — do not retry.
+                    if (response.status >= 400 && response.status < 500) {
+                        let msg = 'Delivery is not available for this address.';
                         try {
-                            const errorData = await response.json();
-                            errorText = JSON.stringify(errorData);
-                        } catch (e) {
-                            errorText = await response.text();
-                        }
-                        console.warn('Delivery API error:', response.status, errorText);
-
-                        return {
-                            covered: true,
-                            fee: Math.floor(Math.random() * 1500) + 500,
-                            fallback: true,
-                            error: errorText
-                        };
+                            const errData = await response.json();
+                            msg = errData.message || errData.detail || msg;
+                        } catch (_) { /* ignore */ }
+                        return { covered: false, error: msg };
                     }
 
-                    const data = await response.json();
-                    console.log('✅ Delivery response:', data);
-                    return data;
+                    // 5xx = server problem — fall through to retry
+                    if (!response.ok) throw new Error(`Server error ${response.status}`);
+
+                    return await response.json();
 
                 } catch (err) {
-                    console.warn('Delivery check error:', err);
+                    if (attempt < DELIVERY_FEE_MAX_RETRIES) {
+                        console.warn(`Delivery fee attempt ${attempt + 1} failed, retrying…`, err.message);
+                        await new Promise(r => setTimeout(r, DELIVERY_FEE_RETRY_DELAY_MS));
+                        return checkDeliveryCoverage(address, coords, attempt + 1);
+                    }
+
+                    // Final failure — fail closed. Never invent a fee.
+                    console.error('Delivery pricing unavailable:', err);
                     return {
-                        covered: true,
-                        fee: Math.floor(Math.random() * 1500) + 500,
-                        fallback: true,
-                        error: err.message
+                        covered: false,
+                        unavailable: true,
+                        error: err.message || 'Delivery pricing service unavailable'
                     };
                 } finally {
-                    isCheckingDelivery = false;
+                    if (attempt === 0) isCheckingDelivery = false;
                 }
             }
 
@@ -3305,15 +3307,36 @@
 
                 const result = await checkDeliveryCoverage(address, coords);
 
-                if (result.fallback) {
-                    deliveryFee = result.fee;
-                    isDeliveryCovered = true;
+                if (result.unavailable) {
+                    deliveryFee = 0;
+                    isDeliveryCovered = false;
+                    isDeliveryAvailable = false;
                     lastBreakdown = null;
-                    updateDeliveryStatus('covered', '⚠️ Using estimated delivery fee (service temporarily unavailable)');
-                    updateDeliveryFeeUI(deliveryFee);
-                    showToast('Delivery service is experiencing issues. Using estimated fee.', 'fa-solid fa-triangle-exclamation');
+
+                    deliveryStatus.className = 'delivery-status not-covered';
+                    deliveryStatus.innerHTML =
+                        '⚠️ We can\'t calculate the delivery fee right now. ' +
+                        '<button type="button" id="delivery-retry" ' +
+                        'style="background:none;border:none;color:var(--primary);font-weight:700;' +
+                        'text-decoration:underline;cursor:pointer;padding:0;font-size:inherit;">Retry</button>' +
+                        ' or choose Pickup / Dine-in.';
+
+                    const retryBtn = document.getElementById('delivery-retry');
+                    if (retryBtn) {
+                        retryBtn.addEventListener('click', function () {
+                            lastCheckedAddress = '';
+                            handleDeliveryAddressChange();
+                        });
+                    }
+
+                    updateDeliveryFeeUI(0);
+                    deliveryBreakdown.classList.remove('show');
+                    updateCheckoutButton();
                     return;
                 }
+
+                // Pricing API answered — reset availability flag
+                isDeliveryAvailable = true;
 
                 if (result.covered) {
                     deliveryFee = result.total_fee || result.fee || 0;
@@ -3346,6 +3369,7 @@
                 deliveryStatus.className = 'delivery-status';
                 deliveryStatus.textContent = '';
                 isDeliveryCovered = false;
+                isDeliveryAvailable = true;
                 deliveryFee = 0;
                 lastBreakdown = null;
                 updateDeliveryFeeUI(0);
@@ -4079,6 +4103,8 @@
 
                 if (!hasItems) {
                     checkoutBtn.innerHTML = '<i class="fa-regular fa-credit-card"></i> Add items to cart';
+                } else if (isDelivery && !isDeliveryAvailable && deliveryAddress.value.trim().length > 5) {
+                    checkoutBtn.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Delivery pricing unavailable';
                 } else if (isDelivery && !isDeliveryCovered && deliveryAddress.value.trim().length > 5) {
                     checkoutBtn.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Address not covered';
                 } else if (isDelivery && deliveryAddress.value.trim().length < 5) {
@@ -4097,6 +4123,7 @@
                     btn.classList.toggle('active', btn.dataset.method === method);
                 });
                 if (method === 'delivery') {
+                    isDeliveryAvailable = true;
                     addressGroup.style.display = 'block';
                     deliveryAddress.required = true;
                     if (deliveryAddress.value.trim().length >= 5) {
