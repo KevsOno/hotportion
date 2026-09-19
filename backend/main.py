@@ -212,6 +212,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
         "delivery_areas:read", "delivery_areas:write",
         "stats:read",
         "audit:read",
+        "staff:read", "staff:write",
     },
     "kitchen": {
         "orders:read", "orders:update_status",
