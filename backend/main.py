@@ -2501,7 +2501,7 @@ async def get_area_by_point(lat: float, lng: float):
 
 # Note: `reverse-geocode` removed — the server never reverse-geocodes, and the
 # frontend shouldn't need it either. Keeping the surface small.
-ALLOWED_PLACES_ENDPOINTS = {"autocomplete", "geocode"}
+ALLOWED_PLACES_ENDPOINTS = {"autocomplete", "geocode","reverse-geocode"}
 
 @app.post("/api/places/{endpoint}")
 async def proxy_amazon_places(endpoint: str, body: Dict[str, Any], request: Request):
