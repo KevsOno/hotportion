@@ -13,10 +13,9 @@ from datetime import datetime, timedelta, date
 from typing import List, Optional, Dict, Any, Set
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
-
 import aiohttp
 import jwt
-from jwt import PyJWTError
+from jwt import PyJWTError, PyJWKClient
 from fastapi import FastAPI, HTTPException, Depends, Query, status, BackgroundTasks, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -226,22 +225,77 @@ PERMISSIONS: Dict[str, Set[str]] = {
 ALLOWED_ROLES = set(PERMISSIONS.keys())
 
 
+# ─── JWKS client (lazy, cached) ───
+# Supabase signs tokens asymmetrically (ES256/RS256). Public keys are published
+# at {SUPABASE_URL}/auth/v1/.well-known/jwks.json. PyJWKClient caches them for 1h.
+_jwks_client: Optional[PyJWKClient] = None
+
+def _get_jwks_client() -> PyJWKClient:
+    global _jwks_client
+    if _jwks_client is None:
+        jwks_url = f"{settings.SUPABASE_URL}/auth/v1/.well-known/jwks.json"
+        _jwks_client = PyJWKClient(jwks_url, cache_keys=True, lifespan=3600)
+        logger.info(f"JWKS client initialized: {jwks_url}")
+    return _jwks_client
+
+
 async def verify_supabase_jwt(token: str) -> Dict[str, Any]:
-    """Verify a Supabase JWT locally using the shared secret."""
-    if not settings.SUPABASE_JWT_SECRET:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Authentication is not configured on this server (SUPABASE_JWT_SECRET missing)"
-        )
+    """
+    Verify a Supabase JWT. Auto-detects the signing algorithm from the token
+    header and picks the right verifier:
+      - HS256  → shared secret (legacy projects)
+      - ES256 / RS256 → JWKS public key (modern Supabase projects)
+    """
+    # Peek at the header without verifying, to find the algorithm
     try:
-        payload = jwt.decode(
-            token,
-            settings.SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
-            audience=settings.SUPABASE_JWT_AUDIENCE,
-            options={"verify_exp": True},
+        unverified_header = jwt.get_unverified_header(token)
+    except PyJWTError as e:
+        logger.warning(f"Malformed JWT header: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Malformed authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
         )
+
+    alg = (unverified_header.get("alg") or "").upper()
+    logger.info(f"JWT verify: alg={alg} kid={unverified_header.get('kid')}")
+
+    try:
+        if alg == "HS256":
+            # Legacy shared-secret verification
+            if not settings.SUPABASE_JWT_SECRET:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Authentication is not configured on this server (SUPABASE_JWT_SECRET missing)",
+                )
+            payload = jwt.decode(
+                token,
+                settings.SUPABASE_JWT_SECRET,
+                algorithms=["HS256"],
+                audience=settings.SUPABASE_JWT_AUDIENCE,
+                options={"verify_exp": True},
+            )
+        elif alg in ("ES256", "RS256"):
+            # Modern JWKS-based verification
+            signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
+            payload = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["ES256", "RS256"],
+                audience=settings.SUPABASE_JWT_AUDIENCE,
+                options={"verify_exp": True},
+            )
+        else:
+            logger.warning(f"Unsupported JWT algorithm: {alg!r}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Unsupported token algorithm: {alg}",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         return payload
+
+    except HTTPException:
+        raise
     except PyJWTError as e:
         logger.warning(f"JWT verification failed: {e}")
         raise HTTPException(
