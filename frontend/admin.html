@@ -1649,11 +1649,41 @@
                     auth: {
                         persistSession: true,
                         autoRefreshToken: true,
-                        detectSessionInUrl: true,
+                        // Turn OFF auto-detection; we'll process the hash explicitly below.
+                        // This avoids a race where our code runs before Supabase has
+                        // finished parsing the URL fragment.
+                        detectSessionInUrl: false,
                         storageKey: 'hotportion-admin-auth',
                     }
                 }
             );
+
+            // ─── Explicit URL-hash session bootstrap ───
+            // Supabase invite/recovery redirects include access_token + refresh_token
+            // in the URL hash. We parse them synchronously here and hand them to
+            // Supabase via setSession() so the session exists before any code runs.
+            (async function bootstrapSessionFromUrl() {
+                try {
+                    const rawHash = (window.location.hash || '').replace(/^#/, '');
+                    if (!rawHash) return;
+                    const params = new URLSearchParams(rawHash);
+                    const access_token = params.get('access_token');
+                    const refresh_token = params.get('refresh_token');
+                    if (access_token && refresh_token) {
+                        const { error } = await supabaseClient.auth.setSession({
+                            access_token,
+                            refresh_token,
+                        });
+                        if (error) {
+                            console.warn('setSession from URL failed:', error.message);
+                        } else {
+                            console.log('✅ Session bootstrapped from URL hash');
+                        }
+                    }
+                } catch (e) {
+                    console.warn('URL hash session bootstrap failed:', e);
+                }
+            })();
 
             // ─── STATE ───
             let currentStaff = null;   // populated after successful auth
@@ -4447,9 +4477,9 @@
                     // ─── STEP 1: Detect invite / recovery in the URL ───
                     // Supabase redirects invite links to our site with a hash like:
                     //   #access_token=...&refresh_token=...&type=invite
-                    // detectSessionInUrl:true has already consumed the tokens by the time
-                    // we get here, but the hash fragment survives long enough for us
-                    // to read the type.
+                    // We turned detectSessionInUrl OFF, so bootstrapSessionFromUrl()
+                    // above already handed the tokens to Supabase. We just read the
+                    // `type` here to know which UI to show.
                     let urlType = null;
                     try {
                         const hash = window.location.hash || '';
@@ -4517,7 +4547,22 @@
                 try { stopPolling(); } catch (e) {}
             });
 
-            initAuth();
+            // Wait for hash bootstrap to complete before checking auth state
+            (async () => {
+                // Give the bootstrap IIFE a chance to finish
+                let attempts = 0;
+                while (attempts < 20) {
+                    const rawHash = (window.location.hash || '').replace(/^#/, '');
+                    if (!rawHash) break;
+                    const params = new URLSearchParams(rawHash);
+                    if (!params.get('access_token')) break;
+                    const { data: { session } } = await supabaseClient.auth.getSession();
+                    if (session) break;
+                    await new Promise(r => setTimeout(r, 50));
+                    attempts++;
+                }
+                initAuth();
+            })();
 
             console.log('📦 Hot Portion Admin loaded (RBAC enabled)');
             console.log('🔐 Auth gate active — sign in to access admin');
