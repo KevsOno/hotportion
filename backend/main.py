@@ -9,10 +9,11 @@ import time
 import re
 import secrets
 import contextvars
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import List, Optional, Dict, Any, Set
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
+from zoneinfo import ZoneInfo
 import aiohttp
 import jwt
 from jwt import PyJWTError, PyJWKClient
@@ -48,6 +49,13 @@ except ImportError:
     _SENTRY_AVAILABLE = False
 
 load_dotenv()
+
+
+# ---------- LOCAL TIMEZONE ----------
+# Nigeria is UTC+1 year-round (no DST). Peak-hour windows and business hours
+# are configured in this timezone, NOT in UTC. Any timestamp entering the
+# pricing engine must be normalised to this zone before comparison.
+LOCAL_TZ = ZoneInfo("Africa/Lagos")
 
 
 # ---------- HELPER FUNCTION ----------
@@ -113,6 +121,13 @@ class Settings(BaseSettings):
     RATE_LIMIT_DELIVERY_PER_MINUTE: int = 30
     RATE_LIMIT_AI_PER_MINUTE: int = 20
     RATE_LIMIT_PLACES_PER_MINUTE: int = 60
+    # Order reconciliation (background loop that resolves drift between
+    # Monnify and our orders table when the webhook is missed)
+    RECONCILIATION_ENABLED: bool = True
+    RECONCILIATION_INTERVAL_SECONDS: int = 300       # run every 5 min
+    RECONCILIATION_GRACE_SECONDS: int = 300          # skip orders newer than 5 min
+    RECONCILIATION_MAX_AGE_HOURS: int = 48           # don't chase ancient orders
+    RECONCILIATION_BATCH_SIZE: int = 50
 
     class Config:
         env_file = ".env"
@@ -132,7 +147,7 @@ class CorrelationFilter(logging.Filter):
 class JSONFormatter(logging.Formatter):
     def format(self, record):
         log_obj = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "level": record.levelname,
             "module": record.module,
             "message": record.getMessage(),
@@ -170,6 +185,9 @@ async def execute_db(query):
     return await asyncio.wait_for(future, timeout=settings.DB_QUERY_TIMEOUT_SECONDS)
 
 # ---------- RATE LIMITER ----------
+# NOTE: In-memory. Safe for a single Uvicorn worker. Multi-worker deployments
+# must swap this for a shared store (e.g. Redis) — otherwise each worker enforces
+# its own quota and effective limits scale with worker count.
 _rate_limit_store: Dict[str, List[float]] = {}
 _rate_limit_lock = asyncio.Lock()
 
@@ -1019,6 +1037,45 @@ class MonnifyIntegration:
             return {"valid": False, "error": f"Invalid JSON body: {e}"}
         return {"valid": True, "event": payload.get("eventType"), "payload": payload}
 
+    async def query_transaction(self, transaction_reference: str) -> Dict[str, Any]:
+        """
+        Fetch the current status of a Monnify transaction by transactionReference.
+        Used by the reconciliation loop to detect PAID/FAILED transactions whose
+        webhook never arrived.
+
+        Returns:
+          {"success": True, "body": {...}}  on 200
+          {"success": False, "error": "..."} otherwise
+        """
+        if not transaction_reference:
+            return {"success": False, "error": "Missing transaction reference"}
+        if not self.healthy:
+            try:
+                await self.initialize()
+            except Exception as e:
+                return {"success": False, "error": f"Monnify not healthy: {e}"}
+        try:
+            token = await self._get_access_token()
+            headers = {"Authorization": f"Bearer {token}"}
+            url = f"{self.base_url}/api/v2/transactions/{transaction_reference}"
+            sess = await self._get_session()
+            async with sess.get(url, headers=headers) as resp:
+                try:
+                    data = await resp.json()
+                except Exception:
+                    text = await resp.text()
+                    return {"success": False, "error": f"Non-JSON response ({resp.status}): {text[:120]}"}
+                if resp.status == 200 and data.get("requestSuccessful"):
+                    return {"success": True, "body": data.get("responseBody", {})}
+                return {
+                    "success": False,
+                    "error": data.get("responseMessage", f"HTTP {resp.status}"),
+                    "status_code": resp.status,
+                }
+        except Exception as e:
+            logger.warning(f"Monnify query_transaction({transaction_reference}) failed: {e}")
+            return {"success": False, "error": str(e)}
+
 # ---------- SINGLETONS ----------
 _brevo = None
 _monnify = None
@@ -1123,9 +1180,29 @@ async def get_item_surcharge_rules() -> List[Dict]:
     _item_surcharge_cache["timestamp"] = now
     return rules
 
-def is_peak_hour(order_time: datetime, peak_settings: List[Dict]) -> bool:
+
+def is_peak_hour(order_time: Optional[datetime], peak_settings: List[Dict]) -> bool:
+    """
+    Check if `order_time` falls inside any configured peak window.
+
+    Peak settings are configured in WAT (Africa/Lagos, UTC+1, no DST). Any
+    incoming timestamp is normalised to WAT before comparison, so a naive UTC
+    timestamp from `datetime.now()` on Render does NOT fire peak surcharges an
+    hour late.
+
+    Accepts:
+      - None → uses "now" in WAT
+      - naive datetime → assumed UTC, converted to WAT
+      - aware datetime → converted to WAT
+    """
     if not order_time:
-        order_time = datetime.now()
+        order_time = datetime.now(LOCAL_TZ)
+    elif order_time.tzinfo is None:
+        # Naive input: assume UTC (matches Render and datetime.utcnow())
+        order_time = order_time.replace(tzinfo=timezone.utc).astimezone(LOCAL_TZ)
+    else:
+        order_time = order_time.astimezone(LOCAL_TZ)
+
     dow = order_time.weekday()
     hour_min = order_time.strftime("%H:%M")
     for setting in peak_settings:
@@ -1134,7 +1211,10 @@ def is_peak_hour(order_time: datetime, peak_settings: List[Dict]) -> bool:
         start = setting.get("start_time")
         end = setting.get("end_time")
         if start and end:
-            if start <= hour_min <= end:
+            # TIME columns serialize as "HH:MM:SS"; trim to HH:MM for comparison
+            start_hm = str(start)[:5]
+            end_hm = str(end)[:5]
+            if start_hm <= hour_min <= end_hm:
                 return True
     return False
 
@@ -1238,7 +1318,7 @@ async def calculate_intelligent_delivery_fee(
     try:
         peak_settings = await get_peak_settings()
         peak_surcharge_amount = getattr(settings, 'PEAK_SURCHARGE', 200)
-        if is_peak_hour(order_time or datetime.now(), peak_settings):
+        if is_peak_hour(order_time, peak_settings):
             peak_surcharge = peak_surcharge_amount
     except Exception as e:
         logger.warning(f"Error calculating peak surcharge: {e}")
@@ -1371,8 +1451,16 @@ async def restore_order_stock(order: dict):
     invalidate_stats_cache()
 
 # ---------- DATABASE SETUP ----------
+# Migration health is tracked so the schema state is observable via /health.
+# Historically, failures here were swallowed with a warning, meaning the app
+# could run for days against a stale schema before anything broke. Now every
+# failure is logged at ERROR and the process reports itself as degraded.
+_schema_state: Dict[str, Any] = {"ready": False, "errors": [], "last_run": None}
+
 async def setup_database():
     db = get_supabase()
+    errors: List[str] = []
+
     try:
         alter_queries = [
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS is_main_item BOOLEAN DEFAULT TRUE;",
@@ -1382,13 +1470,20 @@ async def setup_database():
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_breakdown JSONB;",
             "CREATE INDEX IF NOT EXISTS idx_orders_payment_reference ON orders (payment_reference);",
-            "CREATE INDEX IF NOT EXISTS idx_orders_monnify_transaction_ref ON orders (monnify_transaction_ref);"
+            "CREATE INDEX IF NOT EXISTS idx_orders_monnify_transaction_ref ON orders (monnify_transaction_ref);",
+            # Reconciliation loop queries: pending orders by age
+            "CREATE INDEX IF NOT EXISTS idx_orders_status_created_at ON orders (status, created_at);"
         ]
         for q in alter_queries:
             try:
                 await execute_db(db.rpc("exec_sql", {"query": q}))
             except Exception as e:
-                logger.warning(f"Could not run alter (may already exist): {e}")
+                snippet = q.strip().splitlines()[0][:90]
+                errors.append(f"ALTER {snippet}: {str(e)[:120]}")
+                logger.error(
+                    f"⚠️  SCHEMA MIGRATION FAILED (app may misbehave): {snippet}... → {e}. "
+                    f"Run this manually in the Supabase SQL editor."
+                )
 
         create_tables = [
             """
@@ -1460,15 +1555,181 @@ async def setup_database():
             try:
                 await execute_db(db.rpc("exec_sql", {"query": sql}))
             except Exception as e:
-                logger.warning(f"Could not create table/function: {e}")
+                snippet = sql.strip().splitlines()[0][:90]
+                errors.append(f"CREATE {snippet}: {str(e)[:120]}")
+                logger.error(
+                    f"⚠️  SCHEMA MIGRATION FAILED (app may misbehave): {snippet}... → {e}. "
+                    f"Run this manually in the Supabase SQL editor."
+                )
 
-        logger.info("Database indexes, columns, tables, and RPC functions ensured.")
+        _schema_state["ready"] = len(errors) == 0
+        _schema_state["errors"] = errors
+        _schema_state["last_run"] = datetime.now(timezone.utc).isoformat()
+
+        if errors:
+            logger.error(
+                f"⚠️  Schema setup completed with {len(errors)} error(s). "
+                f"Application may misbehave. /health will report 'degraded'."
+            )
+        else:
+            logger.info("Database indexes, columns, tables, and RPC functions ensured.")
+
     except Exception as e:
-        logger.warning(f"Could not create tables/columns (RPC may be disabled): {e}")
+        _schema_state["ready"] = False
+        _schema_state["errors"] = [f"setup_database outer: {str(e)[:200]}"]
+        _schema_state["last_run"] = datetime.now(timezone.utc).isoformat()
+        logger.error(f"setup_database top-level failure: {e}", exc_info=True)
+
+# =============================================
+# ORDER RECONCILIATION
+# =============================================
+# Closes the gap where Monnify's webhook is lost: pending orders older than
+# RECONCILIATION_GRACE_SECONDS get queried against Monnify, and any that are
+# PAID get marked paid + stock-decremented using the same atomic-claim pattern
+# as the webhook. FAILED/CANCELLED/EXPIRED/REVERSED orders get cancelled.
+_reconciliation_lock = asyncio.Lock()
+_reconciliation_task: Optional[asyncio.Task] = None
+_reconciliation_stats: Dict[str, Any] = {
+    "last_run": None,
+    "checked": 0,
+    "resolved_paid": 0,
+    "resolved_cancelled": 0,
+    "errors": 0,
+}
+
+
+async def _reconcile_once() -> None:
+    """One pass. Called by the loop; also callable directly for tests/admin."""
+    db = get_supabase()
+    now = datetime.now(timezone.utc)
+    grace_cutoff = (now - timedelta(seconds=settings.RECONCILIATION_GRACE_SECONDS)).isoformat()
+    max_age_cutoff = (now - timedelta(hours=settings.RECONCILIATION_MAX_AGE_HOURS)).isoformat()
+
+    try:
+        result = await execute_db(
+            db.table("orders")
+            .select("id, payment_reference, monnify_transaction_ref, status, created_at")
+            .eq("status", "pending")
+            .lt("created_at", grace_cutoff)
+            .gt("created_at", max_age_cutoff)
+            .order("created_at", desc=False)
+            .limit(settings.RECONCILIATION_BATCH_SIZE)
+        )
+    except Exception as e:
+        _reconciliation_stats["errors"] += 1
+        logger.error(f"Reconciliation: DB query failed: {e}")
+        return
+
+    orders = result.data or []
+    if not orders:
+        _reconciliation_stats["last_run"] = now.isoformat()
+        return
+
+    logger.info(f"Reconciliation: checking {len(orders)} pending order(s) against Monnify")
+    monnify = get_monnify()
+    checked = 0
+    resolved_paid = 0
+    resolved_cancelled = 0
+    errors = 0
+
+    for order in orders:
+        txn_ref = order.get("monnify_transaction_ref")
+        if not txn_ref:
+            continue
+        checked += 1
+        resp = await monnify.query_transaction(txn_ref)
+        if not resp.get("success"):
+            errors += 1
+            logger.warning(
+                f"Reconciliation: query failed for order {order['id']} "
+                f"(ref={txn_ref}): {resp.get('error')}"
+            )
+            continue
+
+        body = resp.get("body", {})
+        payment_status = (body.get("paymentStatus") or "").upper()
+        amount_paid = body.get("amountPaid") or body.get("amount") or 0
+
+        if payment_status in ("PAID", "OVERPAID"):
+            # Atomic claim: only transition if still pending (matches webhook)
+            claim = await execute_db(
+                db.table("orders")
+                .update({"status": "paid"})
+                .eq("id", order["id"])
+                .eq("status", "pending")
+            )
+            if not claim.data:
+                logger.info(f"Reconciliation: order {order['id']} already claimed — skipping")
+                continue
+            # Re-fetch to get full items list for stock decrement
+            full = await execute_db(db.table("orders").select("*").eq("id", order["id"]))
+            if full.data:
+                await reduce_order_stock(full.data[0])
+            logger.info(f"✅ Reconciliation: order {order['id']} marked PAID (₦{amount_paid})")
+            resolved_paid += 1
+
+        elif payment_status in ("FAILED", "CANCELLED", "EXPIRED", "REVERSED", "ABANDONED"):
+            claim = await execute_db(
+                db.table("orders")
+                .update({
+                    "status": "cancelled",
+                    "cancellation_reason": f"Monnify reports {payment_status}",
+                })
+                .eq("id", order["id"])
+                .eq("status", "pending")
+            )
+            if claim.data:
+                logger.info(f"Reconciliation: order {order['id']} cancelled ({payment_status})")
+                resolved_cancelled += 1
+
+        # else: PENDING / PARTIALLY_PAID / anything else → leave alone
+
+    if resolved_paid or resolved_cancelled:
+        invalidate_stats_cache()
+
+    _reconciliation_stats["last_run"] = now.isoformat()
+    _reconciliation_stats["checked"] += checked
+    _reconciliation_stats["resolved_paid"] += resolved_paid
+    _reconciliation_stats["resolved_cancelled"] += resolved_cancelled
+    _reconciliation_stats["errors"] += errors
+
+    if checked:
+        logger.info(
+            f"Reconciliation: done — checked={checked} "
+            f"paid={resolved_paid} cancelled={resolved_cancelled} errors={errors}"
+        )
+
+
+async def reconcile_pending_orders():
+    """Background loop. Started in lifespan; cancelled on shutdown."""
+    logger.info(
+        f"Reconciliation loop started (interval={settings.RECONCILIATION_INTERVAL_SECONDS}s, "
+        f"grace={settings.RECONCILIATION_GRACE_SECONDS}s, "
+        f"max_age={settings.RECONCILIATION_MAX_AGE_HOURS}h)"
+    )
+    # Small initial delay so startup migrations have time to run
+    await asyncio.sleep(30)
+    while True:
+        try:
+            if not _reconciliation_lock.locked():
+                async with _reconciliation_lock:
+                    await _reconcile_once()
+        except asyncio.CancelledError:
+            logger.info("Reconciliation loop cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Reconciliation loop error: {e}", exc_info=True)
+        try:
+            await asyncio.sleep(settings.RECONCILIATION_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            logger.info("Reconciliation loop cancelled during sleep")
+            raise
+
 
 # ---------- LIFESPAN ----------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _reconciliation_task
     logger.info("Starting Hot Portion Grill - Full Monolith + AI + RBAC")
 
     if settings.SENTRY_DSN:
@@ -1492,6 +1753,20 @@ async def lifespan(app: FastAPI):
             "Set it from Supabase → Settings → API → JWT Secret."
         )
 
+    # Surface the multi-worker hazard explicitly. The rate limiter and stats
+    # cache live in process memory; under N workers each gets its own copy, so
+    # effective limits become N× the configured value.
+    try:
+        web_concurrency = int(os.getenv("WEB_CONCURRENCY", "1") or "1")
+    except ValueError:
+        web_concurrency = 1
+    if web_concurrency > 1:
+        logger.warning(
+            f"⚠️  WEB_CONCURRENCY={web_concurrency}. The rate limiter and stats cache are "
+            f"in-memory (per-process) — effective rate limits and cache TTLs will be N× higher. "
+            f"Run a single worker, or move both to Redis for multi-worker deployments."
+        )
+
     init_results = await asyncio.gather(
         get_brevo().initialize(),
         get_monnify().initialize(),
@@ -1502,14 +1777,28 @@ async def lifespan(app: FastAPI):
             logger.error(f"Init service {i} failed: {result}")
 
     asyncio.create_task(setup_database())
+
+    if settings.RECONCILIATION_ENABLED:
+        _reconciliation_task = asyncio.create_task(reconcile_pending_orders())
+    else:
+        logger.info("Reconciliation loop disabled (RECONCILIATION_ENABLED=false)")
+
     logger.info("All services ready (degraded mode allowed for external APIs)")
-    yield
-    logger.info("Shutting down...")
-    if _brevo and _brevo._session:
-        await _brevo._session.close()
-    if _monnify and _monnify._session:
-        await _monnify._session.close()
-    _executor.shutdown(wait=True)
+    try:
+        yield
+    finally:
+        logger.info("Shutting down...")
+        if _reconciliation_task and not _reconciliation_task.done():
+            _reconciliation_task.cancel()
+            try:
+                await _reconciliation_task
+            except asyncio.CancelledError:
+                pass
+        if _brevo and _brevo._session:
+            await _brevo._session.close()
+        if _monnify and _monnify._session:
+            await _monnify._session.close()
+        _executor.shutdown(wait=True)
 
 # ---------- FASTAPI APP ----------
 app = FastAPI(title="Hot Portion Grill", version="1.0.0", lifespan=lifespan, docs_url="/docs")
@@ -1697,7 +1986,26 @@ class BannerService:
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    """
+    Liveness + readiness. Reports 'degraded' if schema migrations failed —
+    operators should wire this into their alerting so silent schema drift
+    doesn't go unnoticed.
+    """
+    return {
+        "status": "healthy" if _schema_state["ready"] else "degraded",
+        "schema_ready": _schema_state["ready"],
+        "schema_errors": _schema_state["errors"][:5],  # cap to avoid huge payloads
+        "schema_last_run": _schema_state["last_run"],
+        "reconciliation": {
+            "enabled": settings.RECONCILIATION_ENABLED,
+            "last_run": _reconciliation_stats["last_run"],
+            "checked": _reconciliation_stats["checked"],
+            "resolved_paid": _reconciliation_stats["resolved_paid"],
+            "resolved_cancelled": _reconciliation_stats["resolved_cancelled"],
+            "errors": _reconciliation_stats["errors"],
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 @app.get("/api/products", response_model=List[Product])
 async def get_products():
@@ -2799,6 +3107,7 @@ async def delete_item_surcharge_rule_admin(
 # NOTE ON SCALING:
 # In-memory caches + rate limiter are per-process. To scale workers >1, move
 # to Redis. For a single small restaurant instance this is not a concern.
+# Startup logs a loud warning if WEB_CONCURRENCY > 1.
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, workers=1, log_level="info")
