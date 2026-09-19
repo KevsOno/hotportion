@@ -709,6 +709,47 @@
                 </button>
             </form>
         </div>
+
+        <!-- SET PASSWORD CARD (shown for invited users) -->
+        <div class="auth-card" id="auth-setpw-card" style="display:none;">
+            <div class="auth-logo">
+                <img src="/fastfood/images/logo.webp" alt="Hot Portion Grill"
+                     onerror="this.style.display='none';this.parentElement.innerHTML='<i class=\'fa-solid fa-utensils\'></i>'">
+            </div>
+            <h1>Welcome to <span>HotPortion</span></h1>
+            <p class="auth-subtitle">Set a password to finish setting up your account</p>
+
+            <div class="auth-info" id="setpw-who">
+                <i class="fa-regular fa-circle-info"></i>
+                You're signed in as <strong id="setpw-email">—</strong>.
+                Choose a password below. You'll use it every time you sign in.
+            </div>
+
+            <div class="auth-error" id="setpw-error"></div>
+            <div class="auth-success" id="setpw-success"></div>
+
+            <form id="setpw-form" autocomplete="off">
+                <div class="auth-form-group">
+                    <label for="setpw-password">New Password</label>
+                    <input type="password" id="setpw-password" autocomplete="new-password"
+                           required minlength="6" placeholder="At least 6 characters" />
+                    <button type="button" class="eye-toggle" id="toggle-setpw-password" aria-label="Show password">
+                        <i class="fa-regular fa-eye" id="eye-setpw-icon"></i>
+                    </button>
+                </div>
+                <div class="auth-form-group">
+                    <label for="setpw-confirm">Confirm Password</label>
+                    <input type="password" id="setpw-confirm" autocomplete="new-password"
+                           required minlength="6" placeholder="Re-enter password" />
+                    <button type="button" class="eye-toggle" id="toggle-setpw-confirm" aria-label="Show password">
+                        <i class="fa-regular fa-eye" id="eye-setpw-confirm-icon"></i>
+                    </button>
+                </div>
+                <button type="submit" class="auth-btn auth-btn-primary" id="setpw-submit">
+                    <i class="fa-solid fa-key"></i> Set Password &amp; Continue
+                </button>
+            </form>
+        </div>
     </div>
 
     <!-- ═══════════════════════════════════════════════
@@ -1731,6 +1772,42 @@
                 resetForgotForms();
             }
 
+            const setpwCard = document.getElementById('auth-setpw-card');
+
+            function showSetPasswordCard(email, mode) {
+                // mode is 'invite' or 'recovery' — copy varies slightly
+                currentStaff = null;
+                authGate.classList.remove('hidden');
+                adminApp.style.display = 'none';
+                loginCard.style.display = 'none';
+                forgotCard.style.display = 'none';
+                setpwCard.style.display = '';
+
+                document.getElementById('setpw-email').textContent = email || 'your account';
+
+                // Reset any previous error/success
+                document.getElementById('setpw-error').classList.remove('show');
+                document.getElementById('setpw-success').classList.remove('show');
+                document.getElementById('setpw-password').value = '';
+                document.getElementById('setpw-confirm').value = '';
+
+                // Customize the header copy for recovery vs invite
+                const heading = setpwCard.querySelector('h1');
+                const subtitle = setpwCard.querySelector('.auth-subtitle');
+                if (mode === 'recovery') {
+                    heading.innerHTML = 'Reset Your <span>Password</span>';
+                    subtitle.textContent = 'Choose a new password for your account';
+                } else {
+                    heading.innerHTML = 'Welcome to <span>HotPortion</span>';
+                    subtitle.textContent = 'Set a password to finish setting up your account';
+                }
+
+                setTimeout(() => {
+                    const pwd = document.getElementById('setpw-password');
+                    if (pwd) pwd.focus();
+                }, 100);
+            }
+
             function resetForgotForms() {
                 document.getElementById('forgot-email-form').style.display = '';
                 document.getElementById('forgot-otp-form').style.display = 'none';
@@ -1840,6 +1917,8 @@
             wireEyeToggle('toggle-login-password', 'login-password', 'eye-login-icon');
             wireEyeToggle('toggle-new-password', 'new-password', 'eye-new-icon');
             wireEyeToggle('toggle-confirm-password', 'confirm-password', 'eye-confirm-icon');
+            wireEyeToggle('toggle-setpw-password', 'setpw-password', 'eye-setpw-icon');
+            wireEyeToggle('toggle-setpw-confirm', 'setpw-confirm', 'eye-setpw-confirm-icon');
 
             // ═══════════════════════════════════════════════════════
             // FORGOT PASSWORD (OTP flow)
@@ -1995,6 +2074,61 @@
                 } catch (err) {
                     showAuthError('forgot-error', err.message || 'Could not resend.');
                 } finally {
+                    btn.disabled = false;
+                    btn.innerHTML = orig;
+                }
+            });
+
+            // ═══════════════════════════════════════════════════════
+            // SET PASSWORD (invite acceptance)
+            // ═══════════════════════════════════════════════════════
+            document.getElementById('setpw-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const pwd = document.getElementById('setpw-password').value;
+                const confirm = document.getElementById('setpw-confirm').value;
+                const btn = document.getElementById('setpw-submit');
+                const errEl = document.getElementById('setpw-error');
+                const successEl = document.getElementById('setpw-success');
+                errEl.classList.remove('show');
+                successEl.classList.remove('show');
+
+                if (pwd.length < 6) {
+                    errEl.textContent = 'Password must be at least 6 characters.';
+                    errEl.classList.add('show');
+                    return;
+                }
+                if (pwd !== confirm) {
+                    errEl.textContent = 'Passwords do not match.';
+                    errEl.classList.add('show');
+                    return;
+                }
+
+                btn.disabled = true;
+                const orig = btn.innerHTML;
+                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+
+                try {
+                    const { error } = await supabaseClient.auth.updateUser({ password: pwd });
+                    if (error) throw error;
+
+                    successEl.textContent = 'Password set! Signing you out so you can log in with it...';
+                    successEl.classList.add('show');
+
+                    // Give the user a moment to read the message, then sign out and go to login
+                    setTimeout(async () => {
+                        try { await supabaseClient.auth.signOut(); } catch (_) {}
+
+                        // Clear the invite tokens from the URL so a refresh doesn't reprocess them
+                        try {
+                            window.history.replaceState({}, document.title, window.location.pathname);
+                        } catch (_) {}
+
+                        showLoginScreen('Your password is set. Sign in with your email and new password.');
+                    }, 1200);
+                } catch (err) {
+                    console.error('Set password error:', err);
+                    errEl.textContent = err.message || 'Could not save password. Please try again.';
+                    errEl.classList.add('show');
                     btn.disabled = false;
                     btn.innerHTML = orig;
                 }
@@ -4310,11 +4444,41 @@
             // ═══════════════════════════════════════════════════════
             async function initAuth() {
                 try {
+                    // ─── STEP 1: Detect invite / recovery in the URL ───
+                    // Supabase redirects invite links to our site with a hash like:
+                    //   #access_token=...&refresh_token=...&type=invite
+                    // detectSessionInUrl:true has already consumed the tokens by the time
+                    // we get here, but the hash fragment survives long enough for us
+                    // to read the type.
+                    let urlType = null;
+                    try {
+                        const hash = window.location.hash || '';
+                        const search = window.location.search || '';
+                        const hashParams = new URLSearchParams(hash.replace(/^#/, ''));
+                        const queryParams = new URLSearchParams(search);
+                        urlType = hashParams.get('type') || queryParams.get('type');
+                    } catch (_) {}
+
                     const { data: { session } } = await supabaseClient.auth.getSession();
+
+                    // ─── STEP 2: If this is an invite/recovery, force password set ───
+                    if (urlType === 'invite' || urlType === 'recovery') {
+                        if (session && session.user) {
+                            showSetPasswordCard(session.user.email, urlType);
+                        } else {
+                            // Link was already used or expired
+                            window.history.replaceState({}, document.title, window.location.pathname);
+                            showLoginScreen('That invite link is invalid or already used. Ask an owner to send a new one.');
+                        }
+                        return;
+                    }
+
+                    // ─── STEP 3: Normal boot path (no invite in URL) ───
                     if (!session) {
                         showLoginScreen();
                         return;
                     }
+
                     // Validate against backend (checks staff table)
                     const meRes = await apiFetch('/api/auth/me');
                     if (meRes.status === 401 || meRes.status === 403) {
