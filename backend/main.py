@@ -162,6 +162,13 @@ class Settings(BaseSettings):
     RECONCILIATION_GRACE_SECONDS: int = 300          # skip orders newer than 5 min
     RECONCILIATION_MAX_AGE_HOURS: int = 48           # don't chase ancient orders
     RECONCILIATION_BATCH_SIZE: int = 50
+    # [FIX] A pending order whose Monnify transaction is still PENDING after
+    # this many minutes is treated as abandoned and cancelled.
+    ABANDONED_CHECKOUT_GRACE_MINUTES: int = 30
+    # [FIX] A pending order older than this is cancelled unconditionally —
+    # backstop for orders where Monnify queries kept failing during the
+    # in-window sweep. Monnify auto-expires unpaid checkouts long before this.
+    STALE_CHECKOUT_HOURS: int = 6
 
     class Config:
         env_file = ".env"
@@ -1398,8 +1405,15 @@ async def get_cached_stats():
     products, categories, orders, revenue = await asyncio.gather(
         execute_db(db.table("products").select("id", count="exact")),
         execute_db(db.table("categories").select("id", count="exact")),
-        execute_db(db.table("orders").select("id", count="exact")),
-        execute_db(db.table("orders").select("total"))
+        # [FIX] Exclude checkout-in-progress rows — they are not orders.
+        execute_db(db.table("orders").select("id", count="exact").neq("status", "pending")),
+        # [FIX] Revenue only counts money that actually landed. An abandoned
+        # checkout never paid, so its total should not appear in revenue.
+        execute_db(
+            db.table("orders")
+            .select("total")
+            .in_("status", ["paid", "confirmed", "completed"])
+        )
     )
     result = {
         "totalProducts": products.count,
@@ -1893,6 +1907,43 @@ async def _reconcile_once() -> None:
     grace_cutoff = (now - timedelta(seconds=settings.RECONCILIATION_GRACE_SECONDS)).isoformat()
     max_age_cutoff = (now - timedelta(hours=settings.RECONCILIATION_MAX_AGE_HOURS)).isoformat()
 
+    # [FIX] Unconditional stale sweep. Any pending order older than
+    # STALE_CHECKOUT_HOURS is cancelled regardless of Monnify's answer. This
+    # is the backstop for orders where the in-window Monnify query kept
+    # failing, and for orders where the customer abandoned the checkout long
+    # enough ago that Monnify has since expired the transaction.
+    stale_cancelled = 0
+    try:
+        stale_cutoff = (now - timedelta(hours=settings.STALE_CHECKOUT_HOURS)).isoformat()
+        stale_result = await execute_db(
+            db.table("orders")
+            .select("id, payment_reference, created_at")
+            .eq("status", "pending")
+            .lt("created_at", stale_cutoff)
+            .limit(200)
+        )
+        for stale in (stale_result.data or []):
+            claim = await execute_db(
+                db.table("orders")
+                .update({
+                    "status": "cancelled",
+                    "cancellation_reason": (
+                        f"Stale checkout auto-cancelled after "
+                        f"{settings.STALE_CHECKOUT_HOURS}h"
+                    ),
+                })
+                .eq("id", stale["id"])
+                .eq("status", "pending")
+            )
+            if claim.data:
+                stale_cancelled += 1
+                logger.info(
+                    f"Reconciliation: auto-cancelled stale checkout "
+                    f"{stale['id']} (ref={stale.get('payment_reference')})"
+                )
+    except Exception as e:
+        logger.warning(f"Stale checkout sweep failed: {e}")
+
     try:
         result = await execute_db(
             db.table("orders")
@@ -1911,6 +1962,9 @@ async def _reconcile_once() -> None:
     orders = result.data or []
     if not orders:
         _reconciliation_stats["last_run"] = now.isoformat()
+        if stale_cancelled:
+            invalidate_stats_cache()
+            _reconciliation_stats["resolved_cancelled"] += stale_cancelled
         return
 
     logger.info(f"Reconciliation: checking {len(orders)} pending order(s) against Monnify")
@@ -1953,6 +2007,10 @@ async def _reconcile_once() -> None:
             full = await execute_db(db.table("orders").select("*").eq("id", order["id"]))
             if full.data:
                 await reduce_order_stock(full.data[0])
+                # [FIX] Send the confirmation email for reconciled paid orders.
+                # The webhook was missed (that's why reconciliation is here), so
+                # this is the only notification the customer will receive.
+                await get_brevo().send_order_confirmation(full.data[0])
             logger.info(f"✅ Reconciliation: order {order['id']} marked PAID (₦{amount_paid})")
             resolved_paid += 1
 
@@ -1970,8 +2028,43 @@ async def _reconcile_once() -> None:
                 logger.info(f"Reconciliation: order {order['id']} cancelled ({payment_status})")
                 resolved_cancelled += 1
 
-        # else: PENDING / PARTIALLY_PAID / anything else → leave alone
+        else:
+            # [FIX] Monnify reports PENDING or an unrecognised status. If the
+            # order has been in this state past the abandoned-checkout grace
+            # period, cancel it — the customer has clearly walked away.
+            age_minutes = 0.0
+            created_at_str = order.get("created_at")
+            if created_at_str:
+                try:
+                    s = str(created_at_str).replace("Z", "+00:00")
+                    created_at = datetime.fromisoformat(s)
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    age_minutes = (now - created_at).total_seconds() / 60.0
+                except Exception:
+                    age_minutes = 0.0
+            if age_minutes >= settings.ABANDONED_CHECKOUT_GRACE_MINUTES:
+                claim = await execute_db(
+                    db.table("orders")
+                    .update({
+                        "status": "cancelled",
+                        "cancellation_reason": (
+                            f"Abandoned at payment gateway "
+                            f"(Monnify: {payment_status or 'unknown'}, "
+                            f"age: {int(age_minutes)} min)"
+                        ),
+                    })
+                    .eq("id", order["id"])
+                    .eq("status", "pending")
+                )
+                if claim.data:
+                    logger.info(
+                        f"Reconciliation: cancelled abandoned checkout {order['id']} "
+                        f"(age={int(age_minutes)}min, Monnify={payment_status})"
+                    )
+                    resolved_cancelled += 1
 
+    resolved_cancelled += stale_cancelled
     if resolved_paid or resolved_cancelled:
         invalidate_stats_cache()
 
@@ -1981,10 +2074,11 @@ async def _reconcile_once() -> None:
     _reconciliation_stats["resolved_cancelled"] += resolved_cancelled
     _reconciliation_stats["errors"] += errors
 
-    if checked:
+    if checked or stale_cancelled:
         logger.info(
             f"Reconciliation: done — checked={checked} "
-            f"paid={resolved_paid} cancelled={resolved_cancelled} errors={errors}"
+            f"paid={resolved_paid} cancelled={resolved_cancelled} "
+            f"(stale={stale_cancelled}) errors={errors}"
         )
 
 
@@ -2655,7 +2749,12 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
         })
         .eq("id", order_data["id"])
     )
-    bg.add_task(get_brevo().send_order_confirmation, order_data)
+    # [FIX] Confirmation email is deliberately NOT sent here. At this point the
+    # customer has only been given a Monnify checkout URL — they have not paid.
+    # The email is triggered from the webhook handler and the reconciliation
+    # loop, in both cases *after* the order has been atomically marked paid.
+    # This prevents abandoned checkouts from generating false "Payment
+    # Successful" emails.
     return {
         "status": "pending_payment",
         "order_id": order_data["id"],
@@ -2821,6 +2920,10 @@ async def monnify_webhook(
         logger.info(f"Order {order['id']} already claimed by another worker — skipping stock decrement")
         return {"status": "already_processed"}
     await reduce_order_stock(order)
+    # [FIX] Send the confirmation email only AFTER payment is confirmed.
+    # This path is reached only when the atomic claim above succeeded, so a
+    # retried webhook delivery cannot produce a duplicate email.
+    await get_brevo().send_order_confirmation(order)
     return {"status": "received"}
 
 @app.post("/api/ai/chat", response_model=AIChatResponse)
@@ -3106,20 +3209,35 @@ async def delete_category(
 
 # ---------- ORDERS (RBAC) ----------
 
-# [FIX] Pagination on the orders list. Backward-compatible: default limit is
-# 200 (higher than any realistic single-page admin load today), and the
-# response shape is still a plain list. Existing admin frontend keeps working;
-# a future paginated UI can pass `limit` and `offset` explicitly.
+# [FIX] Pagination on the orders list + pending hidden by default.
+# Rationale: `pending` orders are checkout-in-progress (customer is currently
+# at the payment gateway, or has abandoned it). They are not orders staff
+# should act on. Reconciliation cancels abandoned ones after the grace period.
+# Pass `include_pending=true` only for debugging.
 @app.get("/api/orders", response_model=List[Dict])
 async def get_orders(
     since: Optional[str] = Query(None),
     limit: int = Query(200, ge=1, le=1000, description="Max rows to return (default 200, max 1000)"),
     offset: int = Query(0, ge=0, description="Rows to skip for pagination"),
+    include_pending: bool = Query(
+        False,
+        description=(
+            "Include checkout-in-progress rows (status='pending'). Default "
+            "false — those are customers currently at the payment gateway, "
+            "not orders staff should act on. Set true only for debugging."
+        ),
+    ),
     staff: Dict[str, Any] = Depends(require_permission("orders:read")),
 ):
     query = get_supabase().table("orders").select("*").order("created_at", desc=True)
     if since:
         query = query.gt("created_at", since)
+    if not include_pending:
+        # [FIX] Hide checkout-in-progress orders from the default admin view.
+        # This includes: fresh checkouts, abandoned checkouts that reconciliation
+        # hasn't yet cleaned up, and any pending row still inside the grace window.
+        # Staff should only see orders that need action.
+        query = query.neq("status", "pending")
     query = query.range(offset, offset + limit - 1)
     r = await execute_db(query)
     for o in r.data:
