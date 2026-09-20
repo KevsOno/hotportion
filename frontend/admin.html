@@ -1680,6 +1680,23 @@
             'use strict';
 
             // ═══════════════════════════════════════════════════════
+            // HTML ESCAPING HELPER
+            // ═══════════════════════════════════════════════════════
+            // Converts HTML special characters to entities so that
+            // user-controlled strings are rendered as literal text
+            // instead of being parsed as markup. This is the primary
+            // defense against stored/reflected XSS at interpolation sites.
+            function escapeHtml(v) {
+                if (v === null || v === undefined) return '';
+                return String(v)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
+
+            // ═══════════════════════════════════════════════════════
             // AUTH CONFIG & SUPABASE CLIENT
             // ═══════════════════════════════════════════════════════
             const AUTH_CONFIG = {
@@ -2602,9 +2619,10 @@
                 }
                 productsBody.innerHTML = filtered.map(p => {
                     const imageUrl = getProductImage(p);
+                    const safeImageUrl = escapeHtml(imageUrl);
                     const imageHtml = imageUrl ?
-                        `<img src="${imageUrl}" alt="${p.name}" class="thumb" loading="lazy" onerror="this.style.display='none'">` :
-                        `<span class="emoji">${p.emoji || '🍽️'}</span>`;
+                        `<img src="${safeImageUrl}" alt="${escapeHtml(p.name)}" class="thumb" loading="lazy" onerror="this.style.display='none'">` :
+                        `<span class="emoji">${escapeHtml(p.emoji) || '🍽️'}</span>`;
                     const deliveryInfo = [];
                     if (p.is_main_item !== undefined) deliveryInfo.push(p.is_main_item ? 'Main' : 'Side');
                     if (p.is_bulky) deliveryInfo.push('📦 Bulky');
@@ -2616,15 +2634,15 @@
                                 <div class="product-cell">
                                     ${imageHtml}
                                     <div class="info">
-                                        <div class="name">${p.name}</div>
-                                        <div class="tag">${p.tag}</div>
+                                        <div class="name">${escapeHtml(p.name)}</div>
+                                        <div class="tag">${escapeHtml(p.tag)}</div>
                                     </div>
                                 </div>
                             </td>
-                            <td><span class="tag-preview ${p.tagColor || 'primary'}">${p.tag}</span></td>
+                            <td><span class="tag-preview ${escapeHtml(p.tagColor) || 'primary'}">${escapeHtml(p.tag)}</span></td>
                             <td>₦${Number(p.price).toLocaleString()}</td>
                             <td><span class="stock-badge ${p.stock > 10 ? 'in-stock' : p.stock > 0 ? 'low-stock' : 'out-of-stock'}">${p.stock}</span></td>
-                            <td style="font-size:0.7rem;color:var(--text-muted);">${deliveryDisplay}</td>
+                            <td style="font-size:0.7rem;color:var(--text-muted);">${escapeHtml(deliveryDisplay)}</td>
                             <td style="text-align:right;">
                                 <div class="actions-cell" style="justify-content:flex-end;">
                                     <button class="btn btn-primary btn-sm edit-product" data-id="${p.id}"><i class="fa-regular fa-pen-to-square"></i></button>
@@ -2656,18 +2674,19 @@
                     const status = p.stock > 10 ? 'In Stock' : p.stock > 0 ? 'Low Stock' : 'Out of Stock';
                     const badge = p.stock > 10 ? 'in-stock' : p.stock > 0 ? 'low-stock' : 'out-of-stock';
                     const imageUrl = getProductImage(p);
+                    const safeImageUrl = escapeHtml(imageUrl);
                     const imageHtml = imageUrl ?
-                        `<img src="${imageUrl}" alt="${p.name}" class="thumb" loading="lazy" onerror="this.style.display='none'">` :
-                        `<span class="emoji">${p.emoji || '🍽️'}</span>`;
+                        `<img src="${safeImageUrl}" alt="${escapeHtml(p.name)}" class="thumb" loading="lazy" onerror="this.style.display='none'">` :
+                        `<span class="emoji">${escapeHtml(p.emoji) || '🍽️'}</span>`;
                     return `
                         <tr>
                             <td>
                                 <div class="product-cell">
                                     ${imageHtml}
-                                    <div class="info"><div class="name">${p.name}</div></div>
+                                    <div class="info"><div class="name">${escapeHtml(p.name)}</div></div>
                                 </div>
                             </td>
-                            <td>${p.tag}</td>
+                            <td>${escapeHtml(p.tag)}</td>
                             <td><strong>${p.stock}</strong></td>
                             <td><span class="stock-badge ${badge}">${status}</span></td>
                             <td style="text-align:right;">
@@ -2713,7 +2732,8 @@
                     const isAwaitingPayment = status === 'awaiting_payment';
                     const isConfirmed = status === 'confirmed';
                     const reason = o.cancellation_reason || '';
-                    const reasonHtml = reason ? `<span class="cancellation-reason" title="${reason}">📝 ${reason}</span>` : '';
+                    const safeReason = escapeHtml(reason);
+                    const reasonHtml = reason ? `<span class="cancellation-reason" title="${safeReason}">📝 ${safeReason}</span>` : '';
 
                     let actionButtons = '';
                     if (!isCancelled && !isCompleted) {
@@ -2729,9 +2749,9 @@
 
                     return `
                         <tr>
-                            <td><code style="background:#f0f0f0;padding:2px 8px;border-radius:4px;font-size:0.75rem;">${o.payment_reference || o.id}</code></td>
-                            <td><strong>${o.customer_name || 'N/A'}</strong></td>
-                            <td>${o.customer_phone || 'N/A'}</td>
+                            <td><code style="background:#f0f0f0;padding:2px 8px;border-radius:4px;font-size:0.75rem;">${escapeHtml(o.payment_reference || o.id)}</code></td>
+                            <td><strong>${escapeHtml(o.customer_name) || 'N/A'}</strong></td>
+                            <td>${escapeHtml(o.customer_phone) || 'N/A'}</td>
                             <td>${itemCount} items</td>
                             <td>₦${Number(o.total || 0).toLocaleString()}</td>
                             <td>${paymentBadgeHtml(o.payment_method)}</td>
@@ -2890,8 +2910,8 @@
                             <td><strong>${index + 1}</strong></td>
                             <td>
                                 <div class="product-cell">
-                                    <span class="emoji">${item.emoji || '🍽️'}</span>
-                                    <div class="info"><div class="name">${item.name}</div></div>
+                                    <span class="emoji">${escapeHtml(item.emoji) || '🍽️'}</span>
+                                    <div class="info"><div class="name">${escapeHtml(item.name)}</div></div>
                                 </div>
                             </td>
                             <td>${item.quantity_sold}</td>
@@ -2912,7 +2932,7 @@
                     const count = products.filter(p => p.tag === c.name).length;
                     return `
                         <tr>
-                            <td><strong>${c.name}</strong></td>
+                            <td><strong>${escapeHtml(c.name)}</strong></td>
                             <td>${count} products</td>
                             <td style="text-align:right;">
                                 <button class="btn btn-primary btn-sm edit-category" data-id="${c.id}"><i class="fa-regular fa-pen-to-square"></i></button>
@@ -2928,7 +2948,7 @@
             function populateCategorySelect() {
                 const current = pCategory.value;
                 pCategory.innerHTML = '<option value="">Select category...</option>' +
-                    categories.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+                    categories.map(c => `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`).join('');
                 if (current) pCategory.value = current;
             }
 
@@ -3095,13 +3115,13 @@
                     const createdAt = data.created_at ? new Date(data.created_at).toLocaleString() : '-';
                     const itemsHtml = (data.items || []).map(item => `
                         <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed #f0f0f0;">
-                            <span>${item.name} × ${item.qty}</span>
+                            <span>${escapeHtml(item.name)} × ${item.qty}</span>
                             <span>₦${Number(item.price * item.qty).toLocaleString()}</span>
                         </div>
                     `).join('') || '<p style="color:var(--text-muted);">No items</p>';
 
                     const reasonHtml = data.cancellation_reason ?
-                        `<p><strong>Cancellation Reason:</strong> ${data.cancellation_reason}</p>` : '';
+                        `<p><strong>Cancellation Reason:</strong> ${escapeHtml(data.cancellation_reason)}</p>` : '';
 
                     const paymentMethod = (data.payment_method || 'online').toLowerCase();
                     const paymentLabel = paymentMethod === 'offline' ? '💵 Pay at counter' : '💳 Online (Monnify)';
@@ -3111,7 +3131,7 @@
                         offlineNotice = `
                             <div class="offline-notice">
                                 💵 <strong>Collect ₦${Number(data.total || 0).toLocaleString()} at the counter</strong>
-                                — customer chose to pay on arrival (${(data.delivery_method || 'pickup').toUpperCase()}).
+                                — customer chose to pay on arrival (${escapeHtml((data.delivery_method || 'pickup').toUpperCase())}).
                                 Click "Mark Paid" in the orders list once payment is received.
                             </div>
                         `;
@@ -3120,19 +3140,19 @@
                     orderDetailBody.innerHTML = `
                         ${offlineNotice}
                         <div style="margin-bottom:16px;">
-                            <p><strong>Order ID:</strong> <code>${data.payment_reference || data.id}</code></p>
-                            <p><strong>Customer:</strong> ${data.customer_name || 'N/A'}</p>
-                            <p><strong>Email:</strong> ${data.customer_email || 'N/A'}</p>
-                            <p><strong>Phone:</strong> ${data.customer_phone || 'N/A'}</p>
-                            <p><strong>Status:</strong> <span class="status-badge ${data.status || 'pending'}">${humanizeStatus(data.status || 'pending')}</span></p>
+                            <p><strong>Order ID:</strong> <code>${escapeHtml(data.payment_reference || data.id)}</code></p>
+                            <p><strong>Customer:</strong> ${escapeHtml(data.customer_name) || 'N/A'}</p>
+                            <p><strong>Email:</strong> ${escapeHtml(data.customer_email) || 'N/A'}</p>
+                            <p><strong>Phone:</strong> ${escapeHtml(data.customer_phone) || 'N/A'}</p>
+                            <p><strong>Status:</strong> <span class="status-badge ${escapeHtml(data.status || 'pending')}">${humanizeStatus(data.status || 'pending')}</span></p>
                             <p><strong>Payment:</strong> ${paymentLabel}</p>
                             ${reasonHtml}
                             <p><strong>Date:</strong> ${createdAt}</p>
-                            ${data.delivery_method ? `<p><strong>Delivery Method:</strong> ${data.delivery_method}</p>` : ''}
-                            ${data.delivery_address ? `<p><strong>Address:</strong> ${data.delivery_address}</p>` : ''}
-                            ${data.preferred_time ? `<p><strong>Preferred Time:</strong> ${data.preferred_time}</p>` : ''}
-                            ${data.order_notes ? `<p><strong>Notes:</strong> ${data.order_notes}</p>` : ''}
-                            ${data.monnify_transaction_ref ? `<p><strong>Monnify Ref:</strong> ${data.monnify_transaction_ref}</p>` : ''}
+                            ${data.delivery_method ? `<p><strong>Delivery Method:</strong> ${escapeHtml(data.delivery_method)}</p>` : ''}
+                            ${data.delivery_address ? `<p><strong>Address:</strong> ${escapeHtml(data.delivery_address)}</p>` : ''}
+                            ${data.preferred_time ? `<p><strong>Preferred Time:</strong> ${escapeHtml(data.preferred_time)}</p>` : ''}
+                            ${data.order_notes ? `<p><strong>Notes:</strong> ${escapeHtml(data.order_notes)}</p>` : ''}
+                            ${data.monnify_transaction_ref ? `<p><strong>Monnify Ref:</strong> ${escapeHtml(data.monnify_transaction_ref)}</p>` : ''}
                             ${data.delivery_fee ? `<p><strong>Delivery Fee:</strong> ₦${Number(data.delivery_fee).toLocaleString()}</p>` : ''}
                         </div>
                         <hr style="border-color:#f0f0f0;margin:12px 0;">
@@ -3241,16 +3261,20 @@
                     `;
                     return;
                 }
-                bannerGrid.innerHTML = banners.map((banner, index) => `
+                bannerGrid.innerHTML = banners.map((banner, index) => {
+                    const safeImageUrl = /^https?:\/\//.test(banner.image_url || '') || /^\//.test(banner.image_url || '')
+                        ? banner.image_url
+                        : '/images/default-banner.jpg';
+                    return `
                     <div class="banner-card" draggable="true" data-index="${index}" data-id="${banner.id}">
-                        <div class="banner-image" style="background-image: url('${banner.image_url || '/images/default-banner.jpg'}');">
-                            ${banner.badge_text ? `<span class="badge" style="background:${banner.badge_color || '#E53935'};">${banner.badge_text}</span>` : ''}
+                        <div class="banner-image" style="background-image: url('${safeImageUrl}');">
+                            ${banner.badge_text ? `<span class="badge" style="background:${banner.badge_color || '#E53935'};">${escapeHtml(banner.badge_text)}</span>` : ''}
                             <span class="status-badge ${banner.is_active ? 'active' : 'inactive'}">${banner.is_active ? 'Active' : 'Inactive'}</span>
                         </div>
                         <div class="banner-content">
-                            <div class="title">${banner.title}</div>
-                            ${banner.subtitle ? `<div class="subtitle">${banner.subtitle}</div>` : ''}
-                            ${banner.description ? `<p style="font-size:0.85rem;color:var(--text-muted);margin:8px 0;">${banner.description}</p>` : ''}
+                            <div class="title">${escapeHtml(banner.title)}</div>
+                            ${banner.subtitle ? `<div class="subtitle">${escapeHtml(banner.subtitle)}</div>` : ''}
+                            ${banner.description ? `<p style="font-size:0.85rem;color:var(--text-muted);margin:8px 0;">${escapeHtml(banner.description)}</p>` : ''}
                             <div class="meta">
                                 <span class="tag">Position: ${banner.position || 0}</span>
                                 <span class="tag">Order: ${banner.display_order || 0}</span>
@@ -3266,7 +3290,8 @@
                             <span class="drag-handle" style="margin-left:auto;"><i class="fa-solid fa-grip-vertical"></i></span>
                         </div>
                     </div>
-                `).join('');
+                    `;
+                }).join('');
                 setupBannerDragDrop();
                 document.querySelectorAll('.edit-banner').forEach(btn => btn.addEventListener('click', () => openBannerModal(btn.dataset.id)));
                 document.querySelectorAll('.preview-banner').forEach(btn => btn.addEventListener('click', () => previewBanner(btn.dataset.id)));
@@ -3450,18 +3475,18 @@
                 if (!banner) return;
                 previewContent.innerHTML = `
                     <div class="banner-preview" style="background:${banner.background_color || '#fff3ed'};color:${banner.text_color || '#1e1e1e'};">
-                        ${banner.badge_text ? `<span class="preview-badge" style="background:${banner.badge_color || '#E53935'};color:white;">${banner.badge_text}</span>` : ''}
-                        <h1>${banner.title}</h1>
-                        ${banner.subtitle ? `<p style="font-weight:700;font-size:1.2rem;">${banner.subtitle}</p>` : ''}
-                        ${banner.description ? `<p>${banner.description}</p>` : ''}
-                        ${banner.cta_text ? `<div class="preview-cta" style="background:${banner.badge_color || '#E53935'};color:white;">${banner.cta_text}${banner.discount_value ? ` (${banner.discount_type === 'percentage' ? banner.discount_value + '% OFF' : '₦' + banner.discount_value + ' OFF'})` : ''}</div>` : ''}
+                        ${banner.badge_text ? `<span class="preview-badge" style="background:${banner.badge_color || '#E53935'};color:white;">${escapeHtml(banner.badge_text)}</span>` : ''}
+                        <h1>${escapeHtml(banner.title)}</h1>
+                        ${banner.subtitle ? `<p style="font-weight:700;font-size:1.2rem;">${escapeHtml(banner.subtitle)}</p>` : ''}
+                        ${banner.description ? `<p>${escapeHtml(banner.description)}</p>` : ''}
+                        ${banner.cta_text ? `<div class="preview-cta" style="background:${banner.badge_color || '#E53935'};color:white;">${escapeHtml(banner.cta_text)}${banner.discount_value ? ` (${banner.discount_type === 'percentage' ? banner.discount_value + '% OFF' : '₦' + banner.discount_value + ' OFF'})` : ''}</div>` : ''}
                     </div>
                 `;
                 bannerPreviewModal.classList.add('open');
             }
             function populateBannerCategorySelect() {
                 const select = document.getElementById('b-categories');
-                select.innerHTML = categories.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+                select.innerHTML = categories.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`).join('');
             }
             async function loadBannerProductOptions() {
                 try {
@@ -3469,7 +3494,7 @@
                     const items = await response.json();
                     const select = document.getElementById('b-product-id');
                     select.innerHTML = `<option value="">Select product...</option>` +
-                        items.map(p => `<option value="${p.id}">${p.name} (₦${p.price})</option>`).join('');
+                        items.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (₦${p.price})</option>`).join('');
                 } catch (error) {
                     console.error('Error loading products for banner:', error);
                 }
@@ -3496,8 +3521,8 @@
                     const createdAt = area.created_at || area.area_created_at;
                     return `
                         <tr>
-                            <td><code style="background:#f0f0f0;padding:2px 8px;border-radius:4px;font-size:0.75rem;">${id}</code></td>
-                            <td><strong>${name}</strong></td>
+                            <td><code style="background:#f0f0f0;padding:2px 8px;border-radius:4px;font-size:0.75rem;">${escapeHtml(id)}</code></td>
+                            <td><strong>${escapeHtml(name)}</strong></td>
                             <td>₦${Number(fee).toLocaleString()}</td>
                             <td style="font-size:0.75rem;color:var(--text-muted);">${createdAt ? new Date(createdAt).toLocaleDateString() : '-'}</td>
                             <td style="text-align:right;">
@@ -3542,7 +3567,7 @@
                         const layer = L.geoJSON(geojson, {
                             style: { color: '#E53935', weight: 3, opacity: 0.8, fillColor: '#E53935', fillOpacity: 0.15 },
                             onEachFeature: (feature, l) => {
-                                l.bindPopup(`<strong>${name}</strong><br>Fee: ₦${Number(fee).toLocaleString()}<br>ID: ${area.id}`);
+                                l.bindPopup(`<strong>${escapeHtml(name)}</strong><br>Fee: ₦${Number(fee).toLocaleString()}<br>ID: ${escapeHtml(area.id)}`);
                             }
                         });
                         areaMap.addLayer(layer);
@@ -3676,8 +3701,8 @@
                             ? `${result.address.city || result.address.town || result.address.village || ''}, ${result.address.country || ''}`
                             : '';
                         item.innerHTML = `
-                            <span>${highlightText(displayName, query)}</span>
-                            ${subText ? `<span class="sub-text">${highlightText(subText, query)}</span>` : ''}
+                            <span>${highlightText(escapeHtml(displayName), query)}</span>
+                            ${subText ? `<span class="sub-text">${highlightText(escapeHtml(subText), query)}</span>` : ''}
                         `;
                         item.addEventListener('click', function() {
                             const lat = parseFloat(result.lat);
@@ -3824,7 +3849,7 @@
                         <td>${r.fee_multiplier}</td>
                         <td>₦${r.fee_discount}</td>
                         <td>${r.free_delivery ? '✅' : '❌'}</td>
-                        <td>${r.description || '-'}</td>
+                        <td>${escapeHtml(r.description) || '-'}</td>
                         <td style="text-align:right;">
                             <button class="btn btn-primary btn-sm edit-value-rule" data-id="${r.id}"><i class="fa-regular fa-pen-to-square"></i></button>
                             <button class="btn btn-danger btn-sm delete-value-rule" data-id="${r.id}"><i class="fa-regular fa-trash-can"></i></button>
@@ -3854,8 +3879,8 @@
                 tbody.innerHTML = settings.map(s => `
                     <tr>
                         <td>${s.day_of_week !== null && s.day_of_week !== undefined ? days[s.day_of_week] : 'All Days'}</td>
-                        <td>${s.start_time}</td>
-                        <td>${s.end_time}</td>
+                        <td>${escapeHtml(s.start_time)}</td>
+                        <td>${escapeHtml(s.end_time)}</td>
                         <td>₦${s.surcharge_amount}</td>
                         <td>${s.is_active ? '✅' : '❌'}</td>
                         <td style="text-align:right;">
@@ -3920,7 +3945,7 @@
                         <td>₦${r.surcharge_amount}</td>
                         <td>${r.weight_threshold_kg ?? '-'}</td>
                         <td>${r.surcharge_per_kg ? '₦' + r.surcharge_per_kg : '-'}</td>
-                        <td>${r.description || '-'}</td>
+                        <td>${escapeHtml(r.description) || '-'}</td>
                         <td style="text-align:right;">
                             <button class="btn btn-primary btn-sm edit-item-surcharge" data-id="${r.id}"><i class="fa-regular fa-pen-to-square"></i></button>
                             <button class="btn btn-danger btn-sm delete-item-surcharge" data-id="${r.id}"><i class="fa-regular fa-trash-can"></i></button>
@@ -4153,7 +4178,7 @@
                     renderStaff();
                 } catch (err) {
                     console.error('Error loading staff:', err);
-                    staffBody.innerHTML = `<tr><td colspan="6" class="empty-state">Failed to load staff: ${err.message}</td></tr>`;
+                    staffBody.innerHTML = `<tr><td colspan="6" class="empty-state">Failed to load staff: ${escapeHtml(err.message)}</td></tr>`;
                 }
             }
 
@@ -4180,14 +4205,14 @@
                         <tr>
                             <td>
                                 <div class="product-cell">
-                                    <div class="emoji" style="background:var(--primary);color:#fff;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:800;">${initials}</div>
+                                    <div class="emoji" style="background:var(--primary);color:#fff;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:800;">${escapeHtml(initials)}</div>
                                     <div class="info">
-                                        <div class="name">${s.full_name} ${isMe ? '<span style="color:var(--text-muted);font-size:0.7rem;">(you)</span>' : ''}</div>
+                                        <div class="name">${escapeHtml(s.full_name)} ${isMe ? '<span style="color:var(--text-muted);font-size:0.7rem;">(you)</span>' : ''}</div>
                                     </div>
                                 </div>
                             </td>
-                            <td>${s.email}</td>
-                            <td><span class="role-badge ${s.role}">${s.role}</span></td>
+                            <td>${escapeHtml(s.email)}</td>
+                            <td><span class="role-badge ${escapeHtml(s.role)}">${escapeHtml(s.role)}</span></td>
                             <td>
                                 <span class="staff-status ${s.is_active ? 'active' : 'inactive'}">
                                     <span class="dot"></span> ${s.is_active ? 'Active' : 'Deactivated'}
@@ -4379,7 +4404,7 @@
                     document.getElementById('audit-next').disabled = (auditOffset + auditLimit) >= (data.count || 0);
                 } catch (err) {
                     console.error('Error loading audit log:', err);
-                    auditBody.innerHTML = `<tr><td colspan="5" class="empty-state">Failed to load audit log: ${err.message}</td></tr>`;
+                    auditBody.innerHTML = `<tr><td colspan="5" class="empty-state">Failed to load audit log: ${escapeHtml(err.message)}</td></tr>`;
                 }
             }
 
@@ -4395,17 +4420,18 @@
                     const actionClass = ['create','update','delete','toggle','duplicate','reorder','status_change','confirm_offline','invite','deactivate','reactivate']
                         .includes(action) ? action : 'update';
                     const payload = e.payload ? JSON.stringify(e.payload) : '';
-                    const payloadShort = payload.length > 80 ? payload.slice(0, 80) + '…' : payload;
+                    const safePayload = escapeHtml(payload);
+                    const payloadShort = safePayload.length > 80 ? safePayload.slice(0, 80) + '…' : safePayload;
                     return `
                         <tr>
                             <td style="font-size:0.75rem;color:var(--text-muted);white-space:nowrap;">${when}</td>
-                            <td style="font-size:0.78rem;">${who}</td>
-                            <td><span class="audit-action ${actionClass}">${e.action || 'unknown'}</span></td>
+                            <td style="font-size:0.78rem;">${escapeHtml(who)}</td>
+                            <td><span class="audit-action ${actionClass}">${escapeHtml(e.action || 'unknown')}</span></td>
                             <td>
-                                <strong>${e.resource_type || '—'}</strong>
-                                ${e.resource_id ? `<br><code style="font-size:0.65rem;color:var(--text-muted);">${e.resource_id}</code>` : ''}
+                                <strong>${escapeHtml(e.resource_type) || '—'}</strong>
+                                ${e.resource_id ? `<br><code style="font-size:0.65rem;color:var(--text-muted);">${escapeHtml(e.resource_id)}</code>` : ''}
                             </td>
-                            <td>${payload ? `<span class="audit-payload" title="${payload.replace(/"/g, '&quot;')}">${payloadShort}</span>` : '—'}</td>
+                            <td>${payload ? `<span class="audit-payload" title="${safePayload}">${payloadShort}</span>` : '—'}</td>
                         </tr>
                     `;
                 }).join('');
@@ -4716,6 +4742,7 @@
             console.log('👥 Staff management & audit log available to owner/manager');
             console.log('💵 Offline payment support active');
             console.log('🔑 Staff creation now uses preset passwords (no invite email)');
+            console.log('🛡️ HTML escaping active on all user-controlled interpolation sites');
 
         })();
     </script>
