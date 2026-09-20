@@ -169,6 +169,11 @@ class Settings(BaseSettings):
     # backstop for orders where Monnify queries kept failing during the
     # in-window sweep. Monnify auto-expires unpaid checkouts long before this.
     STALE_CHECKOUT_HOURS: int = 6
+    # [FEATURE] Offline orders (pickup/dine-in paid at counter) that sit in
+    # `awaiting_payment` for this long are flagged as no-shows. We do NOT
+    # auto-cancel them — a human should decide — but we log a warning so
+    # staff know to chase.
+    OFFLINE_NO_SHOW_WARNING_HOURS: int = 8
 
     class Config:
         env_file = ".env"
@@ -464,12 +469,19 @@ class StaffMember(BaseModel):
 
 
 # ---------- ORDER STATE MACHINE ----------
+# [FEATURE] `awaiting_payment` is a new status for offline orders (pickup or
+# dine-in that will be paid at the counter on arrival). It is distinct from
+# `pending`, which continues to mean "customer is at Monnify checkout".
+# Keeping them separate is essential: the reconciliation loop auto-cancels
+# stale `pending` rows, but must never touch `awaiting_payment` — those are
+# legitimately waiting for a human.
 _ALLOWED_ORDER_TRANSITIONS: Dict[str, Set[str]] = {
-    "pending":   {"paid", "confirmed", "cancelled"},
-    "paid":      {"confirmed", "completed", "cancelled"},
-    "confirmed": {"completed", "cancelled"},
-    "cancelled": set(),
-    "completed": set(),
+    "pending":           {"paid", "confirmed", "cancelled"},
+    "awaiting_payment":  {"paid", "confirmed", "completed", "cancelled"},
+    "paid":              {"confirmed", "completed", "cancelled"},
+    "confirmed":         {"completed", "cancelled"},
+    "cancelled":         set(),
+    "completed":         set(),
 }
 
 def validate_order_transition(current: Optional[str], target: str) -> None:
@@ -527,6 +539,11 @@ class OrderCreate(BaseModel):
     total: Optional[int] = None
     status: Optional[str] = "pending"
     delivery_method: Optional[str] = "pickup"
+    # [FEATURE] Payment method — "online" (through Monnify) or "offline"
+    # (pay at the counter on arrival). Only valid for pickup and dine-in.
+    # Delivery orders must be "online". Default "online" preserves the
+    # previous behaviour for clients that don't send this field.
+    payment_method: Optional[str] = "online"
     delivery_address: Optional[str] = None
     preferred_time: Optional[str] = None
     order_notes: Optional[str] = None
@@ -960,6 +977,14 @@ class BrevoIntegration:
                 f"<tr><td>{i['name']}</td><td>{i['qty']}</td><td>₦{i['price']*i['qty']:,}</td></tr>"
                 for i in data.get("items", [])
             )
+            # [FEATURE] Offline orders get a "pay at counter" note. Online orders
+            # keep the original wording (no payment note — the customer just paid).
+            payment_html = ""
+            if data.get("payment_method") == "offline":
+                payment_html = (
+                    '<p><strong>Payment:</strong> 💵 Please pay at the counter on arrival. '
+                    'Bring this order reference.</p>'
+                )
             html = f"""
             <html><body>
             <h2>Order #{data['payment_reference']}</h2>
@@ -967,6 +992,7 @@ class BrevoIntegration:
             <p><strong>Phone:</strong> {data['customer_phone']}</p>
             <p><strong>Delivery:</strong> {data.get('delivery_method', 'Pickup')}</p>
             <p><strong>Delivery Fee:</strong> ₦{data.get('delivery_fee', 0):,}</p>
+            {payment_html}
             <table border=1><tr><th>Item</th><th>Qty</th><th>Price</th></tr>
             {items_html}
             <tr><td colspan=2><b>Total</b></td><td><b>₦{data['total']:,}</b></td></tr>
@@ -1406,9 +1432,13 @@ async def get_cached_stats():
         execute_db(db.table("products").select("id", count="exact")),
         execute_db(db.table("categories").select("id", count="exact")),
         # [FIX] Exclude checkout-in-progress rows — they are not orders.
+        # NOTE: `awaiting_payment` (offline orders) IS counted — those are real
+        # orders that staff are preparing, they just haven't been paid yet.
         execute_db(db.table("orders").select("id", count="exact").neq("status", "pending")),
         # [FIX] Revenue only counts money that actually landed. An abandoned
         # checkout never paid, so its total should not appear in revenue.
+        # Offline orders in `awaiting_payment` also don't count — money hasn't
+        # changed hands yet. They join revenue when staff marks them paid.
         execute_db(
             db.table("orders")
             .select("total")
@@ -1771,6 +1801,10 @@ async def setup_database():
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee INTEGER DEFAULT 0;",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_breakdown JSONB;",
+            # [FEATURE] Payment method — "online" (Monnify) or "offline" (pay at
+            # counter). Default "online" keeps existing rows and any clients
+            # that don't send the field on the historical behavior.
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'online';",
             "CREATE INDEX IF NOT EXISTS idx_orders_payment_reference ON orders (payment_reference);",
             "CREATE INDEX IF NOT EXISTS idx_orders_monnify_transaction_ref ON orders (monnify_transaction_ref);",
             # Reconciliation loop queries: pending orders by age
@@ -1889,6 +1923,10 @@ async def setup_database():
 # RECONCILIATION_GRACE_SECONDS get queried against Monnify, and any that are
 # PAID get marked paid + stock-decremented using the same atomic-claim pattern
 # as the webhook. FAILED/CANCELLED/EXPIRED/REVERSED orders get cancelled.
+#
+# [FEATURE] Reconciliation ONLY touches `pending` (online, at Monnify) orders.
+# Offline orders in `awaiting_payment` are intentionally out of scope — those
+# are legitimate orders waiting for a human to take payment at the counter.
 _reconciliation_lock = asyncio.Lock()
 _reconciliation_task: Optional[asyncio.Task] = None
 _reconciliation_stats: Dict[str, Any] = {
@@ -1897,6 +1935,8 @@ _reconciliation_stats: Dict[str, Any] = {
     "resolved_paid": 0,
     "resolved_cancelled": 0,
     "errors": 0,
+    # [FEATURE] Count of awaiting_payment orders flagged as no-show warnings
+    "offline_no_show_warnings": 0,
 }
 
 
@@ -1943,6 +1983,30 @@ async def _reconcile_once() -> None:
                 )
     except Exception as e:
         logger.warning(f"Stale checkout sweep failed: {e}")
+
+    # [FEATURE] Warning-only sweep for offline orders that have been sitting in
+    # `awaiting_payment` for a long time (likely no-shows). We do NOT auto-cancel
+    # — a human should decide. But we log so staff know to chase.
+    try:
+        warn_cutoff = (now - timedelta(hours=settings.OFFLINE_NO_SHOW_WARNING_HOURS)).isoformat()
+        warn_result = await execute_db(
+            db.table("orders")
+            .select("id, payment_reference, customer_name, customer_phone, created_at")
+            .eq("status", "awaiting_payment")
+            .lt("created_at", warn_cutoff)
+            .limit(100)
+        )
+        for warn in (warn_result.data or []):
+            _reconciliation_stats["offline_no_show_warnings"] += 1
+            logger.warning(
+                f"⚠️  Offline order {warn['id']} (ref={warn.get('payment_reference')}) "
+                f"has been awaiting counter payment for over "
+                f"{settings.OFFLINE_NO_SHOW_WARNING_HOURS}h — "
+                f"customer={warn.get('customer_name')} phone={warn.get('customer_phone')}. "
+                f"Consider following up or cancelling manually."
+            )
+    except Exception as e:
+        logger.warning(f"Offline no-show warning sweep failed: {e}")
 
     try:
         result = await execute_db(
@@ -2400,6 +2464,7 @@ async def health():
             "resolved_paid": _reconciliation_stats["resolved_paid"],
             "resolved_cancelled": _reconciliation_stats["resolved_cancelled"],
             "errors": _reconciliation_stats["errors"],
+            "offline_no_show_warnings": _reconciliation_stats["offline_no_show_warnings"],
         },
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -2485,6 +2550,10 @@ async def get_order_by_reference(
 # [FIX] Serve an order that already exists for this idempotency key.
 # Called from create_order when either the pre-check or the post-insert
 # unique-violation handler detects an existing row for the incoming key.
+#
+# [FEATURE] Now also handles the offline case: an offline order replay returns
+# the same "awaiting_payment" response instead of trying to fetch a Monnify
+# checkout URL that was never created.
 async def _serve_existing_order(row: Dict[str, Any]) -> Dict[str, Any]:
     """
     If the existing row already has a checkout_url, return it — the customer
@@ -2495,6 +2564,24 @@ async def _serve_existing_order(row: Dict[str, Any]) -> Dict[str, Any]:
     same payment reference (Monnify treats this as idempotent) and store the
     resulting URL.
     """
+    # [FEATURE] Offline orders never had a Monnify checkout. Return the same
+    # shape as the original create request so the caller's client handles it
+    # uniformly.
+    if row.get("payment_method") == "offline":
+        logger.info(
+            f"Idempotent replay (offline): returning existing order {row.get('id')} "
+            f"(ref={row.get('payment_reference')})"
+        )
+        return {
+            "status": "awaiting_payment",
+            "order_id": row.get("id"),
+            "payment_reference": row.get("payment_reference"),
+            "checkout_url": None,
+            "payment_method": "offline",
+            "delivery_method": row.get("delivery_method"),
+            "idempotent_replay": True,
+        }
+
     if row.get("checkout_url"):
         logger.info(
             f"Idempotent replay: returning existing order {row.get('id')} "
@@ -2564,6 +2651,28 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
     if any(not pid for pid in product_ids):
         raise HTTPException(400, "All order items must have a product_id")
 
+    # [FEATURE] Resolve payment method. Rules:
+    #   - "online" or "offline" only.
+    #   - Delivery orders MUST be online (we dispatch only after payment).
+    #   - Pickup and dine-in support both.
+    # Default is "online" so existing clients are unaffected.
+    payment_method = (order.payment_method or "online").strip().lower()
+    if payment_method not in ("online", "offline"):
+        raise HTTPException(
+            status_code=400,
+            detail="payment_method must be 'online' or 'offline'",
+        )
+    delivery_method = (order.delivery_method or "pickup").strip().lower()
+    if delivery_method == "delivery" and payment_method == "offline":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Delivery orders must be paid online at checkout. "
+                "Choose online payment, or switch to Pickup / Dine-in "
+                "to pay at the counter."
+            ),
+        )
+
     # [FIX] Idempotency key handling.
     # We only look up an existing order when the client supplied a key. If
     # they didn't, we generate one internally for record-keeping — but the
@@ -2576,7 +2685,8 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
             existing = await execute_db(
                 get_supabase().table("orders")
                 .select("id, payment_reference, monnify_transaction_ref, checkout_url, total, status, "
-                        "customer_name, customer_email, customer_phone")
+                        "customer_name, customer_email, customer_phone, "
+                        "payment_method, delivery_method")
                 .eq("idempotency_key", idem_key_in)
                 .limit(1)
             )
@@ -2619,7 +2729,7 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
     # message — we never fall back to a client-supplied fee. The customer can
     # choose Pickup / Dine-in, or retry in a moment.
     computed_delivery_fee = 0
-    if order.delivery_method == "delivery":
+    if delivery_method == "delivery":
         if not order.delivery_address or not order.delivery_address.strip():
             raise HTTPException(400, "Delivery address is required for delivery orders")
         try:
@@ -2680,6 +2790,80 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
 
     server_payment_reference = f"HP-{secrets.token_urlsafe(16)}"
     computed_total = computed_subtotal + computed_delivery_fee
+
+    # ------------------------------------------------------------------
+    # [FEATURE] OFFLINE PATH — pickup or dine-in paid at the counter.
+    # No Monnify. Order goes straight to `awaiting_payment`, which means
+    # "customer is coming in to pay". The reconciliation loop never touches
+    # this status; only a human (staff) can move it forward.
+    # ------------------------------------------------------------------
+    if payment_method == "offline":
+        data = {
+            "payment_reference": server_payment_reference,
+            "customer_name": order.customer_name,
+            "customer_email": order.customer_email,
+            "customer_phone": order.customer_phone,
+            "total": computed_total,
+            "status": "awaiting_payment",
+            "delivery_method": delivery_method,
+            "payment_method": "offline",
+            "delivery_address": None,
+            "preferred_time": order.preferred_time,
+            "order_notes": order.order_notes,
+            "items": validated_items,
+            "delivery_fee": 0,
+            "delivery_breakdown": None,
+            "idempotency_key": stored_idem_key,
+            "checkout_url": None,
+        }
+        try:
+            result = await execute_db(get_supabase().table("orders").insert(data))
+        except Exception as e:
+            # Race-safe idempotency (same pattern as the online path).
+            err_str = str(e).lower()
+            if idem_key_in and ("duplicate" in err_str or "unique" in err_str or "23505" in err_str):
+                existing = await execute_db(
+                    get_supabase().table("orders")
+                    .select("id, payment_reference, monnify_transaction_ref, checkout_url, total, status, "
+                            "customer_name, customer_email, customer_phone, "
+                            "payment_method, delivery_method")
+                    .eq("idempotency_key", idem_key_in)
+                    .limit(1)
+                )
+                if existing.data:
+                    logger.info(
+                        f"Idempotency race won by concurrent request for key {idem_key_in} "
+                        f"(offline); serving winning order {existing.data[0].get('id')}"
+                    )
+                    return await _serve_existing_order(existing.data[0])
+            raise
+
+        if not result.data:
+            raise HTTPException(400, "Failed to create order")
+        order_data = result.data[0]
+        # Confirmation email fires immediately: the customer needs their order
+        # reference right away, and the total is known. Delivery email is
+        # scheduled in the background so the response isn't delayed by Brevo.
+        bg.add_task(get_brevo().send_order_confirmation, order_data)
+        logger.info(
+            f"Offline order {order_data['id']} created "
+            f"(customer={order.customer_email}, method={delivery_method}, "
+            f"total=₦{computed_total}) — awaiting counter payment"
+        )
+        return {
+            "status": "awaiting_payment",
+            "order_id": order_data["id"],
+            "payment_reference": server_payment_reference,
+            "checkout_url": None,
+            "payment_method": "offline",
+            "delivery_method": delivery_method,
+        }
+
+    # ------------------------------------------------------------------
+    # ONLINE PATH — existing behavior. Create order with `pending`, send
+    # the customer to Monnify, and let the webhook / reconciliation move
+    # it to `paid`.
+    # ------------------------------------------------------------------
     data = {
         "payment_reference": server_payment_reference,
         "customer_name": order.customer_name,
@@ -2687,7 +2871,8 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
         "customer_phone": order.customer_phone,
         "total": computed_total,
         "status": "pending",
-        "delivery_method": order.delivery_method or "pickup",
+        "delivery_method": delivery_method,
+        "payment_method": "online",
         "delivery_address": order.delivery_address,
         "preferred_time": order.preferred_time,
         "order_notes": order.order_notes,
@@ -2708,7 +2893,8 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
             existing = await execute_db(
                 get_supabase().table("orders")
                 .select("id, payment_reference, monnify_transaction_ref, checkout_url, total, status, "
-                        "customer_name, customer_email, customer_phone")
+                        "customer_name, customer_email, customer_phone, "
+                        "payment_method, delivery_method")
                 .eq("idempotency_key", idem_key_in)
                 .limit(1)
             )
@@ -3214,6 +3400,9 @@ async def delete_category(
 # at the payment gateway, or has abandoned it). They are not orders staff
 # should act on. Reconciliation cancels abandoned ones after the grace period.
 # Pass `include_pending=true` only for debugging.
+#
+# [FEATURE] `awaiting_payment` (offline, at-counter) orders ARE shown by
+# default — those need staff attention to collect payment.
 @app.get("/api/orders", response_model=List[Dict])
 async def get_orders(
     since: Optional[str] = Query(None),
@@ -3237,6 +3426,8 @@ async def get_orders(
         # This includes: fresh checkouts, abandoned checkouts that reconciliation
         # hasn't yet cleaned up, and any pending row still inside the grace window.
         # Staff should only see orders that need action.
+        #
+        # `awaiting_payment` (offline) is NOT filtered out — those need attention.
         query = query.neq("status", "pending")
     query = query.range(offset, offset + limit - 1)
     r = await execute_db(query)
@@ -3270,9 +3461,14 @@ async def update_order_status(
     update_data = {"status": upd.status}
     if upd.reason is not None:
         update_data["cancellation_reason"] = upd.reason
-    if upd.status == "cancelled" and current_status not in ("cancelled",):
+    # [FIX] Only restore stock if it was previously reduced. Orders in
+    # 'pending' (checkout at Monnify) or 'awaiting_payment' (offline, no
+    # money yet) never had stock reduced, so a cancel from those states must
+    # NOT inflate stock. Stock is reduced when an order enters 'paid' or
+    # 'confirmed', so those are the only states we reverse from.
+    if upd.status == "cancelled" and current_status in ("paid", "confirmed"):
         await restore_order_stock(order)
-        logger.info(f"Stock restored for cancelled order {oid}")
+        logger.info(f"Stock restored for cancelled order {oid} (from {current_status})")
     if upd.status in ("confirmed", "paid") and current_status not in ("confirmed", "paid"):
         await reduce_order_stock(order)
     result = await execute_db(get_supabase().table("orders").update(update_data).eq("id", oid))
