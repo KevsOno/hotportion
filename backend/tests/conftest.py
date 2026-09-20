@@ -24,7 +24,7 @@ os.environ.setdefault("MONNIFY_SECRET_KEY", "test-monnify-secret-key")
 os.environ.setdefault("MONNIFY_CONTRACT_CODE", "test-contract-code")
 os.environ.setdefault("RECONCILIATION_ENABLED", "false")
 os.environ.setdefault("NOMINATIM_FALLBACK_ENABLED", "false")
-os.environ.setdefault("SENTRY_DSN", "")  # disable Sentry's background worker
+os.environ.setdefault("SENTRY_DSN", "")
 os.environ.setdefault("SENTRY_DISABLED", "1")
 
 # Make the project root importable
@@ -35,6 +35,26 @@ if str(ROOT) not in sys.path:
 from fastapi.testclient import TestClient  # noqa: E402
 
 import main  # noqa: E402
+
+
+# ────────────────────────────────────────────────────────────────────
+# Autouse: wipe any in-process rate limiter state between tests.
+# Inspects `main` at runtime so it doesn't need to know the variable name.
+# ────────────────────────────────────────────────────────────────────
+@pytest.fixture(autouse=True)
+def _reset_rate_limits():
+    def _wipe():
+        for name, val in list(vars(main).items()):
+            if isinstance(val, dict) and not name.isupper():
+                lname = name.lower()
+                if any(k in lname for k in ("rate", "bucket", "limit", "hits", "throttle")):
+                    try:
+                        val.clear()
+                    except Exception:
+                        pass
+    _wipe()
+    yield
+    _wipe()
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -301,16 +321,13 @@ def client(fake_db, monkeypatch, mock_monnify):
     """
     TestClient with external services stubbed.
 
-    Important:
-      - depends on fake_db so get_supabase is patched BEFORE the lifespan
-        fires setup_database().
-      - replaces main._executor with a fresh pool. main.py's lifespan shuts
-        down the module-level executor on teardown, which would otherwise
-        kill every subsequent test with 'cannot schedule new futures after shutdown'.
-      - replaces main.setup_database with a no-op so the lifespan doesn't try
-        to build a real Supabase client with the dummy service key.
-      - clears the in-process rate limiter so the 10-request limit doesn't
-        accumulate across tests.
+    - depends on fake_db so get_supabase is patched BEFORE the lifespan fires.
+    - fresh ThreadPoolExecutor per test, because main.py's lifespan shuts down
+      the module-level _executor on first teardown, which would otherwise
+      kill every subsequent test with
+      'RuntimeError: cannot schedule new futures after shutdown'.
+    - neutralises setup_database() so the lifespan never builds a real
+      Supabase client with the dummy service key.
     """
     async def noop(self):
         return None
@@ -318,21 +335,13 @@ def client(fake_db, monkeypatch, mock_monnify):
     monkeypatch.setattr(main.BrevoIntegration, "initialize", noop)
     monkeypatch.setattr(main.MonnifyIntegration, "initialize", noop)
 
-    # 1. Fresh executor per test.
     fresh_executor = ThreadPoolExecutor(max_workers=4)
     monkeypatch.setattr(main, "_executor", fresh_executor, raising=False)
 
-    # 2. Neutralise setup_database so it never touches a real client.
     if hasattr(main, "setup_database"):
         async def _noop_setup():
             return None
         monkeypatch.setattr(main, "setup_database", _noop_setup, raising=False)
-
-    # 3. Reset the rate limiter state if present.
-    for attr in ("_rate_limit_store", "_rate_buckets", "_requests"):
-        store = getattr(main, attr, None)
-        if isinstance(store, dict):
-            store.clear()
 
     with TestClient(main.app) as c:
         yield c
