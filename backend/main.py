@@ -453,6 +453,10 @@ class StaffCreate(BaseModel):
     email: str
     full_name: str
     role: str
+    # [FIX] Admin-set initial password. Replaces the Supabase invite flow,
+    # which was unreliable due to URL-hash fragility. Users can change their
+    # password later via the "Forgot password" flow on the login screen.
+    password: str = Field(..., min_length=6, max_length=128)
 
 class StaffUpdate(BaseModel):
     full_name: Optional[str] = None
@@ -1585,8 +1589,7 @@ async def calculate_intelligent_delivery_fee(
         if prod:
             is_main = prod.get("is_main_item")
             if is_main is None:
-                is_main = True
-            if is_main:
+                is_main = True            if is_main:
                 main_count += item.qty
             weight = prod.get("weight_kg")
             if weight is None:
@@ -3159,7 +3162,13 @@ async def create_staff(
     staff: Dict[str, Any] = Depends(require_permission("staff:write")),
     request: Request = None,
 ):
-    """Invite a new staff member via Supabase Auth and create their staff record."""
+    """Create a new staff member via Supabase Auth Admin API with a preset password.
+
+    [FIX] Replaces the invite-email flow. The admin chooses the initial
+    password, shares it out-of-band (WhatsApp, in person, etc.), and the
+    staff member can sign in immediately. Password changes later go through
+    the "Forgot password" flow on the login screen.
+    """
     email = payload.email.strip().lower()
     role = payload.role.strip().lower()
     if role not in ALLOWED_ROLES:
@@ -3171,36 +3180,48 @@ async def create_staff(
     if existing.data:
         raise HTTPException(400, "A staff member with this email already exists")
 
-    # Send the Supabase invite. Uses the admin REST endpoint with service_role key.
-    invite_url = f"{settings.SUPABASE_URL}/auth/v1/invite"
+    # Create the auth user with a pre-set password. `email_confirm: true`
+    # skips the confirmation email entirely, so the account is usable now.
+    create_url = f"{settings.SUPABASE_URL}/auth/v1/admin/users"
     headers = {
         "apikey": settings.SUPABASE_SERVICE_KEY,
         "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
         "Content-Type": "application/json",
     }
-    # Where Supabase should redirect the user after verifying the invite token.
-    # This URL MUST be whitelisted in Supabase Dashboard → Authentication → URL Configuration.
-    invite_redirect = settings.INVITE_REDIRECT_URL
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
         async with session.post(
-            invite_url, headers=headers,
+            create_url, headers=headers,
             json={
                 "email": email,
-                "data": {"full_name": payload.full_name, "role": role},
-                "redirect_to": invite_redirect,
+                "password": payload.password,
+                "email_confirm": True,
+                "user_metadata": {
+                    "full_name": payload.full_name,
+                    "role": role,
+                },
             }
         ) as resp:
             text = await resp.text()
             if resp.status not in (200, 201):
-                logger.error(f"Supabase invite failed: {resp.status} {text[:200]}")
-                raise HTTPException(502, f"Failed to send invite: {text[:200]}")
+                logger.error(f"Supabase admin.create_user failed: {resp.status} {text[:200]}")
+                # Detect the common "already exists" case and surface a
+                # clear message for the admin.
+                lower = text.lower()
+                if "already" in lower and ("registered" in lower or "exists" in lower):
+                    raise HTTPException(
+                        400,
+                        f"An auth account already exists for {email}. If the staff row "
+                        f"was deleted but the auth user remains, remove it from the "
+                        f"Supabase dashboard (Authentication → Users) and try again.",
+                    )
+                raise HTTPException(502, f"Failed to create user: {text[:200]}")
             try:
                 data = json.loads(text)
             except json.JSONDecodeError:
-                raise HTTPException(502, "Invalid response from Supabase invite")
+                raise HTTPException(502, "Invalid response from Supabase create_user")
             user_id = data.get("id")
             if not user_id:
-                raise HTTPException(500, "Supabase invite did not return a user id")
+                raise HTTPException(500, "Supabase did not return a user id")
 
     row = {
         "id": user_id,
@@ -3211,8 +3232,19 @@ async def create_staff(
     }
     r = await execute_db(get_supabase().table("staff").insert(row))
     if not r.data:
+        # Roll back the auth user so we don't leave an orphan with a known
+        # password and no staff row.
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                await session.delete(
+                    f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}",
+                    headers=headers,
+                )
+        except Exception as e:
+            logger.warning(f"Failed to roll back auth user {user_id}: {e}")
         raise HTTPException(500, "Failed to create staff record")
-    await audit_log(staff, "invite", "staff", user_id, {"email": email, "role": role}, request)
+
+    await audit_log(staff, "create", "staff", user_id, {"email": email, "role": role}, request)
     return r.data[0]
 
 @app.patch("/api/staff/{staff_id}")
