@@ -1,0 +1,2315 @@
+(function() {
+    'use strict';
+
+    // ═══════════════════════════════════════════════════════
+    // HTML ESCAPING HELPER
+    // ═══════════════════════════════════════════════════════
+    // Converts HTML special characters to entities so that
+    // user-controlled strings are rendered as literal text
+    // instead of being parsed as markup. This is the primary
+    // defense against stored/reflected XSS at interpolation sites.
+    function escapeHtml(v) {
+        if (v === null || v === undefined) return '';
+        return String(v)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    // ─── AMAZON LOCATION SERVICE via backend proxy ───
+    async function amazonPlacesFetch(endpoint, body) {
+        const response = await fetch(`${API_BASE}/api/places/${endpoint}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(`Amazon Places ${endpoint} ${response.status}: ${text.slice(0, 150)}`);
+        }
+        return response.json();
+    }
+
+    // ─── API BASE: Capacitor native vs Web ───
+    function getApiBase() {
+        if (window.Capacitor && window.Capacitor.isNative) {
+            return 'https://hotportion.onrender.com';
+        }
+        return '';
+    }
+    const API_BASE = getApiBase();
+    console.log('🔗 API_BASE:', API_BASE || '(web proxy)');
+
+    // ─── Set header height for sticky bar ───
+    function setHeaderHeight() {
+        const header = document.querySelector('.header');
+        if (header) {
+            const height = header.offsetHeight;
+            document.documentElement.style.setProperty('--header-height', height + 'px');
+        }
+    }
+    window.addEventListener('load', setHeaderHeight);
+    window.addEventListener('resize', setHeaderHeight);
+
+    // ─── STATE ───
+    let products = [];
+    let categories = [];
+    let banners = [];
+    let cart = {};
+    let cartTotalItems = 0;
+    let cartTotalPrice = 0;
+    let searchQuery = '';
+    let selectedCategory = '';
+    let deliveryMethod = 'pickup';
+    let deliveryFee = 0;
+    let lastOrderData = null;
+    let isDataLoaded = false;
+
+    // [FEATURE] Payment method state. 'online' = Monnify checkout;
+    // 'offline' = pay at counter on arrival (pickup/dine-in only).
+    let paymentMethod = 'online';
+
+    // [CHANGE] Checkout idempotency key. Generated on the first click of
+    // "Proceed to Payment", reused on any retry of that same attempt,
+    // and cleared when the receipt is closed. Sending the same key twice
+    // makes the backend return the same order instead of creating a
+    // duplicate + a second Monnify transaction. Persisted to sessionStorage
+    // so a reload mid-checkout does not create a duplicate order.
+    const CHECKOUT_IDEMPOTENCY_KEY = 'hp_checkout_idempotency';
+    let checkoutIdempotencyKey = null;
+    try {
+        checkoutIdempotencyKey = sessionStorage.getItem(CHECKOUT_IDEMPOTENCY_KEY) || null;
+    } catch (e) { /* ignore */ }
+
+    // ─── Delivery Coverage State ───
+    let isDeliveryCovered = false;
+    let isDeliveryAvailable = true;   // false = pricing API unreachable
+    let isCheckingDelivery = false;
+    let lastCheckedAddress = '';
+    let lastBreakdown = null;
+
+    // ─── Delivery fee API retry config ───
+    const DELIVERY_FEE_MAX_RETRIES = 1;
+    const DELIVERY_FEE_RETRY_DELAY_MS = 800;
+
+    // ─── Autocomplete State ───
+    let addressAutocompleteTimeout = null;
+
+    // ─── Persisted delivery method restored from localStorage ───
+    let _restoredDeliveryMethod = 'pickup';
+    // [FEATURE] Persisted payment method
+    let _restoredPaymentMethod = 'online';
+
+    // ─── DOM REFS ───
+    const menuGrid = document.getElementById('menu-grid');
+    const shimmerWrapper = document.getElementById('shimmer-wrapper');
+    const cartItemsEl = document.getElementById('cart-items');
+    const cartBadge = document.getElementById('cart-badge');
+    const navCartBadge = document.getElementById('nav-cart-badge');
+    const cartSubtotal = document.getElementById('cart-subtotal');
+    const cartDeliveryFee = document.getElementById('cart-delivery-fee');
+    const cartTotal = document.getElementById('cart-total');
+    const cartDrawer = document.getElementById('cart-drawer');
+    const cartOverlay = document.getElementById('cart-overlay');
+    const cartToggle = document.getElementById('cart-toggle');
+    const cartClose = document.getElementById('cart-close');
+    const toast = document.getElementById('toast');
+    const toastMsg = document.getElementById('toast-msg');
+    const orderNowBtn = document.getElementById('order-now-btn');
+    const heroOrderBtn = document.getElementById('hero-order-btn');
+    const heroMenuBtn = document.getElementById('hero-menu-btn');
+    const footerCart = document.getElementById('footer-cart');
+    const checkoutBtn = document.getElementById('checkout-btn');
+    const featuredGrid = document.getElementById('featured-grid');
+    const searchInput = document.getElementById('search-input');
+    const searchClear = document.getElementById('search-clear');
+    const searchBtn = document.getElementById('search-btn');
+    const categoriesPills = document.getElementById('categories-pills');
+
+    const deliveryOptions = document.querySelectorAll('#delivery-options button');
+    // [FEATURE] Payment-method DOM refs
+    const paymentMethodGroup = document.getElementById('payment-method-group');
+    const paymentOptions = document.querySelectorAll('#payment-options button');
+    const paymentMethodHint = document.getElementById('payment-method-hint');
+    const cartFooterNote = document.getElementById('cart-footer-note');
+
+    const addressGroup = document.getElementById('address-group');
+    const deliveryAddress = document.getElementById('delivery-address');
+    const deliveryFeeDisplay = document.getElementById('delivery-fee-display');
+    const deliveryStatus = document.getElementById('delivery-status');
+    const gpsBtn = document.getElementById('gps-btn');
+    const customerName = document.getElementById('customer-name');
+    const customerEmail = document.getElementById('customer-email');
+    const customerPhone = document.getElementById('customer-phone');
+    const preferredTime = document.getElementById('preferred-time');
+    const orderNotes = document.getElementById('order-notes');
+    const deliveryFeeRow = document.getElementById('delivery-fee-row');
+    const feeBreakdownToggle = document.getElementById('fee-breakdown-toggle');
+    const deliveryBreakdown = document.getElementById('delivery-breakdown');
+
+    const breakdownBase = document.getElementById('breakdown-base');
+    const breakdownDiscount = document.getElementById('breakdown-discount');
+    const breakdownSurcharge = document.getElementById('breakdown-surcharge');
+    const breakdownPeak = document.getElementById('breakdown-peak');
+    const breakdownLoyalty = document.getElementById('breakdown-loyalty');
+    const breakdownTotal = document.getElementById('breakdown-total');
+
+    const receiptOverlay = document.getElementById('receipt-overlay');
+    const receiptModal = document.getElementById('receipt-modal');
+    const receiptBody = document.getElementById('receipt-body');
+    const receiptClose = document.getElementById('receipt-close');
+    // [FEATURE] Receipt header parts that change between online/offline
+    const receiptStatusIcon = document.getElementById('receipt-status-icon');
+    const receiptStatusTitle = document.getElementById('receipt-status-title');
+    const receiptStatusSubtitle = document.getElementById('receipt-status-subtitle');
+
+    const chatModal = document.getElementById('chat-modal');
+    const chatMessages = document.getElementById('chat-messages');
+    const chatInput = document.getElementById('chat-input');
+    const chatSend = document.getElementById('chat-send');
+    const chatBubble = document.getElementById('chat-bubble');
+    const closeChat = document.getElementById('close-chat-modal');
+    const chatLauncher = document.getElementById('chat-launcher');
+
+    const navHome = document.getElementById('nav-home');
+    const navMenu = document.getElementById('nav-menu');
+    const navChat = document.getElementById('nav-chat');
+    const navCartBottom = document.getElementById('nav-cart-bottom');
+
+    // ─── Address Autocomplete DOM ───
+    const addressDropdown = document.getElementById('address-autocomplete-dropdown');
+
+    // ─── Track Order DOM ───
+    const trackOverlay = document.getElementById('track-overlay');
+    const trackCloseBtn = document.getElementById('track-close');
+    const trackRefInput = document.getElementById('track-ref-input');
+    // [CHANGE] New email field in the track-order modal
+    const trackEmailInput = document.getElementById('track-email-input');
+    const trackSubmit = document.getElementById('track-submit');
+    const trackResult = document.getElementById('track-result');
+    const footerTrack = document.getElementById('footer-track');
+
+    // ─── HELPERS ───
+    function formatPrice(amount) { return '₦' + Number(amount).toLocaleString(); }
+
+    let toastTimer = null;
+
+    function showToast(msg, icon = 'fa-solid fa-check-circle') {
+        toastMsg.textContent = msg;
+        toast.querySelector('i').className = icon;
+        toast.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    // ─── Netlify Image CDN wrapper ───
+    function netlifyImageUrl(path, width = 400) {
+        const base =
+            'https://ajmauddonufaryjbiavh.supabase.co/storage/v1/object/public/bucket/fastfood/images/';
+        const url = base + path.replace(/^\/fastfood\/images\//, '');
+        return `/.netlify/images?url=${encodeURIComponent(url)}&w=${width}&format=webp`;
+    }
+
+    // ================================================================
+    // ─── PERSISTENCE (localStorage) ───
+    // ================================================================
+    const PERSIST_KEY = 'hp_state';
+    const PERSIST_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+    function persistState() {
+        try {
+            const state = {
+                cart: cart,
+                customer_name: customerName.value,
+                customer_email: customerEmail.value,
+                customer_phone: customerPhone.value,
+                delivery_method: deliveryMethod,
+                payment_method: paymentMethod,
+                delivery_address: deliveryAddress.value,
+                preferred_time: preferredTime.value,
+                order_notes: orderNotes.value,
+                saved_at: Date.now()
+            };
+            localStorage.setItem(PERSIST_KEY, JSON.stringify(state));
+        } catch (e) {
+            console.warn('persistState failed:', e);
+        }
+    }
+
+    function restoreState() {
+        try {
+            const raw = localStorage.getItem(PERSIST_KEY);
+            if (!raw) return;
+            const state = JSON.parse(raw);
+
+            // Expire old state
+            if (state.saved_at && (Date.now() - state.saved_at) > PERSIST_MAX_AGE_MS) {
+                localStorage.removeItem(PERSIST_KEY);
+                return;
+            }
+
+            if (state.cart && typeof state.cart === 'object' && !Array.isArray(state.cart)) {
+                cart = state.cart;
+            }
+            if (state.customer_name) customerName.value = state.customer_name;
+            if (state.customer_email) customerEmail.value = state.customer_email;
+            if (state.customer_phone) customerPhone.value = state.customer_phone;
+            if (state.delivery_address) deliveryAddress.value = state.delivery_address;
+            if (state.preferred_time) preferredTime.value = state.preferred_time;
+            if (state.order_notes) orderNotes.value = state.order_notes;
+            if (state.delivery_method && ['pickup', 'delivery', 'dinein'].indexOf(state.delivery_method) !== -1) {
+                _restoredDeliveryMethod = state.delivery_method;
+            }
+            // [FEATURE] Restore payment method
+            if (state.payment_method && ['online', 'offline'].indexOf(state.payment_method) !== -1) {
+                _restoredPaymentMethod = state.payment_method;
+            }
+
+            console.log('✅ State restored from localStorage:', Object.keys(cart).length, 'cart item(s)');
+        } catch (e) {
+            console.warn('restoreState failed:', e);
+        }
+    }
+
+    function clearPersistedState() {
+        try {
+            localStorage.removeItem(PERSIST_KEY);
+            console.log('🧹 Persisted state cleared');
+        } catch (e) { /* ignore */ }
+    }
+
+    // [CHANGE] Customer email persistence, separate from cart state.
+    // Used by:
+    //   * handlePaymentRedirect() — to identify the order on return
+    //     from Monnify when we don't have the pending_order in sessionStorage.
+    //   * The track-order modal — to prefill the email field.
+    const CUSTOMER_EMAIL_KEY = 'hp_customer_email';
+
+    function saveCustomerEmail(email) {
+        try {
+            if (email && String(email).trim()) {
+                localStorage.setItem(CUSTOMER_EMAIL_KEY, String(email).trim().toLowerCase());
+            }
+        } catch (e) { /* ignore */ }
+    }
+
+    function getSavedCustomerEmail() {
+        try {
+            return localStorage.getItem(CUSTOMER_EMAIL_KEY) || '';
+        } catch (e) { return ''; }
+    }
+
+    // Restore immediately (DOM refs exist by this point)
+    restoreState();
+
+    // ─── Get cart items for delivery calculation ───
+    function getCartItemsForDelivery() {
+        return Object.values(cart).map(item => ({
+            product_id: parseInt(item.id) || 0,
+            qty: parseInt(item.qty) || 1,
+            name: item.name || 'Unknown',
+            price: parseInt(item.price) || 0
+        }));
+    }
+
+    // ─── Check delivery coverage with full intelligent fee ───
+    async function checkDeliveryCoverage(address, coords = null, attempt = 0) {
+        if (!address || address.trim().length < 5) {
+            return { covered: false, error: 'Please enter a full address' };
+        }
+
+        if (attempt === 0) {
+            isCheckingDelivery = true;
+            updateDeliveryStatus('loading', 'Checking delivery availability...');
+        }
+
+        const items = getCartItemsForDelivery();
+        const email = customerEmail.value.trim();
+
+        try {
+            const payload = {
+                address: address.trim(),
+                items: items.map(item => ({
+                    name: item.name || 'Unknown',
+                    qty: item.qty || 1,
+                    price: item.price || 0,
+                    product_id: parseInt(item.product_id) || 0
+                })),
+                order_total: cartTotalPrice || 0,
+                customer_email: email || undefined
+            };
+            if (coords && typeof coords.lat === 'number' && typeof coords.lng === 'number') {
+                payload.lat = coords.lat;
+                payload.lng = coords.lng;
+            }
+
+            const response = await fetch(`${API_BASE}/api/delivery-fee`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            // 4xx = a real answer ("not covered" / "bad address") — do not retry.
+            if (response.status >= 400 && response.status < 500) {
+                let msg = 'Delivery is not available for this address.';
+                try {
+                    const errData = await response.json();
+                    msg = errData.message || errData.detail || msg;
+                } catch (_) { /* ignore */ }
+                return { covered: false, error: msg };
+            }
+
+            // 5xx = server problem — fall through to retry
+            if (!response.ok) throw new Error(`Server error ${response.status}`);
+
+            return await response.json();
+
+        } catch (err) {
+            if (attempt < DELIVERY_FEE_MAX_RETRIES) {
+                console.warn(`Delivery fee attempt ${attempt + 1} failed, retrying…`, err.message);
+                await new Promise(r => setTimeout(r, DELIVERY_FEE_RETRY_DELAY_MS));
+                return checkDeliveryCoverage(address, coords, attempt + 1);
+            }
+
+            // Final failure — fail closed. Never invent a fee.
+            console.error('Delivery pricing unavailable:', err);
+            return {
+                covered: false,
+                unavailable: true,
+                error: err.message || 'Delivery pricing service unavailable'
+            };
+        } finally {
+            if (attempt === 0) isCheckingDelivery = false;
+        }
+    }
+
+    // ─── GEOCODING HELPERS (Amazon Location) ───
+    async function geocodeAddress(address) {
+        const data = await amazonPlacesFetch('geocode', {
+            QueryText: address,
+            MaxResults: 1,
+            Filter: { IncludeCountries: ['NGA'] },
+        });
+        const items = data.ResultItems || data.Results || [];
+        if (items.length === 0) throw new Error('Address not found');
+        const first = items[0];
+        const pos = first.Position || first.Place?.Geometry?.Point;
+        if (!pos) throw new Error('Address has no coordinates');
+        const [lng, lat] = pos;
+        return {
+            lat,
+            lng,
+            display_name: first.Address?.Label || first.Title || address,
+        };
+    }
+
+    async function reverseGeocode(lat, lng) {
+        const data = await amazonPlacesFetch('reverse-geocode', {
+            QueryPosition: [lng, lat],
+            MaxResults: 1,
+        });
+        const items = data.ResultItems || data.Results || [];
+        if (items.length === 0) throw new Error('Location not found');
+        const first = items[0];
+        return first.Address?.Label || first.Title || '';
+    }
+
+    function getCurrentPosition() {
+        return new Promise((resolve, reject) => {
+            if (!navigator.geolocation) {
+                reject(new Error('Geolocation not supported by your browser'));
+                return;
+            }
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    resolve({
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude
+                    });
+                },
+                (error) => {
+                    let message = 'Unable to get location';
+                    switch (error.code) {
+                        case error.PERMISSION_DENIED:
+                            message = 'Location permission denied. Please enable GPS in your browser settings.';
+                            break;
+                        case error.POSITION_UNAVAILABLE:
+                            message = 'Location information unavailable. Please check your GPS signal.';
+                            break;
+                        case error.TIMEOUT:
+                            message = 'Location request timed out. Please try again.';
+                            break;
+                    }
+                    reject(new Error(message));
+                }, {
+                    enableHighAccuracy: true,
+                    timeout: 15000,
+                    maximumAge: 60000
+                }
+            );
+        });
+    }
+
+    // ─── Update delivery breakdown UI ───
+    function updateBreakdownUI(breakdown) {
+        if (!breakdown) {
+            deliveryBreakdown.classList.remove('show');
+            return;
+        }
+
+        breakdownBase.textContent = formatPrice(breakdown.base || 0);
+        breakdownDiscount.textContent = `-${formatPrice(Math.abs(breakdown.value_discount || 0))}`;
+        breakdownSurcharge.textContent = `+${formatPrice(breakdown.item_surcharge || 0)}`;
+        breakdownPeak.textContent = `+${formatPrice(breakdown.peak_surcharge || 0)}`;
+        breakdownLoyalty.textContent = `-${formatPrice(Math.abs(breakdown.loyalty_discount || 0))}`;
+        breakdownTotal.textContent = formatPrice(breakdown.final || 0);
+
+        const hasAdjustments = breakdown.value_discount > 0 ||
+            breakdown.item_surcharge > 0 ||
+            breakdown.peak_surcharge > 0 ||
+            breakdown.loyalty_discount > 0;
+
+        if (hasAdjustments) {
+            deliveryBreakdown.classList.add('show');
+        } else {
+            deliveryBreakdown.classList.remove('show');
+        }
+    }
+
+    // ─── DELIVERY ADDRESS HANDLER ───
+    let deliveryDebounceTimer = null;
+
+    async function handleDeliveryAddressChange(precomputedCoords = null) {
+        const address = deliveryAddress.value.trim();
+
+        if (address.length < 5) {
+            resetDeliveryStatus();
+            return;
+        }
+
+        if (address === lastCheckedAddress && isDeliveryCovered && lastBreakdown) {
+            return;
+        }
+
+        lastCheckedAddress = address;
+
+        let coords = precomputedCoords;
+        if (!coords) {
+            try {
+                const geo = await geocodeAddress(address);
+                coords = { lat: geo.lat, lng: geo.lng };
+                console.log('📍 Amazon geocode ok:', coords);
+            } catch (e) {
+                console.warn('Amazon geocode failed, backend will fall back to Nominatim:', e.message);
+            }
+        }
+
+        const result = await checkDeliveryCoverage(address, coords);
+
+        if (result.unavailable) {
+            deliveryFee = 0;
+            isDeliveryCovered = false;
+            isDeliveryAvailable = false;
+            lastBreakdown = null;
+
+            deliveryStatus.className = 'delivery-status not-covered';
+            deliveryStatus.innerHTML =
+                '⚠️ We can\'t calculate the delivery fee right now. ' +
+                '<button type="button" id="delivery-retry" ' +
+                'style="background:none;border:none;color:var(--primary);font-weight:700;' +
+                'text-decoration:underline;cursor:pointer;padding:0;font-size:inherit;">Retry</button>' +
+                ' or choose Pickup / Dine-in.';
+
+            const retryBtn = document.getElementById('delivery-retry');
+            if (retryBtn) {
+                retryBtn.addEventListener('click', function () {
+                    lastCheckedAddress = '';
+                    handleDeliveryAddressChange();
+                });
+            }
+
+            updateDeliveryFeeUI(0);
+            deliveryBreakdown.classList.remove('show');
+            updateCheckoutButton();
+            return;
+        }
+
+        // Pricing API answered — reset availability flag
+        isDeliveryAvailable = true;
+
+        if (result.covered) {
+            deliveryFee = result.total_fee || result.fee || 0;
+            isDeliveryCovered = true;
+            lastBreakdown = result.breakdown || null;
+
+            const areaMsg = result.area_name ? ` (${result.area_name})` : '';
+            updateDeliveryStatus('covered', `✅ We deliver to your area! Fee: ${formatPrice(deliveryFee)}${areaMsg}`);
+            updateDeliveryFeeUI(deliveryFee);
+
+            if (lastBreakdown) {
+                updateBreakdownUI(lastBreakdown);
+            }
+        } else {
+            deliveryFee = 0;
+            isDeliveryCovered = false;
+            lastBreakdown = null;
+            updateDeliveryStatus('not-covered', result.message || '❌ Sorry, we don\'t deliver to this area yet.');
+            updateDeliveryFeeUI(0);
+            deliveryBreakdown.classList.remove('show');
+        }
+    }
+
+    function updateDeliveryStatus(type, message) {
+        deliveryStatus.className = 'delivery-status ' + type;
+        deliveryStatus.textContent = message;
+    }
+
+    function resetDeliveryStatus() {
+        deliveryStatus.className = 'delivery-status';
+        deliveryStatus.textContent = '';
+        isDeliveryCovered = false;
+        isDeliveryAvailable = true;
+        deliveryFee = 0;
+        lastBreakdown = null;
+        updateDeliveryFeeUI(0);
+        deliveryBreakdown.classList.remove('show');
+    }
+
+    function updateDeliveryFeeUI(fee) {
+        deliveryFeeDisplay.innerHTML = `Delivery fee: <span>${formatPrice(fee)}</span>
+            <span class="fee-breakdown-toggle" id="fee-breakdown-toggle">Show breakdown</span>`;
+
+        const newToggle = document.getElementById('fee-breakdown-toggle');
+        if (newToggle) {
+            newToggle.addEventListener('click', function() {
+                deliveryBreakdown.classList.toggle('show');
+                this.textContent = deliveryBreakdown.classList.contains('show') ? 'Hide breakdown' : 'Show breakdown';
+            });
+        }
+
+        updateCartUI();
+    }
+
+    // ─── GPS BUTTON HANDLER ───
+    async function handleGPSButton() {
+        if (deliveryMethod !== 'delivery') {
+            showToast('Please select "Delivery" first.', 'fa-solid fa-exclamation-circle');
+            return;
+        }
+
+        gpsBtn.disabled = true;
+        gpsBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Locating...';
+
+        try {
+            const position = await getCurrentPosition();
+            const address = await reverseGeocode(position.lat, position.lng);
+
+            if (address) {
+                deliveryAddress.value = address;
+                await handleDeliveryAddressChange({
+                    lat: position.lat,
+                    lng: position.lng
+                });
+                persistState();
+                showToast('📍 Location found!', 'fa-solid fa-check-circle');
+            }
+        } catch (err) {
+            showToast('GPS error: ' + err.message, 'fa-solid fa-exclamation-circle');
+            console.warn('GPS error:', err);
+        } finally {
+            gpsBtn.disabled = false;
+            gpsBtn.innerHTML = '<i class="fa-solid fa-location-crosshairs" aria-hidden="true"></i> GPS';
+        }
+    }
+
+    // ─── ADDRESS AUTOCOMPLETE (Amazon Location) ───
+    async function searchAddresses(query) {
+        if (!query || query.length < 2) {
+            addressDropdown.classList.remove('show');
+            return;
+        }
+
+        const loadingEl = addressDropdown.querySelector('.address-autocomplete-loading');
+        const emptyEl = addressDropdown.querySelector('.address-autocomplete-empty');
+        loadingEl.style.display = 'block';
+        emptyEl.style.display = 'none';
+        addressDropdown.classList.add('show');
+
+        try {
+            const data = await amazonPlacesFetch('autocomplete', {
+                QueryText: query,
+                MaxResults: 6,
+                Language: 'en',
+                Filter: { IncludeCountries: ['NGA'] },
+            });
+
+            loadingEl.style.display = 'none';
+
+            const items = addressDropdown.querySelectorAll('.address-autocomplete-item');
+            items.forEach(el => el.remove());
+
+            const results = data.ResultItems || data.Results || [];
+            if (results.length === 0) {
+                emptyEl.style.display = 'block';
+                return;
+            }
+
+            emptyEl.style.display = 'none';
+
+            results.forEach(result => {
+                const item = document.createElement('div');
+                item.className = 'address-autocomplete-item';
+
+                const displayName = result.Address?.Label || result.Title || result.Text || 'Unknown location';
+                const subText = [
+                    result.Address?.Locality,
+                    result.Address?.Region?.Name,
+                    result.Address?.Country?.Name,
+                ].filter(Boolean).join(', ');
+
+                item.innerHTML = `
+                    <span>${highlightText(displayName, query)}</span>
+                    ${subText ? `<span class="sub-text">${highlightText(subText, query)}</span>` : ''}
+                `;
+
+                item.addEventListener('mousedown', function(e) {
+                    e.preventDefault();
+                    deliveryAddress.value = displayName;
+                    addressDropdown.classList.remove('show');
+                    deliveryAddress.dispatchEvent(new Event('input', { bubbles: true }));
+                });
+
+                addressDropdown.appendChild(item);
+            });
+
+        } catch (err) {
+            console.warn('Autocomplete error:', err);
+            loadingEl.style.display = 'none';
+            emptyEl.style.display = 'block';
+            emptyEl.textContent = 'Error searching locations';
+        }
+    }
+
+    function highlightText(text, query) {
+        if (!query || !text) return text;
+        const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+        return text.replace(regex, '<span class="highlight">$1</span>');
+    }
+
+    // ─── LOAD PRODUCTS FROM BACKEND API ───
+    async function loadProductsFromAPI() {
+        try {
+            const response = await fetch(`${API_BASE}/api/products`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            if (data && data.length > 0) {
+                products = data;
+                categories = [...new Set(products.map(p => p.tag))].sort();
+                isDataLoaded = true;
+                console.log(`✅ Loaded ${products.length} products from backend API`);
+                console.log('📦 Categories:', categories);
+                return true;
+            } else {
+                console.warn('⚠️ No products available from database');
+                return false;
+            }
+        } catch (err) {
+            console.warn('⚠️ API fetch failed:', err);
+            return false;
+        }
+    }
+
+    // ─── LOAD BANNERS ───
+    async function loadBannersFromAPI() {
+        try {
+            const response = await fetch(`${API_BASE}/api/v1/banners/active`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            if (data && data.length > 0) {
+                banners = data;
+                console.log(`✅ Loaded ${banners.length} banners from backend API`);
+                renderHeroSlides();
+                return true;
+            } else {
+                console.warn('⚠️ No active banners in database');
+                return false;
+            }
+        } catch (err) {
+            console.warn('⚠️ Banner API fetch failed:', err);
+            return false;
+        }
+    }
+
+    // ─── RENDER HERO SLIDES ───
+    function renderHeroSlides() {
+        const slider = document.getElementById('hero-slider');
+        if (!slider) return;
+
+        if (!banners || banners.length === 0) {
+            console.log('No active banners to display');
+            return;
+        }
+
+        const slides = slider.querySelectorAll('.hero-slide');
+        slides.forEach(s => s.remove());
+
+        let html = '';
+        banners.forEach((banner, index) => {
+            const activeClass = index === 0 ? 'active' : '';
+            const discountDisplay = banner.discount_value ?
+                `<div class="hero-offer">
+                    <span class="percent">${banner.discount_type === 'percentage' ? banner.discount_value + '%' : '₦' + banner.discount_value}</span>
+                    <span class="label">
+                        ${banner.discount_type === 'percentage' ? 'OFF' : 'OFF'} 
+                        <small>${banner.discount_type === 'percentage' ? 'Limited time!' : 'Save now!'}</small>
+                    </span>
+                </div>` : '';
+
+            const ctaHtml = banner.cta_text ?
+                `<div class="hero-cta">
+                    <button class="btn-primary" style="background:${banner.badge_color || '#E53935'};">
+                        <i class="fa-solid fa-bag-shopping"></i> ${banner.cta_text}
+                    </button>
+                </div>` : '';
+
+            html += `
+                <div class="hero-slide ${activeClass}" data-index="${index}">
+                    ${banner.badge_text ? `<span class="hero-badge" style="background:${banner.badge_color || '#FFC107'};">${banner.badge_text}</span>` : ''}
+                    <h1 style="color:${banner.text_color || '#1e1e1e'};">
+                        ${banner.title}
+                        ${banner.subtitle ? `<br><span style="color:${banner.badge_color || '#E53935'};">${banner.subtitle}</span>` : ''}
+                    </h1>
+                    ${banner.description ? `<p style="color:${banner.text_color || '#4a4a4a'};}">${banner.description}</p>` : ''}
+                    ${discountDisplay}
+                    ${ctaHtml}
+                </div>
+            `;
+        });
+
+        const prevArrow = slider.querySelector('.hero-arrow.prev');
+        if (prevArrow) {
+            prevArrow.insertAdjacentHTML('beforebegin', html);
+        } else {
+            slider.innerHTML = html + slider.innerHTML;
+        }
+
+        const dotContainer = document.getElementById('hero-dots');
+        if (dotContainer) {
+            dotContainer.innerHTML = '';
+            banners.forEach((_, i) => {
+                const dot = document.createElement('button');
+                dot.className = `hero-dot${i === 0 ? ' active' : ''}`;
+                dot.setAttribute('role', 'tab');
+                dot.setAttribute('aria-label', `Slide ${i + 1}`);
+                dot.addEventListener('click', () => goToHeroSlide(i));
+                dotContainer.appendChild(dot);
+            });
+        }
+
+        heroCurrentIndex = 0;
+        isHeroTransitioning = false;
+
+        document.querySelectorAll('.hero-slide .hero-cta .btn-primary').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                document.getElementById('menu-section').scrollIntoView({ behavior: 'smooth' });
+                setTimeout(openCart, 500);
+            });
+        });
+
+        stopHeroAutoplay();
+        startHeroAutoplay();
+    }
+
+    // ─── PRODUCT REFRESH ───
+    async function refreshProducts() {
+        await loadProductsFromAPI();
+        renderCategoriesPills();
+        renderMenu();
+        renderFeatured();
+        console.log('🔄 Products refreshed after stock adjustment');
+    }
+
+    // ─── INIT DATA ───
+    async function initData() {
+        if (shimmerWrapper) shimmerWrapper.style.display = 'grid';
+
+        await loadProductsFromAPI();
+        isDataLoaded = true;
+
+        if (window.__injectProductSchemas && products.length) {
+            window.__injectProductSchemas(products);
+            if (typeof window.__updateFeaturedItems === 'function') {
+                window.__updateFeaturedItems(products);
+            }
+        }
+
+        await loadBannersFromAPI();
+
+        if (shimmerWrapper) shimmerWrapper.style.display = 'none';
+
+        renderCategoriesPills();
+        renderMenu();
+        renderFeatured();
+        updateCartUI();
+        initChat();
+
+        initHeroDots();
+        startHeroAutoplay();
+
+        handlePaymentRedirect();
+
+        console.log(`🍔 Hot Portion Grill — ${products.length} meals, ${categories.length} categories`);
+    }
+
+    // ─── FILTERED PRODUCTS ───
+    function getFilteredProducts() {
+        let filtered = products;
+        if (searchQuery.trim()) {
+            const q = searchQuery.trim().toLowerCase();
+            filtered = filtered.filter(p =>
+                p.name.toLowerCase().includes(q) ||
+                p.description.toLowerCase().includes(q) ||
+                p.tag.toLowerCase().includes(q)
+            );
+        }
+        if (selectedCategory) {
+            filtered = filtered.filter(p => p.tag === selectedCategory);
+        }
+        return filtered;
+    }
+
+    // ─── RENDER CATEGORY PILLS ───
+    function renderCategoriesPills() {
+        if (!categoriesPills) return;
+        let html = '';
+        const allActive = selectedCategory === '' ? 'active' : '';
+        html +=
+            `<span class="cat-pill ${allActive}" data-category="">All <span class="pill-count">(${products.length})</span></span>`;
+        categories.forEach(cat => {
+            const count = products.filter(p => p.tag === cat).length;
+            const isActive = selectedCategory === cat ? 'active' : '';
+            html +=
+                `<span class="cat-pill ${isActive}" data-category="${cat}">${cat} <span class="pill-count">(${count})</span></span>`;
+        });
+        categoriesPills.innerHTML = html;
+
+        categoriesPills.querySelectorAll('.cat-pill').forEach(pill => {
+            pill.addEventListener('click', function() {
+                const cat = this.dataset.category;
+                filterByCategory(cat);
+            });
+        });
+    }
+
+    // ─── FILTER BY CATEGORY ───
+    function filterByCategory(cat) {
+        if (selectedCategory === cat) {
+            selectedCategory = '';
+        } else {
+            selectedCategory = cat;
+        }
+        renderCategoriesPills();
+        searchInput.value = '';
+        searchQuery = '';
+        searchClear.style.display = 'none';
+        performSearch();
+        document.getElementById('menu-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    // ─── RENDER MENU ───
+    function renderMenu() {
+        if (!isDataLoaded) return;
+        const filtered = getFilteredProducts();
+        menuGrid.innerHTML = '';
+        if (filtered.length === 0) {
+            menuGrid.innerHTML =
+                `<div class="col-span-full text-center py-12 text-gray-500"><i class="fa-regular fa-face-frown text-2xl"></i><p class="mt-2">No meals match your search.</p></div>`;
+            return;
+        }
+        filtered.forEach((p, idx) => {
+            const card = document.createElement('div');
+            card.className = 'menu-card';
+            card.style.animationDelay = (idx * 0.04) + 's';
+            const tagColor = p.tagColor === 'orange' ? 'orange' : '';
+            const imageHtml = p.image ?
+                `<img src="${p.image}" alt="${p.name}" loading="lazy" width="300" height="200" onerror="this.style.display='none'">` :
+                `<span class="food-emoji">${p.emoji || '🍽️'}</span>`;
+            card.innerHTML = `
+                <div class="menu-card-image">
+                    <span class="emoji-bg">${p.emoji || '🍽️'}</span>
+                    ${imageHtml}
+                    <span class="tag ${tagColor}">${p.tag}</span>
+                </div>
+                <div class="menu-card-body">
+                    <h3>${p.name}</h3>
+                    <p class="desc">${p.description}</p>
+                    <div class="price">${formatPrice(p.price)}</div>
+                    <div class="actions">
+                        <div class="qty-control" data-product-id="${p.id}">
+                            <button class="minus" aria-label="Decrease quantity">−</button>
+                            <span class="qty-num">1</span>
+                            <button class="plus" aria-label="Increase quantity">+</button>
+                        </div>
+                        <button class="btn-primary add-to-cart" data-id="${p.id}">
+                            <i class="fa-solid fa-plus"></i> Add
+                        </button>
+                    </div>
+                </div>
+            `;
+            menuGrid.appendChild(card);
+        });
+
+        document.querySelectorAll('.qty-control').forEach(ctrl => {
+            const minus = ctrl.querySelector('.minus');
+            const plus = ctrl.querySelector('.plus');
+            const num = ctrl.querySelector('.qty-num');
+            minus.addEventListener('click', function(e) {
+                e.stopPropagation();
+                let val = parseInt(num.textContent) || 1;
+                if (val > 1) val--;
+                num.textContent = val;
+            });
+            plus.addEventListener('click', function(e) {
+                e.stopPropagation();
+                let val = parseInt(num.textContent) || 1;
+                val++;
+                num.textContent = val;
+            });
+        });
+
+        document.querySelectorAll('.add-to-cart').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                const id = this.dataset.id;
+                const card = this.closest('.menu-card');
+                const qtyCtrl = card.querySelector('.qty-control');
+                const qtyNum = qtyCtrl.querySelector('.qty-num');
+                const qty = parseInt(qtyNum.textContent) || 1;
+                addToCart(id, qty);
+            });
+        });
+    }
+
+    // ─── RENDER FEATURED CAROUSEL ───
+    function renderFeatured() {
+        if (!featuredGrid || !isDataLoaded) return;
+        const featuredItems = products.slice(0, 8);
+        const isMobile = window.innerWidth <= 640;
+        const itemsPerSlide = isMobile ? 1 : 2;
+
+        const slides = [];
+        for (let i = 0; i < featuredItems.length; i += itemsPerSlide) {
+            slides.push(featuredItems.slice(i, i + itemsPerSlide));
+        }
+
+        featuredGrid.innerHTML = '';
+        const carousel = document.createElement('div');
+        carousel.className = 'featured-carousel';
+
+        slides.forEach((chunk, idx) => {
+            const slide = document.createElement('div');
+            slide.className = `featured-slide${idx === 0 ? ' active' : ''}`;
+            slide.dataset.index = idx;
+            chunk.forEach(p => {
+                const card = document.createElement('div');
+                card.className = 'pf-product-card menu-card';
+                card.style.animation = 'none';
+                const tagColor = p.tagColor === 'orange' ? 'orange' : '';
+                const imageHtml = p.image ?
+                    `<img src="${p.image}" alt="${p.name}" loading="lazy" width="300" height="200" onerror="this.style.display='none'">` :
+                    `<span class="food-emoji">${p.emoji || '🍽️'}</span>`;
+                card.innerHTML = `
+                    <div class="menu-card-image">
+                        <span class="emoji-bg">${p.emoji || '🍽️'}</span>
+                        ${imageHtml}
+                        <span class="tag ${tagColor}">${p.tag}</span>
+                    </div>
+                    <div class="menu-card-body">
+                        <h3>${p.name}</h3>
+                        <p class="desc">${p.description}</p>
+                        <div class="price">${formatPrice(p.price)}</div>
+                        <div class="actions">
+                            <div class="qty-control" data-product-id="${p.id}">
+                                <button class="minus" aria-label="Decrease quantity">−</button>
+                                <span class="qty-num">1</span>
+                                <button class="plus" aria-label="Increase quantity">+</button>
+                            </div>
+                            <button class="btn-primary add-to-cart" data-id="${p.id}">
+                                <i class="fa-solid fa-plus"></i> Add
+                            </button>
+                        </div>
+                    </div>
+                `;
+                slide.appendChild(card);
+            });
+            carousel.appendChild(slide);
+        });
+
+        featuredGrid.appendChild(carousel);
+
+        featuredGrid.querySelectorAll('.qty-control').forEach(ctrl => {
+            const minus = ctrl.querySelector('.minus');
+            const plus = ctrl.querySelector('.plus');
+            const num = ctrl.querySelector('.qty-num');
+            minus.addEventListener('click', function(e) {
+                e.stopPropagation();
+                let val = parseInt(num.textContent) || 1;
+                if (val > 1) val--;
+                num.textContent = val;
+            });
+            plus.addEventListener('click', function(e) {
+                e.stopPropagation();
+                let val = parseInt(num.textContent) || 1;
+                val++;
+                num.textContent = val;
+            });
+        });
+        featuredGrid.querySelectorAll('.add-to-cart').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                const id = this.dataset.id;
+                const card = this.closest('.menu-card');
+                const qtyCtrl = card.querySelector('.qty-control');
+                const qtyNum = qtyCtrl.querySelector('.qty-num');
+                const qty = parseInt(qtyNum.textContent) || 1;
+                addToCart(id, qty);
+            });
+        });
+
+        let current = 0;
+        const totalSlides = slides.length;
+        if (totalSlides > 1) {
+            if (window.featuredInterval) clearInterval(window.featuredInterval);
+            window.featuredInterval = setInterval(() => {
+                const slidesElements = featuredGrid.querySelectorAll('.featured-slide');
+                slidesElements.forEach((s, i) => s.classList.toggle('active', i === current));
+                current = (current + 1) % totalSlides;
+            }, 4000);
+        }
+    }
+
+    // ─── CART OPERATIONS ───
+    function addToCart(productId, qty = 1) {
+        const product = products.find(p => p.id == productId);
+        if (!product) return;
+        if (cart[productId]) {
+            cart[productId].qty += qty;
+        } else {
+            cart[productId] = { ...product, qty: qty };
+        }
+        updateCartUI();
+        persistState();
+        if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
+            lastCheckedAddress = '';
+            setTimeout(handleDeliveryAddressChange, 100);
+        }
+        showToast(`${product.name} added to cart!`, 'fa-solid fa-check-circle');
+    }
+
+    function removeFromCart(productId) {
+        if (cart[productId]) {
+            delete cart[productId];
+            updateCartUI();
+            persistState();
+            if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
+                lastCheckedAddress = '';
+                setTimeout(handleDeliveryAddressChange, 100);
+            }
+        }
+    }
+
+    function updateQty(productId, delta) {
+        if (!cart[productId]) return;
+        const newQty = cart[productId].qty + delta;
+        if (newQty <= 0) {
+            removeFromCart(productId);
+        } else {
+            cart[productId].qty = newQty;
+            updateCartUI();
+            persistState();
+            if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
+                lastCheckedAddress = '';
+                setTimeout(handleDeliveryAddressChange, 100);
+            }
+        }
+    }
+
+    function updateCartUI() {
+        let totalItems = 0;
+        let totalPrice = 0;
+        const items = Object.values(cart);
+        items.forEach(item => {
+            totalItems += item.qty;
+            totalPrice += item.price * item.qty;
+        });
+        cartTotalItems = totalItems;
+        cartTotalPrice = totalPrice;
+        cartBadge.textContent = totalItems;
+        if (navCartBadge) navCartBadge.textContent = totalItems;
+
+        if (totalItems === 0) {
+            cartItemsEl.innerHTML = `
+                <div class="cart-empty">
+                    <i class="fa-regular fa-bag-shopping"></i>
+                    <p>Your cart is empty.<br />Add some delicious items!</p>
+                </div>
+            `;
+        } else {
+            let html = '';
+            items.forEach(item => {
+                const itemTotal = item.price * item.qty;
+                const imageHtml = item.image ?
+                    `<img src="${item.image}" alt="${item.name}" class="item-image" loading="lazy" width="48" height="48" onerror="this.style.display='none'">` :
+                    `<span class="item-emoji">${item.emoji || '🍽️'}</span>`;
+                html += `
+                    <div class="cart-item" data-id="${item.id}">
+                        ${imageHtml}
+                        <div class="item-info">
+                            <h4>${item.name}</h4>
+                            <div class="item-price">${formatPrice(item.price)} each</div>
+                        </div>
+                        <div class="item-qty">
+                            <button class="qty-minus" data-id="${item.id}">−</button>
+                            <span class="qty-num">${item.qty}</span>
+                            <button class="qty-plus" data-id="${item.id}">+</button>
+                            <button class="remove" data-id="${item.id}" style="color:var(--primary);font-size:0.9rem;width:28px;height:28px;border:none;background:transparent;cursor:pointer;border-radius:50%;display:flex;align-items:center;justify-content:center;"><i class="fa-regular fa-trash-can"></i></button>
+                        </div>
+                        <div class="item-total">${formatPrice(itemTotal)}</div>
+                    </div>
+                `;
+            });
+            cartItemsEl.innerHTML = html;
+            cartItemsEl.querySelectorAll('.qty-minus').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const id = this.dataset.id;
+                    updateQty(id, -1);
+                });
+            });
+            cartItemsEl.querySelectorAll('.qty-plus').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const id = this.dataset.id;
+                    updateQty(id, 1);
+                });
+            });
+            cartItemsEl.querySelectorAll('.remove').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const id = this.dataset.id;
+                    removeFromCart(id);
+                });
+            });
+        }
+
+        const subtotal = cartTotalPrice;
+        const finalDeliveryFee = (deliveryMethod === 'delivery' && isDeliveryCovered) ? deliveryFee : 0;
+        const total = subtotal + finalDeliveryFee;
+        cartSubtotal.textContent = formatPrice(subtotal);
+        cartDeliveryFee.textContent = formatPrice(finalDeliveryFee);
+        if (deliveryMethod === 'delivery' && finalDeliveryFee > 0) {
+            deliveryFeeRow.style.display = 'flex';
+        } else {
+            deliveryFeeRow.style.display = 'none';
+        }
+        cartTotal.textContent = formatPrice(total);
+
+        updateCheckoutButton();
+    }
+
+    // ─── UPDATE CHECKOUT BUTTON ───
+    // [FEATURE] Button text now varies between online and offline flows.
+    function updateCheckoutButton() {
+        const items = Object.values(cart);
+        const hasItems = items.length > 0;
+        const name = customerName.value.trim();
+        const email = customerEmail.value.trim();
+        const phone = customerPhone.value.trim();
+        const isDelivery = deliveryMethod === 'delivery';
+        const addressOk = !isDelivery || (isDeliveryCovered && deliveryAddress.value.trim().length > 5);
+        const isOffline = (paymentMethod === 'offline' && !isDelivery);
+
+        let disabled = !hasItems || !name || !email || !phone;
+        if (isDelivery) {
+            disabled = disabled || !addressOk;
+        }
+
+        checkoutBtn.disabled = disabled;
+
+        if (!hasItems) {
+            checkoutBtn.innerHTML = '<i class="fa-regular fa-credit-card"></i> Add items to cart';
+        } else if (isDelivery && !isDeliveryAvailable && deliveryAddress.value.trim().length > 5) {
+            checkoutBtn.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Delivery pricing unavailable';
+        } else if (isDelivery && !isDeliveryCovered && deliveryAddress.value.trim().length > 5) {
+            checkoutBtn.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Address not covered';
+        } else if (isDelivery && deliveryAddress.value.trim().length < 5) {
+            checkoutBtn.innerHTML = '<i class="fa-regular fa-credit-card"></i> Enter delivery address';
+        } else if (!name || !email || !phone) {
+            checkoutBtn.innerHTML = '<i class="fa-regular fa-credit-card"></i> Fill in your details';
+        } else if (isOffline) {
+            checkoutBtn.innerHTML = '<i class="fa-solid fa-bag-shopping"></i> Place Order';
+        } else {
+            checkoutBtn.innerHTML = '<i class="fa-regular fa-credit-card"></i> Proceed to Payment';
+        }
+    }
+
+    // ─── PAYMENT METHOD ───
+    // [FEATURE] setPaymentMethod updates the toggle UI, the hint text,
+    // the cart footer note, and the checkout button.
+    function setPaymentMethod(method) {
+        paymentMethod = (method === 'offline') ? 'offline' : 'online';
+        paymentOptions.forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.payment === paymentMethod);
+        });
+        if (paymentMethodHint) {
+            paymentMethodHint.textContent = paymentMethod === 'offline'
+                ? 'Pay at the counter when you arrive. No online payment needed.'
+                : 'Secure online payment with Monnify.';
+        }
+        updateCartFooterNote();
+        updateCheckoutButton();
+        persistState();
+    }
+
+    // [FEATURE] Cart footer note reflects the current payment method.
+    function updateCartFooterNote() {
+        if (!cartFooterNote) return;
+        if (paymentMethod === 'offline' && deliveryMethod !== 'delivery') {
+            cartFooterNote.innerHTML = '💵 Pay at the counter when you arrive';
+        } else {
+            cartFooterNote.innerHTML = '🔒 Secure payment with Monnify';
+        }
+    }
+
+    // ─── DELIVERY METHOD ───
+    // [FEATURE] Delivery forces online payment and hides the payment selector.
+    function setDeliveryMethod(method) {
+        deliveryMethod = method;
+        deliveryOptions.forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.method === method);
+        });
+
+        if (method === 'delivery') {
+            // Delivery: only online is valid. Hide the payment selector
+            // and force paymentMethod = 'online'.
+            if (paymentMethodGroup) paymentMethodGroup.style.display = 'none';
+            if (paymentMethod !== 'online') {
+                // Set directly (avoid double persistState via setPaymentMethod)
+                paymentMethod = 'online';
+                paymentOptions.forEach(b => b.classList.toggle('active', b.dataset.payment === 'online'));
+                if (paymentMethodHint) {
+                    paymentMethodHint.textContent = 'Secure online payment with Monnify.';
+                }
+            }
+
+            isDeliveryAvailable = true;
+            addressGroup.style.display = 'block';
+            deliveryAddress.required = true;
+            if (deliveryAddress.value.trim().length >= 5) {
+                handleDeliveryAddressChange();
+            } else {
+                resetDeliveryStatus();
+                deliveryFee = 0;
+                updateDeliveryFeeUI(0);
+            }
+        } else {
+            // Pickup / Dine-in: show payment selector.
+            if (paymentMethodGroup) paymentMethodGroup.style.display = 'block';
+            addressGroup.style.display = 'none';
+            deliveryAddress.required = false;
+            isDeliveryCovered = false;
+            deliveryFee = 0;
+            lastBreakdown = null;
+            resetDeliveryStatus();
+            updateDeliveryFeeUI(0);
+            deliveryFeeRow.style.display = 'none';
+            deliveryBreakdown.classList.remove('show');
+        }
+
+        updateCartFooterNote();
+        updateCartUI();
+        updateCheckoutButton();
+        persistState();
+    }
+
+    // ─── RECEIPT ───
+    // [FEATURE] Handles both online (Monnify-paid) and offline
+    // (pay-at-counter) orders. Header, total label, and footer text
+    // are all driven by orderData.payment_method.
+    // [SECURITY] All customer-controlled fields are passed through
+    // escapeHtml() before being interpolated into the receipt markup.
+    function showReceipt(orderData) {
+        lastOrderData = orderData;
+        const isOffline = (orderData.payment_method === 'offline');
+
+        const items = orderData.items || [];
+        const deliveryMethodLabel = {
+            pickup: '🏃 Pickup',
+            delivery: '🛵 Delivery',
+            dinein: '🍽️ Dine-in'
+        } [orderData.delivery_method] || 'Pickup';
+
+        // Header text varies by payment mode
+        if (isOffline) {
+            if (receiptStatusIcon) receiptStatusIcon.className = 'fa-solid fa-money-bill-wave';
+            if (receiptStatusTitle) receiptStatusTitle.textContent = 'Order Placed!';
+            if (receiptStatusSubtitle) receiptStatusSubtitle.textContent =
+                `Pay ${formatPrice(orderData.total)} at the counter when you arrive.`;
+        } else {
+            if (receiptStatusIcon) receiptStatusIcon.className = 'fa-regular fa-circle-check';
+            if (receiptStatusTitle) receiptStatusTitle.textContent = 'Payment Successful!';
+            if (receiptStatusSubtitle) receiptStatusSubtitle.textContent = 'Your order has been confirmed.';
+        }
+
+        let itemsHtml = items.map(item => `
+            <div class="receipt-item-row">
+                <span class="item-name">${escapeHtml(item.name)} <span class="qty-badge">×${item.qty}</span></span>
+                <span>${formatPrice(item.price * item.qty)}</span>
+            </div>
+        `).join('');
+
+        let deliveryHtml = '';
+        if (orderData.delivery_method === 'delivery') {
+            deliveryHtml = `
+                <div class="receipt-row">
+                    <span class="label">Delivery Fee</span>
+                    <span class="value">${formatPrice(orderData.delivery_fee || 0)}</span>
+                </div>
+                <div class="receipt-row">
+                    <span class="label">Delivery Address</span>
+                    <span class="value" style="font-weight:400;max-width:60%;">${escapeHtml(orderData.delivery_address) || 'N/A'}</span>
+                </div>
+            `;
+        }
+
+        const totalLabel = isOffline ? 'Total Due' : 'Total Paid';
+
+        // Footer text varies by payment mode
+        const footerHtml = isOffline
+            ? `<div class="receipt-footer">
+                   <i class="fa-solid fa-money-bill-wave"></i> Show this reference at the counter and pay on arrival.<br>
+                   <span style="font-size:0.65rem;">Order Reference: ${escapeHtml(orderData.payment_reference)}</span>
+               </div>`
+            : `<div class="receipt-footer">
+                   <i class="fa-regular fa-envelope"></i> A receipt has been sent to your email.<br>
+                   <span style="font-size:0.65rem;">Payment via Monnify | Transaction ID: ${escapeHtml(orderData.payment_reference)}</span>
+               </div>`;
+
+        receiptBody.innerHTML = `
+            <div class="receipt-row"><span class="label">Receipt #</span><span class="value" style="font-family:monospace;">${escapeHtml(orderData.payment_reference)}</span></div>
+            <div class="receipt-row"><span class="label">Customer</span><span class="value">${escapeHtml(orderData.customer_name)}</span></div>
+            <div class="receipt-row"><span class="label">Email</span><span class="value">${escapeHtml(orderData.customer_email)}</span></div>
+            <div class="receipt-row"><span class="label">Phone</span><span class="value">${escapeHtml(orderData.customer_phone)}</span></div>
+            <div class="receipt-row"><span class="label">Date</span><span class="value">${new Date().toLocaleString()}</span></div>
+            <div class="receipt-row"><span class="label">Delivery</span><span class="value">${deliveryMethodLabel}</span></div>
+            ${orderData.preferred_time ? `<div class="receipt-row"><span class="label">Preferred Time</span><span class="value">${escapeHtml(orderData.preferred_time)}</span></div>` : ''}
+            <hr class="receipt-divider">
+            <div class="receipt-items">${itemsHtml}</div>
+            ${deliveryHtml}
+            <hr class="receipt-divider">
+            <div class="receipt-total">
+                <div class="receipt-row" style="font-size:1.1rem;font-weight:800;padding-top:8px;border-top:2px solid var(--primary);margin-top:4px;">
+                    <span class="label">${totalLabel}</span>
+                    <span class="value" style="color:var(--primary);">${formatPrice(orderData.total)}</span>
+                </div>
+            </div>
+            ${footerHtml}
+            <div class="receipt-download-wrap">
+                <button class="btn-primary" id="receipt-download-btn" type="button">
+                    <i class="fa-solid fa-file-pdf"></i> Download PDF Receipt
+                </button>
+            </div>
+        `;
+        receiptOverlay.classList.add('open');
+        document.body.style.overflow = 'hidden';
+
+        const dlBtn = document.getElementById('receipt-download-btn');
+        if (dlBtn) dlBtn.addEventListener('click', downloadReceiptPDF);
+    }
+
+    // ─── RECEIPT PDF DOWNLOAD ───
+    async function downloadReceiptPDF() {
+        if (typeof html2pdf === 'undefined') {
+            showToast('PDF library not loaded. Please try again.', 'fa-solid fa-exclamation-circle');
+            return;
+        }
+        const btn = document.getElementById('receipt-download-btn');
+        if (!btn) return;
+        const original = btn.innerHTML;
+        btn.innerHTML = '<span class="loader-small"></span> Generating PDF...';
+        btn.disabled = true;
+
+        try {
+            // Clone the modal so the PDF doesn't include the close button / download button
+            const clone = receiptModal.cloneNode(true);
+            const cClose = clone.querySelector('.receipt-close');
+            if (cClose) cClose.remove();
+            const cDl = clone.querySelector('#receipt-download-btn');
+            if (cDl) cDl.parentElement.remove();
+            const cHeader = clone.querySelector('.receipt-header');
+            if (cHeader) cHeader.style.position = 'static';
+
+            const ref = (lastOrderData && lastOrderData.payment_reference) || ('order-' + Date.now());
+            await html2pdf().set({
+                margin: 0,
+                filename: `HotPortion-Receipt-${ref}.pdf`,
+                image: { type: 'jpeg', quality: 0.98 },
+                html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+                jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+            }).from(clone).save();
+
+            showToast('Receipt downloaded!', 'fa-solid fa-circle-check');
+        } catch (err) {
+            console.error('PDF generation failed:', err);
+            showToast('Failed to generate PDF. Please try again.', 'fa-solid fa-exclamation-circle');
+        } finally {
+            btn.innerHTML = original;
+            btn.disabled = true;
+            btn.disabled = false;
+        }
+    }
+
+    function closeReceipt() {
+        receiptOverlay.classList.remove('open');
+        document.body.style.overflow = '';
+        cart = {};
+        updateCartUI();
+        closeCart();
+        customerName.value = '';
+        customerEmail.value = '';
+        customerPhone.value = '';
+        deliveryAddress.value = '';
+        orderNotes.value = '';
+        preferredTime.value = '';
+        isDeliveryCovered = false;
+        deliveryFee = 0;
+        lastBreakdown = null;
+        // [CHANGE] Clear the checkout idempotency key so the next order
+        // starts with a fresh key. This is what guarantees that the
+        // NEXT checkout (a new intent) is never deduped against the
+        // one we just completed.
+        checkoutIdempotencyKey = null;
+        try { sessionStorage.removeItem(CHECKOUT_IDEMPOTENCY_KEY); } catch (e) { /* ignore */ }
+        resetDeliveryStatus();
+        updateDeliveryFeeUI(0);
+        deliveryFeeRow.style.display = 'none';
+        deliveryBreakdown.classList.remove('show');
+        clearPersistedState();
+        showToast('✅ Order placed successfully!', 'fa-solid fa-check-circle');
+        refreshProducts();
+    }
+    receiptClose.addEventListener('click', closeReceipt);
+    receiptOverlay.addEventListener('click', function(e) { if (e.target === this) closeReceipt(); });
+
+    // ─── FETCH ORDER BY REFERENCE ───
+    // [CHANGE] Now requires an email. The backend endpoint
+    // /api/orders/by-reference/{ref} requires ?email=<customer_email>
+    // to prevent reference-only PII leaks.
+    async function fetchOrderByReference(ref, email) {
+        if (!ref || !email) return null;
+        try {
+            const url = `${API_BASE}/api/orders/by-reference/${encodeURIComponent(ref)}?email=${encodeURIComponent(email)}`;
+            const response = await fetch(url);
+            if (response.status === 404) return null;
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return await response.json();
+        } catch (err) {
+            console.warn('Failed to fetch order:', err);
+            return null;
+        }
+    }
+
+    // ─── HANDLE MONNIFY REDIRECT ───
+    function handlePaymentRedirect() {
+        let queryString = window.location.search;
+        if (queryString.includes('?') && queryString.indexOf('?') !== queryString.lastIndexOf('?')) {
+            queryString = '?' + window.location.search.split('?').pop();
+        }
+        const urlParams = new URLSearchParams(queryString);
+        const transactionRef = urlParams.get('transactionReference') || urlParams.get('paymentReference');
+        let status = urlParams.get('status') || urlParams.get('paymentStatus');
+
+        if (transactionRef) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+
+            let orderData = null;
+            const stored = sessionStorage.getItem('pending_order');
+            if (stored) {
+                try {
+                    orderData = JSON.parse(stored);
+                } catch (e) { /* ignore */ }
+            }
+
+            const normalizedStatus = (status || '').toUpperCase();
+            const paymentOk = normalizedStatus === 'PAID' || normalizedStatus === 'SUCCESS';
+
+            if (!orderData) {
+                // [CHANGE] Backend now requires the customer email on
+                // this lookup. Pull it from localStorage (it's saved
+                // when the customer hits checkout).
+                const savedEmail = getSavedCustomerEmail();
+                if (!savedEmail) {
+                    showToast('Please open your order confirmation email for details.', 'fa-solid fa-exclamation-circle');
+                    sessionStorage.removeItem('pending_order');
+                    return;
+                }
+                fetchOrderByReference(transactionRef, savedEmail)
+                    .then(data => {
+                        if (data) {
+                            if (paymentOk) {
+                                showReceipt(data);
+                                refreshProducts();
+                            } else {
+                                showToast('Payment failed or was cancelled. Please try again.', 'fa-solid fa-exclamation-circle');
+                            }
+                        } else {
+                            showToast('Unable to retrieve order details. Please contact support.', 'fa-solid fa-exclamation-circle');
+                        }
+                        sessionStorage.removeItem('pending_order');
+                    })
+                    .catch(() => {
+                        showToast('Error processing payment. Please contact support.', 'fa-solid fa-exclamation-circle');
+                        sessionStorage.removeItem('pending_order');
+                    });
+                return;
+            }
+
+            if (paymentOk) {
+                showReceipt(orderData);
+                refreshProducts();
+            } else {
+                showToast('Payment failed or was cancelled. Please try again.', 'fa-solid fa-exclamation-circle');
+            }
+            sessionStorage.removeItem('pending_order');
+        }
+    }
+
+    // ─── CHECKOUT ───
+    // [FEATURE] Now sends payment_method and handles the offline path:
+    // for offline orders there is no Monnify redirect — we render the
+    // receipt immediately and let the customer come pay at the counter.
+    async function checkout() {
+        const items = Object.values(cart);
+        if (items.length === 0) {
+            showToast('Your cart is empty!', 'fa-solid fa-exclamation-circle');
+            return;
+        }
+        const name = customerName.value.trim();
+        const email = customerEmail.value.trim();
+        const phone = customerPhone.value.trim();
+        if (!name || !email || !phone) {
+            showToast('Please enter your name, email, and phone number.', 'fa-solid fa-exclamation-circle');
+            return;
+        }
+        if (deliveryMethod === 'delivery') {
+            if (!deliveryAddress.value.trim()) {
+                showToast('Please enter your delivery address.', 'fa-solid fa-exclamation-circle');
+                return;
+            }
+            if (!isDeliveryCovered) {
+                showToast('We don\'t deliver to this area. Please choose Pickup or Dine-in.', 'fa-solid fa-exclamation-circle');
+                return;
+            }
+        }
+
+        // [CHANGE] Generate the idempotency key once per checkout attempt.
+        // Retries (network hiccup, user clicks twice) reuse the same key,
+        // so the backend returns the existing order instead of creating
+        // a duplicate + a second Monnify transaction. Persisted to
+        // sessionStorage so a page reload during checkout also reuses it.
+        if (!checkoutIdempotencyKey) {
+            checkoutIdempotencyKey = (window.crypto && typeof window.crypto.randomUUID === 'function')
+                ? window.crypto.randomUUID()
+                : ('idem-' + Date.now() + '-' + Math.random().toString(36).slice(2, 12));
+            try { sessionStorage.setItem(CHECKOUT_IDEMPOTENCY_KEY, checkoutIdempotencyKey); } catch (e) { /* ignore */ }
+        }
+
+        // [CHANGE] Persist the customer's email so the track-order modal
+        // can prefill it and the payment-redirect handler can identify
+        // the order if sessionStorage is gone.
+        saveCustomerEmail(email);
+
+        // [FEATURE] Effective payment method — offline only when the
+        // customer explicitly chose it AND delivery isn't selected.
+        const effectivePaymentMethod = (paymentMethod === 'offline' && deliveryMethod !== 'delivery')
+            ? 'offline'
+            : 'online';
+
+        const subtotal = cartTotalPrice;
+        const finalDeliveryFee = (deliveryMethod === 'delivery' && isDeliveryCovered) ? deliveryFee : 0;
+        const total = subtotal + finalDeliveryFee;
+
+        const orderPayload = {
+            customer_name: name,
+            customer_email: email,
+            customer_phone: phone,
+            total: total,
+            status: 'pending',
+            delivery_method: deliveryMethod,
+            // [FEATURE] Send the payment method to the backend
+            payment_method: effectivePaymentMethod,
+            delivery_address: deliveryMethod === 'delivery' ? deliveryAddress.value : '',
+            preferred_time: preferredTime.value || '',
+            order_notes: orderNotes.value || '',
+            delivery_fee: finalDeliveryFee,
+            items: items.map(i => ({ name: i.name, qty: i.qty, price: i.price, product_id: i.id })),
+            // [CHANGE] Idempotency key sent to backend
+            idempotency_key: checkoutIdempotencyKey,
+        };
+
+        if (lastBreakdown && deliveryMethod === 'delivery') {
+            orderPayload.delivery_breakdown = lastBreakdown;
+        }
+
+        const btn = checkoutBtn;
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<span class="loader-small"></span> ' + (effectivePaymentMethod === 'offline' ? 'Placing order...' : 'Redirecting to payment...');
+        btn.disabled = true;
+
+        try {
+            const response = await fetch(`${API_BASE}/api/orders`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(orderPayload)
+            });
+
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.message || err.detail || 'Order creation failed');
+            }
+
+            const result = await response.json();
+            console.log('✅ Order created:', result);
+
+            // [FEATURE] Offline branch: no Monnify, no redirect. Show
+            // the receipt immediately using locally-known data plus
+            // the payment_reference returned by the backend.
+            if (result.payment_method === 'offline' || result.status === 'awaiting_payment') {
+                const offlineReceipt = {
+                    payment_reference: result.payment_reference,
+                    order_id: result.order_id,
+                    customer_name: name,
+                    customer_email: email,
+                    customer_phone: phone,
+                    items: orderPayload.items,
+                    total: total,
+                    delivery_method: deliveryMethod,
+                    payment_method: 'offline',
+                    delivery_address: null,
+                    delivery_fee: 0,
+                    preferred_time: preferredTime.value || '',
+                    status: 'awaiting_payment',
+                    created_at: new Date().toISOString()
+                };
+                showReceipt(offlineReceipt);
+                return;
+            }
+
+            // Online branch: stash and redirect to Monnify.
+            sessionStorage.setItem('pending_order', JSON.stringify({ ...result, customer_email: email }));
+
+            if (result.checkout_url) {
+                window.location.href = result.checkout_url;
+            } else {
+                showToast('Payment init failed. Please try again.', 'fa-solid fa-exclamation-circle');
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }
+
+        } catch (err) {
+            console.error('🔥 Checkout error:', err);
+            showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+            // NOTE: intentionally NOT clearing checkoutIdempotencyKey here.
+            // If the underlying POST actually succeeded server-side (network
+            // dropped the response), the next click reuses the key and gets
+            // the same order back instead of creating a duplicate.
+        }
+    }
+
+    // ─── CHAT FUNCTIONS ───
+    function addChatMsg(sender, text, isTyping = false, extraHtml = '') {
+        if (!chatMessages) return;
+        const row = document.createElement('div');
+        row.className = `chat-msg ${sender === 'user' ? 'user' : 'assistant'}`;
+        if (sender === 'assistant') {
+            const avatar = document.createElement('div');
+            avatar.className = 'chat-msg-avatar';
+            avatar.innerHTML = '<i class="fa-regular fa-comment-dots"></i>';
+            row.appendChild(avatar);
+        }
+        const bubble = document.createElement('div');
+        bubble.className = 'chat-msg-bubble';
+        if (isTyping && sender === 'assistant') {
+            bubble.innerHTML = '<div class="thinking-dots"><span></span><span></span><span></span></div>';
+        } else {
+            // Sanitize: DOMPurify protects against AI-generated or user-typed HTML
+            const parsed = marked.parse(text);
+            const combined = parsed + extraHtml;
+            if (typeof DOMPurify !== 'undefined') {
+                bubble.innerHTML = DOMPurify.sanitize(combined, { ADD_ATTR: ['data-id'] });
+            } else {
+                // Fallback if CDN failed to load: escape everything, keep extraHtml separately
+                console.warn('DOMPurify unavailable — falling back to text-only rendering');
+                bubble.textContent = text;
+                if (extraHtml) {
+                    const extraWrap = document.createElement('div');
+                    extraWrap.innerHTML = extraHtml; // our own server-controlled markup
+                    bubble.appendChild(extraWrap);
+                }
+            }
+        }
+        row.appendChild(bubble);
+        chatMessages.appendChild(row);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+        return row;
+    }
+
+    async function sendChatMessage() {
+        const msg = chatInput.value.trim();
+        if (!msg) return;
+        addChatMsg('user', msg);
+        chatInput.value = '';
+        const typingRow = addChatMsg('assistant', '', true);
+
+        try {
+            const response = await fetch(`${API_BASE}/api/ai/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: msg })
+            });
+
+            if (!response.ok) throw new Error('AI service unavailable');
+
+            const data = await response.json();
+            if (typingRow) typingRow.remove();
+
+            let reply = data.response || "I'm sorry, I couldn't understand that.";
+            let extraHtml = '';
+
+            const productMatch = products.find(p => reply.toLowerCase().includes(p.name.toLowerCase()));
+            if (productMatch) {
+                extraHtml =
+                    ` <button class="chat-add-to-cart" style="background:var(--primary);color:#fff;border:none;padding:4px 12px;border-radius:50px;font-size:11px;font-weight:700;cursor:pointer;margin-top:6px;" data-id="${productMatch.id}">➕ Add to Cart</button>`;
+            }
+
+            addChatMsg('assistant', reply, false, extraHtml);
+
+            document.querySelectorAll('.chat-add-to-cart').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const id = this.dataset.id;
+                    addToCart(id, 1);
+                    showToast('Added to cart!', 'fa-solid fa-check-circle');
+                    this.style.background = '#28a745';
+                    this.textContent = '✓ Added';
+                    this.disabled = true;
+                });
+            });
+
+        } catch (err) {
+            if (typingRow) typingRow.remove();
+            addChatMsg('assistant', '⚠️ Sorry, the AI assistant is currently offline. Please try again later.');
+            console.error('Chat error:', err);
+        }
+    }
+
+    function initChat() {
+        if (chatMessages.children.length === 0 && isDataLoaded) {
+            addChatMsg('assistant',
+                `Hi! I'm your HotPortion AI. We have ${products.length} meals across ${categories.length} categories. Try asking: *'I want something filling under ₦5,000'* or *'What combos do you have?'* 🍔`
+                );
+        }
+    }
+
+    function toggleChat() {
+        chatModal.classList.toggle('active');
+        if (chatModal.classList.contains('active')) {
+            initChat();
+            chatInput.focus();
+        }
+    }
+
+    // ─── SEARCH ───
+    function performSearch() {
+        searchQuery = searchInput.value.trim();
+        if (searchClear) {
+            searchClear.style.display = searchQuery ? 'block' : 'none';
+        }
+        renderMenu();
+        if (window.innerWidth <= 768) {
+            document.getElementById('menu-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    }
+
+    // ─── HERO SLIDER ───
+    let heroCurrentIndex = 0;
+    const heroSlides = document.querySelectorAll('.hero-slide');
+    const heroDotsContainer = document.getElementById('hero-dots');
+    const heroPrevBtn = document.getElementById('hero-prev');
+    const heroNextBtn = document.getElementById('hero-next');
+    let heroInterval = null;
+    let isHeroTransitioning = false;
+
+    function initHeroDots() {
+        if (!heroDotsContainer) return;
+        const slides = document.querySelectorAll('.hero-slide');
+        heroDotsContainer.innerHTML = '';
+        slides.forEach((slide, i) => {
+            const dot = document.createElement('button');
+            dot.className = `hero-dot${i === 0 ? ' active' : ''}`;
+            dot.setAttribute('role', 'tab');
+            dot.setAttribute('aria-label', `Slide ${i + 1}`);
+            dot.addEventListener('click', () => goToHeroSlide(i));
+            heroDotsContainer.appendChild(dot);
+        });
+    }
+
+    function goToHeroSlide(index) {
+        const slides = document.querySelectorAll('.hero-slide');
+        if (slides.length === 0) return;
+        if (isHeroTransitioning || index === heroCurrentIndex || index >= slides.length) return;
+        isHeroTransitioning = true;
+
+        slides[heroCurrentIndex].classList.remove('active');
+        const dots = heroDotsContainer.querySelectorAll('.hero-dot');
+        if (dots[heroCurrentIndex]) dots[heroCurrentIndex].classList.remove('active');
+
+        heroCurrentIndex = index;
+
+        slides[heroCurrentIndex].classList.add('active');
+        if (dots[heroCurrentIndex]) dots[heroCurrentIndex].classList.add('active');
+
+        setTimeout(() => {
+            isHeroTransitioning = false;
+        }, 800);
+    }
+
+    function nextHeroSlide() {
+        const slides = document.querySelectorAll('.hero-slide');
+        if (slides.length === 0) return;
+        const next = (heroCurrentIndex + 1) % slides.length;
+        goToHeroSlide(next);
+    }
+
+    function prevHeroSlide() {
+        const slides = document.querySelectorAll('.hero-slide');
+        if (slides.length === 0) return;
+        const prev = (heroCurrentIndex - 1 + slides.length) % slides.length;
+        goToHeroSlide(prev);
+    }
+
+    function startHeroAutoplay() {
+        if (heroInterval) clearInterval(heroInterval);
+        heroInterval = setInterval(nextHeroSlide, 5000);
+    }
+
+    function stopHeroAutoplay() {
+        if (heroInterval) {
+            clearInterval(heroInterval);
+            heroInterval = null;
+        }
+    }
+
+    if (heroPrevBtn) heroPrevBtn.addEventListener('click', () => { stopHeroAutoplay();
+        prevHeroSlide();
+        startHeroAutoplay(); });
+    if (heroNextBtn) heroNextBtn.addEventListener('click', () => { stopHeroAutoplay();
+        nextHeroSlide();
+        startHeroAutoplay(); });
+
+    const heroElement = document.querySelector('.hero');
+    if (heroElement) {
+        heroElement.addEventListener('mouseenter', stopHeroAutoplay);
+        heroElement.addEventListener('mouseleave', startHeroAutoplay);
+        heroElement.addEventListener('touchstart', stopHeroAutoplay, { passive: true });
+        heroElement.addEventListener('touchend', startHeroAutoplay, { passive: true });
+    }
+
+    // ─── EVENT LISTENERS ───
+    cartToggle.addEventListener('click', openCart);
+    cartClose.addEventListener('click', closeCart);
+    cartOverlay.addEventListener('click', closeCart);
+
+    function openCart() {
+        cartDrawer.classList.add('open');
+        cartOverlay.classList.add('open');
+        document.body.style.overflow = 'hidden';
+        updateCheckoutButton();
+        if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
+            lastCheckedAddress = '';
+            setTimeout(handleDeliveryAddressChange, 200);
+        }
+    }
+
+    function closeCart() {
+        cartDrawer.classList.remove('open');
+        cartOverlay.classList.remove('open');
+        document.body.style.overflow = '';
+    }
+
+    orderNowBtn.addEventListener('click', function() {
+        document.getElementById('menu-section').scrollIntoView({ behavior: 'smooth' });
+        setTimeout(openCart, 500);
+    });
+    heroOrderBtn.addEventListener('click', function() {
+        document.getElementById('menu-section').scrollIntoView({ behavior: 'smooth' });
+        setTimeout(openCart, 500);
+    });
+    heroMenuBtn.addEventListener('click', function() {
+        document.getElementById('menu-section').scrollIntoView({ behavior: 'smooth' });
+    });
+    footerCart.addEventListener('click', function(e) { e.preventDefault();
+        openCart(); });
+    checkoutBtn.addEventListener('click', checkout);
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            if (cartDrawer.classList.contains('open')) closeCart();
+            if (chatModal.classList.contains('active')) chatModal.classList.remove('active');
+            if (receiptOverlay.classList.contains('open')) closeReceipt();
+            if (addressDropdown.classList.contains('show')) addressDropdown.classList.remove('show');
+            if (trackOverlay.classList.contains('open')) closeTrackModal();
+        }
+    });
+
+    deliveryOptions.forEach(btn => {
+        btn.addEventListener('click', function() { setDeliveryMethod(this.dataset.method); });
+    });
+
+    // [FEATURE] Payment-method button click handler
+    paymentOptions.forEach(btn => {
+        btn.addEventListener('click', function() {
+            setPaymentMethod(this.dataset.payment);
+        });
+    });
+
+    // Initial state: apply restored delivery method, then restore
+    // the payment method only if the current delivery method allows it.
+    setDeliveryMethod(_restoredDeliveryMethod || 'pickup');
+    if ((_restoredDeliveryMethod || 'pickup') !== 'delivery') {
+        setPaymentMethod(_restoredPaymentMethod || 'online');
+    }
+
+    // ─── DELIVERY ADDRESS INPUT WITH AUTOCOMPLETE ───
+    deliveryAddress.addEventListener('input', function() {
+        const query = this.value.trim();
+        persistState();
+
+        clearTimeout(addressAutocompleteTimeout);
+        if (query.length < 2) {
+            addressDropdown.classList.remove('show');
+        } else {
+            addressAutocompleteTimeout = setTimeout(() => {
+                searchAddresses(query);
+            }, 300);
+        }
+
+        clearTimeout(deliveryDebounceTimer);
+        if (query.length < 5) {
+            resetDeliveryStatus();
+            deliveryFee = 0;
+            lastBreakdown = null;
+            updateDeliveryFeeUI(0);
+            deliveryBreakdown.classList.remove('show');
+            updateCartUI();
+            updateCheckoutButton();
+            return;
+        }
+        deliveryDebounceTimer = setTimeout(handleDeliveryAddressChange, 500);
+    });
+
+    deliveryAddress.addEventListener('focus', function() {
+        if (this.value.trim().length >= 2) {
+            addressDropdown.classList.add('show');
+        }
+    });
+
+    deliveryAddress.addEventListener('blur', function() {
+        setTimeout(() => {
+            addressDropdown.classList.remove('show');
+        }, 300);
+    });
+
+    deliveryAddress.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            addressDropdown.classList.remove('show');
+        }
+        if (e.key === 'Enter') {
+            const firstItem = addressDropdown.querySelector('.address-autocomplete-item');
+            if (firstItem) {
+                firstItem.click();
+            }
+        }
+    });
+
+    // ─── FEE BREAKDOWN TOGGLE ───
+    feeBreakdownToggle.addEventListener('click', function() {
+        deliveryBreakdown.classList.toggle('show');
+        this.textContent = deliveryBreakdown.classList.contains('show') ? 'Hide breakdown' : 'Show breakdown';
+    });
+
+    // ─── GPS BUTTON ───
+    gpsBtn.addEventListener('click', handleGPSButton);
+
+    // ─── FORM INPUTS FOR CHECKOUT BUTTON STATE + PERSISTENCE ───
+    [customerName, customerEmail, customerPhone].forEach(input => {
+        input.addEventListener('input', function() {
+            updateCheckoutButton();
+            persistState();
+        });
+    });
+    [preferredTime, orderNotes].forEach(input => {
+        input.addEventListener('input', persistState);
+    });
+
+    // ─── Recalculate delivery fee when email changes (for loyalty) ───
+    customerEmail.addEventListener('input', function() {
+        if (deliveryMethod === 'delivery' && deliveryAddress.value.trim().length >= 5) {
+            clearTimeout(deliveryDebounceTimer);
+            lastCheckedAddress = '';
+            deliveryDebounceTimer = setTimeout(handleDeliveryAddressChange, 500);
+        }
+    });
+
+    chatLauncher.addEventListener('click', toggleChat);
+    chatBubble.addEventListener('click', function(e) { e.stopPropagation();
+        toggleChat(); });
+    closeChat.addEventListener('click', function() { chatModal.classList.remove('active'); });
+    chatSend.addEventListener('click', sendChatMessage);
+    chatInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') { e.preventDefault();
+            sendChatMessage(); }
+    });
+    document.querySelectorAll('.chat-quick-prompt').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const prompt = this.dataset.chatPrompt;
+            if (!chatModal.classList.contains('active')) toggleChat();
+            chatInput.value = prompt;
+            sendChatMessage();
+        });
+    });
+
+    searchInput.addEventListener('input', function() {
+        const val = this.value.trim();
+        if (searchClear) searchClear.style.display = val ? 'block' : 'none';
+        clearTimeout(window.searchDebounce);
+        window.searchDebounce = setTimeout(performSearch, 300);
+    });
+    searchClear.addEventListener('click', function() {
+        searchInput.value = '';
+        searchQuery = '';
+        searchClear.style.display = 'none';
+        performSearch();
+        searchInput.focus();
+    });
+    searchBtn.addEventListener('click', performSearch);
+    searchInput.addEventListener('keypress', function(e) { if (e.key === 'Enter') { e.preventDefault();
+            performSearch(); } });
+
+    function setActiveNav(activeId) {
+        document.querySelectorAll('.bottom-nav .nav-item').forEach(el => el.classList.remove('active'));
+        const el = document.getElementById(activeId);
+        if (el) el.classList.add('active');
+    }
+
+    navHome.addEventListener('click', function() {
+        setActiveNav('nav-home');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+    navMenu.addEventListener('click', function() {
+        setActiveNav('nav-menu');
+        document.getElementById('menu-section').scrollIntoView({ behavior: 'smooth' });
+    });
+    navChat.addEventListener('click', function() {
+        setActiveNav('nav-chat');
+        if (!chatModal.classList.contains('active')) toggleChat();
+        else chatModal.classList.remove('active');
+    });
+    navCartBottom.addEventListener('click', function() {
+        setActiveNav('nav-cart-bottom');
+        openCart();
+    });
+
+    // ================================================================
+    // ─── TRACK ORDER ───
+    // ================================================================
+    function openTrackModal(prefillRef) {
+        if (!trackOverlay) return;
+        trackOverlay.classList.add('open');
+        document.body.style.overflow = 'hidden';
+        if (prefillRef) trackRefInput.value = prefillRef;
+        // [CHANGE] Prefill the email field from localStorage (saved at checkout).
+        if (trackEmailInput && !trackEmailInput.value) {
+            const savedEmail = getSavedCustomerEmail();
+            if (savedEmail) trackEmailInput.value = savedEmail;
+        }
+        setTimeout(function() {
+            if (!trackRefInput.value) {
+                trackRefInput.focus();
+            } else if (trackEmailInput && !trackEmailInput.value) {
+                trackEmailInput.focus();
+            } else {
+                trackSubmit.focus();
+            }
+        }, 200);
+    }
+
+    function closeTrackModal() {
+        if (!trackOverlay) return;
+        trackOverlay.classList.remove('open');
+        document.body.style.overflow = '';
+    }
+
+    // [CHANGE] Now requires the customer email as a query parameter,
+    // matching the backend contract on /api/orders/by-reference/{ref}.
+    async function lookupOrder(ref, email) {
+        try {
+            const url = `${API_BASE}/api/orders/by-reference/${encodeURIComponent(ref)}?email=${encodeURIComponent(email)}`;
+            const response = await fetch(url);
+            if (response.status === 404) return { notFound: true };
+            if (!response.ok) {
+                const errText = await response.text().catch(function() { return ''; });
+                throw new Error('HTTP ' + response.status + ' ' + errText.slice(0, 100));
+            }
+            return await response.json();
+        } catch (err) {
+            console.warn('Order lookup failed:', err);
+            return { error: err.message };
+        }
+    }
+
+    function renderTrackResult(order) {
+        if (!order) {
+            trackResult.className = 'track-result error';
+            trackResult.textContent = 'Order not found. Please check the reference and try again.';
+            return;
+        }
+        const status = (order.status || 'pending').toLowerCase();
+        // [FEATURE] Added awaiting_payment label
+        const statusLabels = {
+            pending: '⏳ Awaiting Payment',
+            awaiting_payment: '💵 Awaiting Counter Payment',
+            paid: '✅ Payment Received',
+            confirmed: '👨‍🍳 Preparing Your Order',
+            completed: '🎉 Completed',
+            cancelled: '❌ Cancelled'
+        };
+        const statusLabel = statusLabels[status] || status.toUpperCase();
+        const itemsHtml = (order.items || []).map(function(item) {
+            return '<div class="item-row">' +
+                '<span class="name">' + escapeHtml(item.name || 'Item') + ' <small>×' + (item.qty || 0) + '</small></span>' +
+                '<span class="price">₦' + Number((item.price || 0) * (item.qty || 0)).toLocaleString() + '</span>' +
+                '</div>';
+        }).join('');
+        const dm = { pickup: '🏃 Pickup', delivery: '🛵 Delivery', dinein: '🍽️ Dine-in' }[order.delivery_method] || 'Pickup';
+        const created = order.created_at ? new Date(order.created_at).toLocaleString() : 'N/A';
+        const ref = order.payment_reference || '—';
+        const deliveryHtml = (order.delivery_method === 'delivery' && order.delivery_address) ?
+            '<div class="row"><span class="label">Delivery to</span><span class="value">' + escapeHtml(order.delivery_address) + '</span></div>' +
+            '<div class="row"><span class="label">Delivery Fee</span><span class="value">₦' + Number(order.delivery_fee || 0).toLocaleString() + '</span></div>'
+            : '';
+
+        trackResult.className = 'track-result';
+        trackResult.innerHTML =
+            '<div class="order-status-card">' +
+            '<span class="order-status-badge ' + status + '">' + statusLabel + '</span>' +
+            '<div class="row"><span class="label">Reference</span><span class="value" style="font-family:monospace;font-size:0.78rem;">' + escapeHtml(ref) + '</span></div>' +
+            '<div class="row"><span class="label">Placed</span><span class="value">' + created + '</span></div>' +
+            '<div class="row"><span class="label">Method</span><span class="value">' + dm + '</span></div>' +
+            deliveryHtml +
+            (itemsHtml ? '<div class="order-items-mini"><h5>Items</h5>' + itemsHtml + '</div>' : '') +
+            '<div class="total-row"><span>Total</span><span>₦' + Number(order.total || 0).toLocaleString() + '</span></div>' +
+            '</div>';
+    }
+
+    async function handleTrackSubmit() {
+        const ref = (trackRefInput.value || '').trim();
+        // [CHANGE] Now also require + send the email.
+        const email = (trackEmailInput ? (trackEmailInput.value || '') : '').trim();
+        if (!ref) {
+            trackResult.className = 'track-result error';
+            trackResult.textContent = 'Please enter an order reference.';
+            trackRefInput.focus();
+            return;
+        }
+        if (!email) {
+            trackResult.className = 'track-result error';
+            trackResult.textContent = 'Please enter the email you used at checkout.';
+            if (trackEmailInput) trackEmailInput.focus();
+            return;
+        }
+        // Persist for next time
+        saveCustomerEmail(email);
+
+        trackSubmit.disabled = true;
+        const originalHtml = trackSubmit.innerHTML;
+        trackSubmit.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Searching...';
+        trackResult.className = 'track-result loading';
+        trackResult.textContent = 'Looking up your order...';
+
+        const result = await lookupOrder(ref, email);
+
+        trackSubmit.disabled = false;
+        trackSubmit.innerHTML = originalHtml;
+
+        if (result && result.notFound) {
+            trackResult.className = 'track-result error';
+            trackResult.textContent = 'No order found for that reference and email. Please check and try again.';
+            return;
+        }
+        if (result && result.error) {
+            trackResult.className = 'track-result error';
+            trackResult.textContent = 'Lookup failed: ' + result.error;
+            return;
+        }
+        renderTrackResult(result);
+    }
+
+    if (trackCloseBtn) trackCloseBtn.addEventListener('click', closeTrackModal);
+    if (trackOverlay) trackOverlay.addEventListener('click', function(e) {
+        if (e.target === this) closeTrackModal();
+    });
+    if (trackSubmit) trackSubmit.addEventListener('click', handleTrackSubmit);
+    if (trackRefInput) trackRefInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); handleTrackSubmit(); }
+    });
+    // [CHANGE] Enter on the email field also triggers lookup
+    if (trackEmailInput) trackEmailInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); handleTrackSubmit(); }
+    });
+    if (footerTrack) footerTrack.addEventListener('click', function(e) {
+        e.preventDefault();
+        openTrackModal();
+    });
+
+    let resizeTimeout;
+    window.addEventListener('resize', function() {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(() => {
+            if (window.featuredInterval) clearInterval(window.featuredInterval);
+            renderFeatured();
+        }, 300);
+    });
+
+    // ─── BOOT ───
+    initData().then(() => {
+        console.log('🚀 Hot Portion Grill ready!');
+        console.log('📍 Delivery coverage with intelligent fee calculation');
+        console.log('📊 Fee breakdown includes: base + discounts + surcharges');
+        console.log('🔄 Delivery fee recalculates when cart changes');
+        console.log('💾 Cart persists across page reloads');
+        console.log('🧾 Receipt PDF download enabled');
+        console.log('🔎 Order tracking enabled');
+        console.log('💵 Offline payment ready (pickup / dine-in)');
+    });
+
+    console.log('📱 Bottom nav: Home, Menu, Chat, Cart (mobile only)');
+    console.log('🔐 Monnify payment integration ready');
+    console.log('🤖 Context-aware AI assistant active');
+    console.log('🎠 Hero slider dynamic – loaded from backend');
+    console.log('🖼️ All images served via Netlify Image CDN');
+    console.log('🔍 Address autocomplete via Amazon Location Service (proxied through backend)');
+    console.log('💰 Intelligent delivery fee with breakdown display');
+
+})();
