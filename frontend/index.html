@@ -1275,6 +1275,35 @@
             border-color: var(--primary);
         }
 
+        /* [FEATURE] Payment-method options — same visual pattern as delivery-options,
+           but styled with a green accent so it reads as a distinct choice. */
+        .checkout-form .payment-options {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .checkout-form .payment-options button {
+            flex: 1;
+            min-width: 110px;
+            padding: 10px 12px;
+            border: 2px solid #e2e8e6;
+            border-radius: var(--radius-sm);
+            background: #f8faf8;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.8rem;
+            transition: all 0.2s;
+            color: var(--text-muted);
+        }
+        .checkout-form .payment-options button.active {
+            border-color: #2d7d46;
+            background: #e8f5ec;
+            color: #2d7d46;
+        }
+        .checkout-form .payment-options button:hover {
+            border-color: #2d7d46;
+        }
+
         /* ─── DELIVERY FEE BREAKDOWN ─── */
         .delivery-breakdown {
             background: #f8faf8;
@@ -1706,6 +1735,8 @@
         .order-status-badge.confirmed { background: #dbeafe; color: #1e40af; }
         .order-status-badge.completed { background: #bbf7d0; color: #14532d; }
         .order-status-badge.cancelled { background: #fee2e2; color: #991b1b; }
+        /* [FEATURE] awaiting_payment — offline order, counter payment pending */
+        .order-status-badge.awaiting_payment { background: #ffedd5; color: #9a3412; border: 1px solid #fb923c; }
         .order-status-card .row {
             display: flex;
             justify-content: space-between;
@@ -2656,6 +2687,20 @@
                         <button data-method="dinein">🍽️ Dine-in</button>
                     </div>
                 </div>
+
+                <!-- [FEATURE] Payment method selector.
+                     Visible only for pickup/dine-in. Delivery orders are forced online. -->
+                <div class="form-group" id="payment-method-group">
+                    <label id="payment-options-label">How would you like to pay?</label>
+                    <div class="payment-options" id="payment-options" role="group" aria-labelledby="payment-options-label">
+                        <button type="button" class="active" data-payment="online">💳 Pay Online</button>
+                        <button type="button" data-payment="offline">💵 Pay at Counter</button>
+                    </div>
+                    <div id="payment-method-hint" style="font-size:0.7rem;color:var(--text-muted);margin-top:6px;">
+                        Secure online payment with Monnify.
+                    </div>
+                </div>
+
                 <div class="form-group" id="address-group" style="display:none;">
                     <label for="delivery-address">Delivery Address</label>
                     <div class="address-input-wrap">
@@ -2743,7 +2788,8 @@
             <button class="btn-primary" id="checkout-btn" aria-label="Proceed to Payment">
                 <i class="fa-regular fa-credit-card" aria-hidden="true"></i> Proceed to Payment
             </button>
-            <p style="font-size:0.7rem;color:var(--text-muted);text-align:center;margin-top:8px;">
+            <!-- [FEATURE] Footer note text changes based on payment method -->
+            <p id="cart-footer-note" style="font-size:0.7rem;color:var(--text-muted);text-align:center;margin-top:8px;">
                 🔒 Secure payment with Monnify
             </p>
         </div>
@@ -2752,13 +2798,17 @@
     <!-- ─── RECEIPT MODAL ─── -->
     <div class="receipt-overlay" id="receipt-overlay">
         <div class="receipt-modal" id="receipt-modal">
-            <div class="receipt-header">
+            <!-- [FEATURE] Header elements now have IDs so showReceipt() can swap
+                 text and icon between online (Payment Successful) and offline
+                 (Order Placed — Pay at counter) modes. The close button stays
+                 in place so its event listener is preserved. -->
+            <div class="receipt-header" id="receipt-header">
                 <button class="receipt-close" id="receipt-close" aria-label="Close receipt">&times;</button>
                 <div class="receipt-status">
-                    <i class="fa-regular fa-circle-check" aria-hidden="true"></i>
+                    <i class="fa-regular fa-circle-check" id="receipt-status-icon" aria-hidden="true"></i>
                     <div>
-                        <h2>Payment Successful!</h2>
-                        <p>Your order has been confirmed.</p>
+                        <h2 id="receipt-status-title">Payment Successful!</h2>
+                        <p id="receipt-status-subtitle">Your order has been confirmed.</p>
                     </div>
                 </div>
             </div>
@@ -2924,6 +2974,10 @@
             let lastOrderData = null;
             let isDataLoaded = false;
 
+            // [FEATURE] Payment method state. 'online' = Monnify checkout;
+            // 'offline' = pay at counter on arrival (pickup/dine-in only).
+            let paymentMethod = 'online';
+
             // [CHANGE] Checkout idempotency key. Generated on the first click of
             // "Proceed to Payment", reused on any retry of that same attempt,
             // and cleared when the receipt is closed. Sending the same key twice
@@ -2947,6 +3001,8 @@
 
             // ─── Persisted delivery method restored from localStorage ───
             let _restoredDeliveryMethod = 'pickup';
+            // [FEATURE] Persisted payment method
+            let _restoredPaymentMethod = 'online';
 
             // ─── DOM REFS ───
             const menuGrid = document.getElementById('menu-grid');
@@ -2975,6 +3031,12 @@
             const categoriesPills = document.getElementById('categories-pills');
 
             const deliveryOptions = document.querySelectorAll('#delivery-options button');
+            // [FEATURE] Payment-method DOM refs
+            const paymentMethodGroup = document.getElementById('payment-method-group');
+            const paymentOptions = document.querySelectorAll('#payment-options button');
+            const paymentMethodHint = document.getElementById('payment-method-hint');
+            const cartFooterNote = document.getElementById('cart-footer-note');
+
             const addressGroup = document.getElementById('address-group');
             const deliveryAddress = document.getElementById('delivery-address');
             const deliveryFeeDisplay = document.getElementById('delivery-fee-display');
@@ -3000,6 +3062,10 @@
             const receiptModal = document.getElementById('receipt-modal');
             const receiptBody = document.getElementById('receipt-body');
             const receiptClose = document.getElementById('receipt-close');
+            // [FEATURE] Receipt header parts that change between online/offline
+            const receiptStatusIcon = document.getElementById('receipt-status-icon');
+            const receiptStatusTitle = document.getElementById('receipt-status-title');
+            const receiptStatusSubtitle = document.getElementById('receipt-status-subtitle');
 
             const chatModal = document.getElementById('chat-modal');
             const chatMessages = document.getElementById('chat-messages');
@@ -3062,6 +3128,7 @@
                         customer_email: customerEmail.value,
                         customer_phone: customerPhone.value,
                         delivery_method: deliveryMethod,
+                        payment_method: paymentMethod,
                         delivery_address: deliveryAddress.value,
                         preferred_time: preferredTime.value,
                         order_notes: orderNotes.value,
@@ -3096,6 +3163,10 @@
                     if (state.order_notes) orderNotes.value = state.order_notes;
                     if (state.delivery_method && ['pickup', 'delivery', 'dinein'].indexOf(state.delivery_method) !== -1) {
                         _restoredDeliveryMethod = state.delivery_method;
+                    }
+                    // [FEATURE] Restore payment method
+                    if (state.payment_method && ['online', 'offline'].indexOf(state.payment_method) !== -1) {
+                        _restoredPaymentMethod = state.payment_method;
                     }
 
                     console.log('✅ State restored from localStorage:', Object.keys(cart).length, 'cart item(s)');
@@ -4117,6 +4188,7 @@
             }
 
             // ─── UPDATE CHECKOUT BUTTON ───
+            // [FEATURE] Button text now varies between online and offline flows.
             function updateCheckoutButton() {
                 const items = Object.values(cart);
                 const hasItems = items.length > 0;
@@ -4125,6 +4197,7 @@
                 const phone = customerPhone.value.trim();
                 const isDelivery = deliveryMethod === 'delivery';
                 const addressOk = !isDelivery || (isDeliveryCovered && deliveryAddress.value.trim().length > 5);
+                const isOffline = (paymentMethod === 'offline' && !isDelivery);
 
                 let disabled = !hasItems || !name || !email || !phone;
                 if (isDelivery) {
@@ -4143,18 +4216,62 @@
                     checkoutBtn.innerHTML = '<i class="fa-regular fa-credit-card"></i> Enter delivery address';
                 } else if (!name || !email || !phone) {
                     checkoutBtn.innerHTML = '<i class="fa-regular fa-credit-card"></i> Fill in your details';
+                } else if (isOffline) {
+                    checkoutBtn.innerHTML = '<i class="fa-solid fa-bag-shopping"></i> Place Order';
                 } else {
                     checkoutBtn.innerHTML = '<i class="fa-regular fa-credit-card"></i> Proceed to Payment';
                 }
             }
 
+            // ─── PAYMENT METHOD ───
+            // [FEATURE] setPaymentMethod updates the toggle UI, the hint text,
+            // the cart footer note, and the checkout button.
+            function setPaymentMethod(method) {
+                paymentMethod = (method === 'offline') ? 'offline' : 'online';
+                paymentOptions.forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.payment === paymentMethod);
+                });
+                if (paymentMethodHint) {
+                    paymentMethodHint.textContent = paymentMethod === 'offline'
+                        ? 'Pay at the counter when you arrive. No online payment needed.'
+                        : 'Secure online payment with Monnify.';
+                }
+                updateCartFooterNote();
+                updateCheckoutButton();
+                persistState();
+            }
+
+            // [FEATURE] Cart footer note reflects the current payment method.
+            function updateCartFooterNote() {
+                if (!cartFooterNote) return;
+                if (paymentMethod === 'offline' && deliveryMethod !== 'delivery') {
+                    cartFooterNote.innerHTML = '💵 Pay at the counter when you arrive';
+                } else {
+                    cartFooterNote.innerHTML = '🔒 Secure payment with Monnify';
+                }
+            }
+
             // ─── DELIVERY METHOD ───
+            // [FEATURE] Delivery forces online payment and hides the payment selector.
             function setDeliveryMethod(method) {
                 deliveryMethod = method;
                 deliveryOptions.forEach(btn => {
                     btn.classList.toggle('active', btn.dataset.method === method);
                 });
+
                 if (method === 'delivery') {
+                    // Delivery: only online is valid. Hide the payment selector
+                    // and force paymentMethod = 'online'.
+                    if (paymentMethodGroup) paymentMethodGroup.style.display = 'none';
+                    if (paymentMethod !== 'online') {
+                        // Set directly (avoid double persistState via setPaymentMethod)
+                        paymentMethod = 'online';
+                        paymentOptions.forEach(b => b.classList.toggle('active', b.dataset.payment === 'online'));
+                        if (paymentMethodHint) {
+                            paymentMethodHint.textContent = 'Secure online payment with Monnify.';
+                        }
+                    }
+
                     isDeliveryAvailable = true;
                     addressGroup.style.display = 'block';
                     deliveryAddress.required = true;
@@ -4166,6 +4283,8 @@
                         updateDeliveryFeeUI(0);
                     }
                 } else {
+                    // Pickup / Dine-in: show payment selector.
+                    if (paymentMethodGroup) paymentMethodGroup.style.display = 'block';
                     addressGroup.style.display = 'none';
                     deliveryAddress.required = false;
                     isDeliveryCovered = false;
@@ -4176,20 +4295,39 @@
                     deliveryFeeRow.style.display = 'none';
                     deliveryBreakdown.classList.remove('show');
                 }
+
+                updateCartFooterNote();
                 updateCartUI();
                 updateCheckoutButton();
                 persistState();
             }
 
             // ─── RECEIPT ───
+            // [FEATURE] Handles both online (Monnify-paid) and offline
+            // (pay-at-counter) orders. Header, total label, and footer text
+            // are all driven by orderData.payment_method.
             function showReceipt(orderData) {
                 lastOrderData = orderData;
+                const isOffline = (orderData.payment_method === 'offline');
+
                 const items = orderData.items || [];
                 const deliveryMethodLabel = {
                     pickup: '🏃 Pickup',
                     delivery: '🛵 Delivery',
                     dinein: '🍽️ Dine-in'
                 } [orderData.delivery_method] || 'Pickup';
+
+                // Header text varies by payment mode
+                if (isOffline) {
+                    if (receiptStatusIcon) receiptStatusIcon.className = 'fa-solid fa-money-bill-wave';
+                    if (receiptStatusTitle) receiptStatusTitle.textContent = 'Order Placed!';
+                    if (receiptStatusSubtitle) receiptStatusSubtitle.textContent =
+                        `Pay ${formatPrice(orderData.total)} at the counter when you arrive.`;
+                } else {
+                    if (receiptStatusIcon) receiptStatusIcon.className = 'fa-regular fa-circle-check';
+                    if (receiptStatusTitle) receiptStatusTitle.textContent = 'Payment Successful!';
+                    if (receiptStatusSubtitle) receiptStatusSubtitle.textContent = 'Your order has been confirmed.';
+                }
 
                 let itemsHtml = items.map(item => `
                     <div class="receipt-item-row">
@@ -4212,6 +4350,19 @@
                     `;
                 }
 
+                const totalLabel = isOffline ? 'Total Due' : 'Total Paid';
+
+                // Footer text varies by payment mode
+                const footerHtml = isOffline
+                    ? `<div class="receipt-footer">
+                           <i class="fa-solid fa-money-bill-wave"></i> Show this reference at the counter and pay on arrival.<br>
+                           <span style="font-size:0.65rem;">Order Reference: ${orderData.payment_reference}</span>
+                       </div>`
+                    : `<div class="receipt-footer">
+                           <i class="fa-regular fa-envelope"></i> A receipt has been sent to your email.<br>
+                           <span style="font-size:0.65rem;">Payment via Monnify | Transaction ID: ${orderData.payment_reference}</span>
+                       </div>`;
+
                 receiptBody.innerHTML = `
                     <div class="receipt-row"><span class="label">Receipt #</span><span class="value" style="font-family:monospace;">${orderData.payment_reference}</span></div>
                     <div class="receipt-row"><span class="label">Customer</span><span class="value">${orderData.customer_name}</span></div>
@@ -4226,11 +4377,11 @@
                     <hr class="receipt-divider">
                     <div class="receipt-total">
                         <div class="receipt-row" style="font-size:1.1rem;font-weight:800;padding-top:8px;border-top:2px solid var(--primary);margin-top:4px;">
-                            <span class="label">Total Paid</span>
+                            <span class="label">${totalLabel}</span>
                             <span class="value" style="color:var(--primary);">${formatPrice(orderData.total)}</span>
                         </div>
                     </div>
-                    <div class="receipt-footer"><i class="fa-regular fa-envelope"></i> A receipt has been sent to your email.<br><span style="font-size:0.65rem;">Payment via Monnify | Transaction ID: ${orderData.payment_reference}</span></div>
+                    ${footerHtml}
                     <div class="receipt-download-wrap">
                         <button class="btn-primary" id="receipt-download-btn" type="button">
                             <i class="fa-solid fa-file-pdf"></i> Download PDF Receipt
@@ -4281,6 +4432,7 @@
                     showToast('Failed to generate PDF. Please try again.', 'fa-solid fa-exclamation-circle');
                 } finally {
                     btn.innerHTML = original;
+                    btn.disabled = true;
                     btn.disabled = false;
                 }
             }
@@ -4400,6 +4552,9 @@
             }
 
             // ─── CHECKOUT ───
+            // [FEATURE] Now sends payment_method and handles the offline path:
+            // for offline orders there is no Monnify redirect — we render the
+            // receipt immediately and let the customer come pay at the counter.
             async function checkout() {
                 const items = Object.values(cart);
                 if (items.length === 0) {
@@ -4439,6 +4594,12 @@
                 // the order if sessionStorage is gone.
                 saveCustomerEmail(email);
 
+                // [FEATURE] Effective payment method — offline only when the
+                // customer explicitly chose it AND delivery isn't selected.
+                const effectivePaymentMethod = (paymentMethod === 'offline' && deliveryMethod !== 'delivery')
+                    ? 'offline'
+                    : 'online';
+
                 const subtotal = cartTotalPrice;
                 const finalDeliveryFee = (deliveryMethod === 'delivery' && isDeliveryCovered) ? deliveryFee : 0;
                 const total = subtotal + finalDeliveryFee;
@@ -4450,6 +4611,8 @@
                     total: total,
                     status: 'pending',
                     delivery_method: deliveryMethod,
+                    // [FEATURE] Send the payment method to the backend
+                    payment_method: effectivePaymentMethod,
                     delivery_address: deliveryMethod === 'delivery' ? deliveryAddress.value : '',
                     preferred_time: preferredTime.value || '',
                     order_notes: orderNotes.value || '',
@@ -4465,7 +4628,7 @@
 
                 const btn = checkoutBtn;
                 const originalText = btn.innerHTML;
-                btn.innerHTML = '<span class="loader-small"></span> Redirecting to payment...';
+                btn.innerHTML = '<span class="loader-small"></span> ' + (effectivePaymentMethod === 'offline' ? 'Placing order...' : 'Redirecting to payment...');
                 btn.disabled = true;
 
                 try {
@@ -4477,14 +4640,37 @@
 
                     if (!response.ok) {
                         const err = await response.json();
-                        throw new Error(err.message || 'Order creation failed');
+                        throw new Error(err.message || err.detail || 'Order creation failed');
                     }
 
                     const result = await response.json();
-                    console.log('✅ Order created, redirecting to Monnify:', result);
+                    console.log('✅ Order created:', result);
 
-                    // Stash the customer_email alongside the pending order so a
-                    // returning tab can identify the order without re-asking.
+                    // [FEATURE] Offline branch: no Monnify, no redirect. Show
+                    // the receipt immediately using locally-known data plus
+                    // the payment_reference returned by the backend.
+                    if (result.payment_method === 'offline' || result.status === 'awaiting_payment') {
+                        const offlineReceipt = {
+                            payment_reference: result.payment_reference,
+                            order_id: result.order_id,
+                            customer_name: name,
+                            customer_email: email,
+                            customer_phone: phone,
+                            items: orderPayload.items,
+                            total: total,
+                            delivery_method: deliveryMethod,
+                            payment_method: 'offline',
+                            delivery_address: null,
+                            delivery_fee: 0,
+                            preferred_time: preferredTime.value || '',
+                            status: 'awaiting_payment',
+                            created_at: new Date().toISOString()
+                        };
+                        showReceipt(offlineReceipt);
+                        return;
+                    }
+
+                    // Online branch: stash and redirect to Monnify.
                     sessionStorage.setItem('pending_order', JSON.stringify({ ...result, customer_email: email }));
 
                     if (result.checkout_url) {
@@ -4752,7 +4938,20 @@
             deliveryOptions.forEach(btn => {
                 btn.addEventListener('click', function() { setDeliveryMethod(this.dataset.method); });
             });
+
+            // [FEATURE] Payment-method button click handler
+            paymentOptions.forEach(btn => {
+                btn.addEventListener('click', function() {
+                    setPaymentMethod(this.dataset.payment);
+                });
+            });
+
+            // Initial state: apply restored delivery method, then restore
+            // the payment method only if the current delivery method allows it.
             setDeliveryMethod(_restoredDeliveryMethod || 'pickup');
+            if ((_restoredDeliveryMethod || 'pickup') !== 'delivery') {
+                setPaymentMethod(_restoredPaymentMethod || 'online');
+            }
 
             // ─── DELIVERY ADDRESS INPUT WITH AUTOCOMPLETE ───
             deliveryAddress.addEventListener('input', function() {
@@ -4949,8 +5148,10 @@
                     return;
                 }
                 const status = (order.status || 'pending').toLowerCase();
+                // [FEATURE] Added awaiting_payment label
                 const statusLabels = {
                     pending: '⏳ Awaiting Payment',
+                    awaiting_payment: '💵 Awaiting Counter Payment',
                     paid: '✅ Payment Received',
                     confirmed: '👨‍🍳 Preparing Your Order',
                     completed: '🎉 Completed',
@@ -5062,6 +5263,7 @@
                 console.log('💾 Cart persists across page reloads');
                 console.log('🧾 Receipt PDF download enabled');
                 console.log('🔎 Order tracking enabled');
+                console.log('💵 Offline payment ready (pickup / dine-in)');
             });
 
             console.log('📱 Bottom nav: Home, Menu, Chat, Cart (mobile only)');
