@@ -5,6 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Prevent two deploys from racing each other on main.
+concurrency:
+  group: production-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
   NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
@@ -31,17 +36,12 @@ jobs:
           cd backend
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      - name: Create dummy test
-        run: |
-          mkdir -p backend/tests
-          echo 'def test_dummy(): assert True' > backend/tests/test_dummy.py
+          pip install -r requirements-dev.txt
 
       - name: Run tests
         run: |
           cd backend
-          pip install pytest pytest-asyncio
-          pytest tests/ -v
+          pytest tests/ -v --strict-markers
 
   # ─── 2. DEPLOY BACKEND TO RENDER ───
   deploy-backend-render:
@@ -59,7 +59,7 @@ jobs:
           api-key: ${{ secrets.RENDER_API_KEY }}
           wait-for-success: true
 
-  # ─── 3. DEPLOY FRONTEND TO NETLIFY & CAPGO ───
+  # ─── 3. DEPLOY FRONTEND TO NETLIFY ───
   deploy-frontend:
     needs: test-backend
     runs-on: ubuntu-latest
@@ -84,68 +84,31 @@ jobs:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
 
-      - name: Copy frontend assets to mobile/frontend
-        run: |
-          cd mobile
-          rm -rf frontend
-          cp -r ../frontend frontend/
+  # ─── 3b. CAPGO LIVE UPDATE (gated on frontend deploy) ───
+  deploy-capgo:
+    needs: deploy-frontend
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Create root Capacitor config
-        run: |
-          cd mobile
-          cat > capacitor.config.json << 'EOF'
-          {
-            "appId": "com.hotportion.grill",
-            "appName": "Hot Portion Grill",
-            "webDir": "frontend",
-            "server": {
-              "androidScheme": "https",
-              "iosScheme": "https",
-              "allowNavigation": [
-                "hotportion.netlify.app",
-                "hotportiongrill.com",
-                "*.onrender.com"
-              ]
-            },
-            "android": {
-              "allowMixedContent": true,
-              "captureInput": true,
-              "webContentsDebuggingEnabled": true
-            },
-            "ios": {
-              "scheme": "HotPortion",
-              "contentInset": "automatic",
-              "backgroundColor": "#E53935",
-              "allowsLinkPreview": false,
-              "preferredContentMode": "mobile",
-              "limitsNavigationsToAppBoundDomains": true
-            },
-            "plugins": {
-              "SplashScreen": {
-                "launchShowDuration": 1500,
-                "backgroundColor": "#E53935",
-                "androidScaleType": "CENTER_CROP"
-              },
-              "CapacitorCookies": {
-                "enabled": true
-              },
-              "CapacitorUpdater": {
-                "autoUpdate": true,
-                "statsUrl": "https://api.capgo.app/stats",
-                "channel": "production"
-              }
-            }
-          }
-          EOF
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       - name: Deploy Live Update to Capgo
         run: |
           cd mobile
-          npx @capgo/cli bundle upload --apikey ${{ secrets.CAPGO_TOKEN }} --channel production --path ./frontend
+          npx @capgo/cli bundle upload \
+            --apikey ${{ secrets.CAPGO_TOKEN }} \
+            --channel production \
+            --path ../frontend
 
   # ─── 4. SEO PRE‑RENDERING ───
   prerender-seo:
-    needs: deploy-backend-render
+    needs: [deploy-frontend, deploy-backend-render]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
@@ -175,8 +138,9 @@ jobs:
         env:
           BASE_URL: ${{ secrets.PRODUCTION_URL }}
 
-  # ─── 5. BUILD ANDROID RELEASE APK (via Capacitor) ───
+  # ─── 5. BUILD ANDROID RELEASE APK ───
   build-android:
+    needs: deploy-frontend
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
@@ -200,7 +164,7 @@ jobs:
           rm -rf frontend
           cp -r ../frontend frontend/
 
-      - name: Create root Capacitor config
+      - name: Create Capacitor config
         run: |
           cd mobile
           cat > capacitor.config.json << 'EOF'
@@ -218,9 +182,9 @@ jobs:
               ]
             },
             "android": {
-              "allowMixedContent": true,
+              "allowMixedContent": false,
               "captureInput": true,
-              "webContentsDebuggingEnabled": true
+              "webContentsDebuggingEnabled": false
             },
             "ios": {
               "scheme": "HotPortion",
@@ -228,7 +192,7 @@ jobs:
               "backgroundColor": "#E53935",
               "allowsLinkPreview": false,
               "preferredContentMode": "mobile",
-              "limitsNavigationsToAppBoundDomains": true
+              "limitsNavigationsToAppBoundDomains": false
             },
             "plugins": {
               "SplashScreen": {
@@ -267,7 +231,6 @@ jobs:
           MANIFEST="mobile/android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
             sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />' "$MANIFEST"
-            sed -i 's/<application/<application android:usesCleartextTraffic="true"/' "$MANIFEST"
           fi
 
       - name: Sync Android project
@@ -280,15 +243,20 @@ jobs:
           mkdir -p mobile/android/app
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > mobile/android/app/release.keystore
 
+      - name: Configure release signing via gradle.properties
+        run: |
+          cat >> mobile/android/gradle.properties <<EOF
+          android.injected.signing.store.file=$GITHUB_WORKSPACE/mobile/android/app/release.keystore
+          android.injected.signing.store.password=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          android.injected.signing.key.alias=${{ secrets.ANDROID_KEY_ALIAS }}
+          android.injected.signing.key.password=${{ secrets.ANDROID_KEY_PASSWORD }}
+          EOF
+
       - name: Build Release APK with Gradle
         run: |
           cd mobile/android
           chmod +x gradlew
-          ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/mobile/android/app/release.keystore \
-            -Pandroid.injected.signing.store.password=${{ secrets.ANDROID_KEYSTORE_PASSWORD }} \
-            -Pandroid.injected.signing.key.alias=${{ secrets.ANDROID_KEY_ALIAS }} \
-            -Pandroid.injected.signing.key.password=${{ secrets.ANDROID_KEY_PASSWORD }}
+          ./gradlew assembleRelease
 
       - name: Upload Signed Release APK artifact
         uses: actions/upload-artifact@v4
@@ -296,8 +264,9 @@ jobs:
           name: android-release-apk
           path: mobile/android/app/build/outputs/apk/release/app-release.apk
 
-  # ─── 6. BUILD IOS APP (UNSIGNED via Capacitor) ───
+  # ─── 6. BUILD IOS APP (UNSIGNED) ───
   build-ios:
+    needs: deploy-frontend
     runs-on: macos-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
@@ -344,7 +313,7 @@ jobs:
               "backgroundColor": "#E53935",
               "allowsLinkPreview": false,
               "preferredContentMode": "mobile",
-              "limitsNavigationsToAppBoundDomains": true
+              "limitsNavigationsToAppBoundDomains": false
             },
             "plugins": {
               "SplashScreen": {
