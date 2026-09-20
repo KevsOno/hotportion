@@ -2261,7 +2261,18 @@ async def lifespan(app: FastAPI):
         _executor.shutdown(wait=True)
 
 # ---------- FASTAPI APP ----------
-app = FastAPI(title="Hot Portion Grill", version="1.0.0", lifespan=lifespan, docs_url="/docs")
+# [FIX] OpenAPI schema, Swagger UI, and ReDoc are disabled in production.
+# They enumerate the full API surface (every route, every model), which is
+# free reconnaissance for an attacker. Only exposed when DEBUG=True so a
+# developer working locally or in staging can still use them.
+app = FastAPI(
+    title="Hot Portion Grill",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url="/docs" if settings.DEBUG else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if settings.DEBUG else None,
+)
 
 @app.middleware("http")
 async def add_correlation_id(request: Request, call_next):
@@ -2296,6 +2307,39 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# [FIX] Baseline security headers on every response. The frontend is served
+# by Netlify (which sets its own headers), but the backend still serves HTML
+# at /docs (Swagger UI) when DEBUG=True, and may in future serve other
+# HTML/JSON directly. This middleware guarantees a safe default regardless
+# of what Netlify does.
+#
+# Notes:
+#   * X-Content-Type-Options: nosniff — stops MIME-type sniffing.
+#   * X-Frame-Options: DENY        — blocks framing (clickjacking).
+#   * Referrer-Policy              — limits cross-origin referrer leakage.
+#   * Permissions-Policy           — denies geolocation / camera / mic.
+#   * X-Robots-Tag on /docs, /redoc, /openapi.json — belt-and-braces so
+#     that even if docs are briefly enabled, search engines won't index them.
+#
+# We deliberately do NOT set a Content-Security-Policy here. Swagger UI needs
+# a permissive inline-CSP to function, and the app's own HTML (index.html,
+# admin.html) is served by Netlify, which is the right place for CSP. Adding
+# a CSP here would be either useless or would break Swagger.
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
+    if (
+        request.url.path.startswith("/docs")
+        or request.url.path.startswith("/redoc")
+        or request.url.path.startswith("/openapi.json")
+    ):
+        response.headers.setdefault("X-Robots-Tag", "noindex, nofollow")
+    return response
 
 # ---------- BANNER SERVICE ----------
 class BannerService:
@@ -2444,12 +2488,29 @@ class BannerService:
 # PUBLIC API ROUTES
 # =============================================
 
+# [FIX] Split health check into public + authenticated.
+#
+# Public /health is a minimal liveness probe. It returns only enough to tell
+# an uptime monitor whether the process is up — no version info, no schema
+# state, no external-service configuration flags, no reconciliation counters.
+# Those details are free reconnaissance for an attacker.
+#
+# /health/detail returns the full operational payload and requires an
+# authenticated staff account. Operators can hit it with a bearer token when
+# they need to debug migrations, geocoding, or reconciliation.
 @app.get("/health")
 async def health():
+    """Public liveness probe. Minimal payload — no operational detail."""
+    return {"status": "ok"}
+
+
+@app.get("/health/detail")
+async def health_detail(staff: Dict[str, Any] = Depends(get_current_staff)):
     """
-    Liveness + readiness. Reports 'degraded' if schema migrations failed —
-    operators should wire this into their alerting so silent schema drift
-    doesn't go unnoticed.
+    Authenticated readiness probe. Full operational detail for operators.
+
+    Reports 'degraded' if schema migrations failed — wire this into internal
+    alerting so silent schema drift doesn't go unnoticed.
     """
     return {
         "status": "healthy" if _schema_state["ready"] else "degraded",
