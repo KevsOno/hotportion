@@ -1,5 +1,9 @@
 [images]
-  remote_images = ["https://ajmauddonufaryjbiavh.supabase.co/storage/v1/object/public/.*"]
+  remote_images = [
+    "https://ajmauddonufaryjbiavh.supabase.co/storage/v1/object/public/.*",
+    "https://images.unsplash.com/.*",
+    "https://plus.unsplash.com/.*"
+  ]
 
 [build]
   publish = "."
@@ -30,8 +34,7 @@
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
     Permissions-Policy = "geolocation=(self), camera=(), microphone=(), payment=()"
-    # Change to Content-Security-Policy once verified to secure an A+ on Snyk / SecurityHeaders
-    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://unpkg.com; font-src 'self' data: https://cdnjs.cloudflare.com; img-src 'self' data: blob: https://ajmauddonufaryjbiavh.supabase.co https://*.supabase.co https://*.tile.openstreetmap.org https://unpkg.com; connect-src 'self' https://hotportion.onrender.com https://ajmauddonufaryjbiavh.supabase.co https://nominatim.openstreetmap.org; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';"
+    Content-Security-Policy = "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://unpkg.com; font-src 'self' data: https://cdnjs.cloudflare.com; img-src 'self' data: blob: https://ajmauddonufaryjbiavh.supabase.co https://*.supabase.co https://images.unsplash.com https://plus.unsplash.com https://*.tile.openstreetmap.org https://unpkg.com; connect-src 'self' https://hotportion.onrender.com https://ajmauddonufaryjbiavh.supabase.co https://nominatim.openstreetmap.org https://api.unsplash.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';"
 
 # ─── CACHE CONTROL HEADERS ───
 [[headers]]
@@ -48,6 +51,7 @@
   for = "*.html"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
+
 [[headers]]
   for = "/admin*"
   [headers.values]
