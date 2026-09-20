@@ -692,11 +692,11 @@
             <form id="forgot-otp-form" style="display:none;">
                 <div class="auth-info">
                     <i class="fa-regular fa-circle-info"></i>
-                    We sent a 6-digit code to <strong id="forgot-email-display"></strong>.
+                    We sent a 8-digit code to <strong id="forgot-email-display"></strong>.
                     It expires in 1 hour.
                 </div>
                 <div class="auth-form-group">
-                    <label>Enter the *-digit code</label>
+                    <label>Enter the 8-digit code</label>
                     <div class="otp-inputs" id="otp-inputs">
                         <input type="text" inputmode="numeric" maxlength="1" data-otp-index="0" />
                         <input type="text" inputmode="numeric" maxlength="1" data-otp-index="1" />
@@ -2086,8 +2086,8 @@
                 const errorEl = document.getElementById('forgot-error');
                 errorEl.classList.remove('show');
 
-                if (token.length !== 6) {
-                    showAuthError('forgot-error', 'Please enter all 6 digits.');
+                if (token.length !== 8) {
+                    showAuthError('forgot-error', 'Please enter all 8 digits.');
                     return;
                 }
 
