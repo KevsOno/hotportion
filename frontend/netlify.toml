@@ -1,8 +1,7 @@
 [images]
   remote_images = [
     "https://ajmauddonufaryjbiavh.supabase.co/storage/v1/object/public/.*",
-    "https://images.unsplash.com/.*",
-    "https://plus.unsplash.com/.*"
+
   ]
 
 [build]
