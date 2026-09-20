@@ -204,6 +204,29 @@
         toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
     }
 
+    // ─── Image fallback binding ───
+    // Replaces inline onerror attributes so that script-src can drop
+    // 'unsafe-inline' without breaking image fallbacks.
+    function bindImageFallbacks(root = document) {
+        // Static elements (brand logo, chat avatar) — swap parent content.
+        root.querySelectorAll('img[data-fallback-html]').forEach(img => {
+            if (img.dataset.fallbackBound) return;
+            img.dataset.fallbackBound = '1';
+            img.addEventListener('error', function () {
+                if (this.parentElement) {
+                    this.parentElement.innerHTML = this.dataset.fallbackHtml;
+                }
+            });
+        });
+
+        // Dynamic card/cart images — just hide the <img> so the emoji behind shows.
+        root.querySelectorAll('img[data-hide-on-error]').forEach(img => {
+            if (img.dataset.hideBound) return;
+            img.dataset.hideBound = '1';
+            img.addEventListener('error', function () { this.style.display = 'none'; });
+        });
+    }
+
     // ─── Netlify Image CDN wrapper ───
     function netlifyImageUrl(path, width = 400) {
         const base =
@@ -935,7 +958,7 @@
             card.style.animationDelay = (idx * 0.04) + 's';
             const tagColor = p.tagColor === 'orange' ? 'orange' : '';
             const imageHtml = p.image ?
-                `<img src="${p.image}" alt="${p.name}" loading="lazy" width="300" height="200" onerror="this.style.display='none'">` :
+                `<img src="${p.image}" alt="${p.name}" loading="lazy" width="300" height="200" data-hide-on-error>` :
                 `<span class="food-emoji">${p.emoji || '🍽️'}</span>`;
             card.innerHTML = `
                 <div class="menu-card-image">
@@ -991,6 +1014,8 @@
                 addToCart(id, qty);
             });
         });
+
+        bindImageFallbacks();
     }
 
     // ─── RENDER FEATURED CAROUSEL ───
@@ -1019,7 +1044,7 @@
                 card.style.animation = 'none';
                 const tagColor = p.tagColor === 'orange' ? 'orange' : '';
                 const imageHtml = p.image ?
-                    `<img src="${p.image}" alt="${p.name}" loading="lazy" width="300" height="200" onerror="this.style.display='none'">` :
+                    `<img src="${p.image}" alt="${p.name}" loading="lazy" width="300" height="200" data-hide-on-error>` :
                     `<span class="food-emoji">${p.emoji || '🍽️'}</span>`;
                 card.innerHTML = `
                     <div class="menu-card-image">
@@ -1089,6 +1114,8 @@
                 current = (current + 1) % totalSlides;
             }, 4000);
         }
+
+        bindImageFallbacks();
     }
 
     // ─── CART OPERATIONS ───
@@ -1162,7 +1189,7 @@
             items.forEach(item => {
                 const itemTotal = item.price * item.qty;
                 const imageHtml = item.image ?
-                    `<img src="${item.image}" alt="${item.name}" class="item-image" loading="lazy" width="48" height="48" onerror="this.style.display='none'">` :
+                    `<img src="${item.image}" alt="${item.name}" class="item-image" loading="lazy" width="48" height="48" data-hide-on-error>` :
                     `<span class="item-emoji">${item.emoji || '🍽️'}</span>`;
                 html += `
                     <div class="cart-item" data-id="${item.id}">
@@ -1215,6 +1242,7 @@
         cartTotal.textContent = formatPrice(total);
 
         updateCheckoutButton();
+        bindImageFallbacks();
     }
 
     // ─── UPDATE CHECKOUT BUTTON ───
@@ -2294,6 +2322,7 @@
 
     // ─── BOOT ───
     initData().then(() => {
+        bindImageFallbacks();
         console.log('🚀 Hot Portion Grill ready!');
         console.log('📍 Delivery coverage with intelligent fee calculation');
         console.log('📊 Fee breakdown includes: base + discounts + surcharges');
