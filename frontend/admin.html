@@ -175,6 +175,19 @@
         .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
         .form-actions { display: flex; gap: 12px; margin-top: 20px; justify-content: flex-end; }
 
+        /* [FEATURE] Password input with inline generate button */
+        .password-input-wrap { display: flex; gap: 8px; align-items: stretch; }
+        .password-input-wrap input { flex: 1; min-width: 0; }
+        .password-input-wrap .btn-generate {
+            background: #f0f4f8; color: var(--text-dark);
+            border: 1px solid #e2e8e6; border-radius: var(--radius-sm);
+            padding: 0 14px; font-size: 0.8rem; font-weight: 600;
+            cursor: pointer; white-space: nowrap;
+            display: inline-flex; align-items: center; gap: 6px;
+            transition: background 0.2s;
+        }
+        .password-input-wrap .btn-generate:hover { background: #e2e8e6; }
+
         /* ─── MAP ─── */
         #delivery-area-map { height: 400px; width: 100%; border-radius: var(--radius-sm); border: 1px solid #e2e8e6; margin-bottom: 12px; }
         #delivery-area-map-modal { height: 450px; width: 100%; border-radius: var(--radius-sm); border: 1px solid #e2e8e6; margin-bottom: 12px; }
@@ -729,7 +742,7 @@
             </form>
         </div>
 
-        <!-- SET PASSWORD CARD (shown for invited users) -->
+        <!-- SET PASSWORD CARD (kept for the "Forgot password" recovery flow) -->
         <div class="auth-card" id="auth-setpw-card" style="display:none;">
             <div class="auth-logo">
                 <img src="/fastfood/images/logo.webp" alt="Hot Portion Grill"
@@ -1147,7 +1160,7 @@
                 <h2><i class="fa-solid fa-user-shield" style="color:var(--primary);"></i> Staff Management</h2>
                 <div class="search-box">
                     <input type="text" id="staff-search" placeholder="Search staff..." />
-                    <button class="btn btn-primary btn-sm" id="add-staff-btn"><i class="fa-solid fa-user-plus"></i> Invite</button>
+                    <button class="btn btn-primary btn-sm" id="add-staff-btn"><i class="fa-solid fa-user-plus"></i> Create Staff</button>
                 </div>
             </div>
             <div class="table-wrap">
@@ -1597,11 +1610,15 @@
         </div>
     </div>
 
-    <!-- ─── STAFF INVITE MODAL ─── -->
+    <!-- ─── STAFF MODAL ─── -->
+    <!-- [FIX] The modal now requires a password when creating a new staff
+         member. Editing an existing member uses the same modal but the
+         password field is hidden (password changes go through the user's
+         own "Forgot password" flow). -->
     <div class="modal-overlay" id="staff-modal">
         <div class="modal">
             <div class="modal-header">
-                <h3 id="staff-modal-title">Invite Staff Member</h3>
+                <h3 id="staff-modal-title">Create Staff Member</h3>
                 <button class="modal-close" id="staff-modal-close">&times;</button>
             </div>
             <form id="staff-form">
@@ -1614,7 +1631,22 @@
                     <label>Email Address *</label>
                     <input type="email" id="s-email" required placeholder="jane@example.com" />
                     <small style="color:var(--text-muted);font-size:0.72rem;display:block;margin-top:4px;">
-                        <i class="fa-regular fa-circle-info"></i> An invite email will be sent to this address.
+                        <i class="fa-regular fa-circle-info"></i> This email will be their login username.
+                    </small>
+                </div>
+                <!-- [FIX] Password field. Shown only when creating. -->
+                <div class="form-group" id="staff-password-group">
+                    <label>Initial Password *</label>
+                    <div class="password-input-wrap">
+                        <input type="text" id="s-password" minlength="6" placeholder="At least 6 characters"
+                               autocomplete="new-password" />
+                        <button type="button" class="btn-generate" id="s-generate-password">
+                            <i class="fa-solid fa-dice"></i> Generate
+                        </button>
+                    </div>
+                    <small style="color:var(--text-muted);font-size:0.72rem;display:block;margin-top:4px;">
+                        <i class="fa-regular fa-circle-info"></i> Share this with the staff member.
+                        They can change it later via "Forgot password".
                     </small>
                 </div>
                 <div class="form-group">
@@ -1629,7 +1661,7 @@
                 </div>
                 <div class="form-actions">
                     <button type="button" class="btn btn-outline" id="staff-modal-cancel">Cancel</button>
-                    <button type="submit" class="btn btn-primary" id="staff-modal-save"><i class="fa-solid fa-paper-plane"></i> Send Invite</button>
+                    <button type="submit" class="btn btn-primary" id="staff-modal-save"><i class="fa-solid fa-user-plus"></i> Create Staff</button>
                 </div>
             </form>
         </div>
@@ -1671,9 +1703,6 @@
                     auth: {
                         persistSession: true,
                         autoRefreshToken: true,
-                        // Turn OFF auto-detection; we'll process the hash explicitly below.
-                        // This avoids a race where our code runs before Supabase has
-                        // finished parsing the URL fragment.
                         detectSessionInUrl: false,
                         storageKey: 'hotportion-admin-auth',
                     }
@@ -1681,9 +1710,8 @@
             );
 
             // ─── Explicit URL-hash session bootstrap ───
-            // Supabase invite/recovery redirects include access_token + refresh_token
-            // in the URL hash. We parse them synchronously here and hand them to
-            // Supabase via setSession() so the session exists before any code runs.
+            // Still needed for the "Forgot password" recovery flow, which
+            // redirects back with #access_token=...&type=recovery.
             (async function bootstrapSessionFromUrl() {
                 try {
                     const rawHash = (window.location.hash || '').replace(/^#/, '');
@@ -1708,17 +1736,16 @@
             })();
 
             // ─── STATE ───
-            let currentStaff = null;   // populated after successful auth
+            let currentStaff = null;
             let isSigningOut = false;
 
             // ═══════════════════════════════════════════════════════
-            // API WRAPPER (attaches JWT to every /api/* request)
+            // API WRAPPER
             // ═══════════════════════════════════════════════════════
             async function getValidToken() {
                 try {
                     const { data: { session } } = await supabaseClient.auth.getSession();
                     if (!session) return null;
-                    // Refresh if expiring within 60s
                     if (session.expires_at && (session.expires_at * 1000 - Date.now() < 60000)) {
                         const { data: { session: fresh }, error } = await supabaseClient.auth.refreshSession();
                         if (error || !fresh) return null;
@@ -1772,8 +1799,6 @@
                 catch (e) { return false; }
             }
 
-            // When the tab closes/navigates and "Remember me" was unchecked,
-            // wipe Supabase's localStorage keys so the session doesn't persist.
             window.addEventListener('pagehide', () => {
                 if (!shouldNotPersist()) return;
                 try {
@@ -1791,6 +1816,7 @@
             const loginCard = document.getElementById('auth-login-card');
             const forgotCard = document.getElementById('auth-forgot-card');
             const adminApp = document.getElementById('admin-app');
+            const setpwCard = document.getElementById('auth-setpw-card');
 
             function showLoginScreen(message) {
                 currentStaff = null;
@@ -1798,6 +1824,7 @@
                 adminApp.style.display = 'none';
                 loginCard.style.display = '';
                 forgotCard.style.display = 'none';
+                setpwCard.style.display = 'none';
 
                 const loginSuccess = document.getElementById('login-success');
                 const loginError = document.getElementById('login-error');
@@ -1809,7 +1836,6 @@
                 }
                 loginError.classList.remove('show');
 
-                // Reset forgot card state
                 resetForgotForms();
             }
 
@@ -1821,13 +1847,12 @@
             function showForgotCard() {
                 loginCard.style.display = 'none';
                 forgotCard.style.display = '';
+                setpwCard.style.display = 'none';
                 resetForgotForms();
             }
 
-            const setpwCard = document.getElementById('auth-setpw-card');
-
+            // Kept for the recovery flow. Invite flow is no longer used.
             function showSetPasswordCard(email, mode) {
-                // mode is 'invite' or 'recovery' — copy varies slightly
                 currentStaff = null;
                 authGate.classList.remove('hidden');
                 adminApp.style.display = 'none';
@@ -1837,13 +1862,11 @@
 
                 document.getElementById('setpw-email').textContent = email || 'your account';
 
-                // Reset any previous error/success
                 document.getElementById('setpw-error').classList.remove('show');
                 document.getElementById('setpw-success').classList.remove('show');
                 document.getElementById('setpw-password').value = '';
                 document.getElementById('setpw-confirm').value = '';
 
-                // Customize the header copy for recovery vs invite
                 const heading = setpwCard.querySelector('h1');
                 const subtitle = setpwCard.querySelector('.auth-subtitle');
                 if (mode === 'recovery') {
@@ -1912,7 +1935,6 @@
 
                     setNoPersist(!remember);
 
-                    // Validate against backend (checks staff table + active status)
                     const meRes = await apiFetch('/api/auth/me');
                     if (!meRes.ok) {
                         let detail = 'Could not verify your account.';
@@ -1945,7 +1967,6 @@
                 performLogin(email, password, remember);
             });
 
-            // Demo login
             document.getElementById('demo-login-btn').addEventListener('click', () => {
                 document.getElementById('login-email').value = AUTH_CONFIG.DEMO_EMAIL;
                 document.getElementById('login-password').value = AUTH_CONFIG.DEMO_PASSWORD;
@@ -1953,7 +1974,6 @@
                 performLogin(AUTH_CONFIG.DEMO_EMAIL, AUTH_CONFIG.DEMO_PASSWORD, false);
             });
 
-            // Show/hide password toggles
             function wireEyeToggle(btnId, inputId, iconId) {
                 const btn = document.getElementById(btnId);
                 const input = document.getElementById(inputId);
@@ -1973,7 +1993,7 @@
             wireEyeToggle('toggle-setpw-confirm', 'setpw-confirm', 'eye-setpw-confirm-icon');
 
             // ═══════════════════════════════════════════════════════
-            // FORGOT PASSWORD (OTP flow)
+            // FORGOT PASSWORD (OTP flow) — unchanged
             // ═══════════════════════════════════════════════════════
             let pendingResetEmail = '';
 
@@ -1987,7 +2007,6 @@
                 loginCard.style.display = '';
             });
 
-            // Step 1: Send OTP
             document.getElementById('forgot-email-form').addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const email = document.getElementById('forgot-email').value.trim();
@@ -2016,7 +2035,6 @@
                     document.getElementById('forgot-email-form').style.display = 'none';
                     document.getElementById('forgot-otp-form').style.display = '';
                     document.getElementById('forgot-success').classList.remove('show');
-                    // Focus first OTP input
                     setTimeout(() => {
                         const first = document.querySelector('#otp-inputs input[data-otp-index="0"]');
                         if (first) first.focus();
@@ -2034,7 +2052,6 @@
                 }
             });
 
-            // OTP input UX: auto-advance, backspace, paste
             const otpInputs = Array.from(document.querySelectorAll('#otp-inputs input'));
             otpInputs.forEach((input, idx) => {
                 input.addEventListener('input', (e) => {
@@ -2060,7 +2077,6 @@
                 });
             });
 
-            // Step 2: Verify OTP
             document.getElementById('forgot-otp-form').addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const token = otpInputs.map(i => i.value).join('');
@@ -2086,7 +2102,6 @@
                     if (error) throw error;
                     if (!data.session) throw new Error('Verification failed — no session returned.');
 
-                    // User is now signed in; show password reset form
                     document.getElementById('forgot-otp-form').style.display = 'none';
                     document.getElementById('forgot-newpass-form').style.display = '';
                     setTimeout(() => document.getElementById('new-password').focus(), 100);
@@ -2102,7 +2117,6 @@
                 }
             });
 
-            // Resend OTP
             document.getElementById('forgot-resend-btn').addEventListener('click', async () => {
                 const btn = document.getElementById('forgot-resend-btn');
                 const errorEl = document.getElementById('forgot-error');
@@ -2132,7 +2146,7 @@
             });
 
             // ═══════════════════════════════════════════════════════
-            // SET PASSWORD (invite acceptance)
+            // SET PASSWORD (recovery flow only now)
             // ═══════════════════════════════════════════════════════
             document.getElementById('setpw-form').addEventListener('submit', async (e) => {
                 e.preventDefault();
@@ -2166,15 +2180,11 @@
                     successEl.textContent = 'Password set! Signing you out so you can log in with it...';
                     successEl.classList.add('show');
 
-                    // Give the user a moment to read the message, then sign out and go to login
                     setTimeout(async () => {
                         try { await supabaseClient.auth.signOut(); } catch (_) {}
-
-                        // Clear the invite tokens from the URL so a refresh doesn't reprocess them
                         try {
                             window.history.replaceState({}, document.title, window.location.pathname);
                         } catch (_) {}
-
                         showLoginScreen('Your password is set. Sign in with your email and new password.');
                     }, 1200);
                 } catch (err) {
@@ -2186,7 +2196,6 @@
                 }
             });
 
-            // Step 3: Update password
             document.getElementById('forgot-newpass-form').addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const newPass = document.getElementById('new-password').value;
@@ -2212,10 +2221,8 @@
                     const { error } = await supabaseClient.auth.updateUser({ password: newPass });
                     if (error) throw error;
 
-                    // Sign out so the user logs in fresh
                     await supabaseClient.auth.signOut();
 
-                    // Back to login with success
                     forgotCard.style.display = 'none';
                     loginCard.style.display = '';
                     resetForgotForms();
@@ -2230,7 +2237,7 @@
             });
 
             // ═══════════════════════════════════════════════════════
-            // AUTHENTICATED: APPLY ROLE VISIBILITY & BOOT ADMIN
+            // AUTHENTICATED
             // ═══════════════════════════════════════════════════════
             function onAuthenticated(me) {
                 currentStaff = me;
@@ -2259,7 +2266,6 @@
                     btn.style.display = ok ? '' : 'none';
                 });
 
-                // If the active tab is now hidden, switch to the first visible tab
                 const activeBtn = document.querySelector('#admin-tabs button.active');
                 if (activeBtn && activeBtn.style.display === 'none') {
                     const firstVisible = document.querySelector('#admin-tabs button:not([style*="display: none"])');
@@ -2269,9 +2275,6 @@
                 }
             }
 
-            // ═══════════════════════════════════════════════════════
-            // LOGOUT
-            // ═══════════════════════════════════════════════════════
             document.getElementById('logout-btn').addEventListener('click', async () => {
                 if (!confirm('Sign out of the admin panel?')) return;
                 try {
@@ -2300,7 +2303,6 @@
                 auditLog: '/api/admin/audit-log',
             };
 
-            // ─── TOAST ───
             const toastEl = document.getElementById('toast-admin');
             const toastMsg = document.getElementById('toast-admin-msg');
             let toastTimer = null;
@@ -2313,7 +2315,6 @@
                 toastTimer = setTimeout(() => toastEl.classList.remove('show'), 3000);
             }
 
-            // ─── STATE ───
             let products = [];
             let categories = [];
             let orders = [];
@@ -2332,7 +2333,6 @@
             let auditOffset = 0;
             let auditLimit = 50;
 
-            // ─── AREAS STATE ───
             let deliveryAreas = [];
             let areaMap = null;
             let areaMapModal = null;
@@ -2342,15 +2342,12 @@
             let areaMapLayers = [];
             let areaEditId = null;
 
-            // ─── AUTOCOMPLETE STATE ───
             let autocompleteTimeout = null;
 
-            // ─── CACHING ───
             let topProductsCache = null;
             let topProductsCacheTime = 0;
             const TOP_PRODUCTS_CACHE_TTL = 30000;
 
-            // ─── DOM REFS ───
             const tabs = document.querySelectorAll('#admin-tabs button');
             const panels = {
                 products: document.getElementById('panel-products'),
@@ -2438,6 +2435,10 @@
             const locationSearch = document.getElementById('location-search');
             const autocompleteDropdown = document.getElementById('autocomplete-dropdown');
 
+            // [FEATURE] Staff modal refs
+            const staffPasswordGroup = document.getElementById('staff-password-group');
+            const staffPasswordInput = document.getElementById('s-password');
+
             // ─── FETCH HELPER ───
             async function fetchJSON(url, options = {}) {
                 const res = await apiFetch(url, options);
@@ -2446,13 +2447,10 @@
                 return res.json();
             }
 
-            // ─── IMAGE HELPER ───
             function getProductImage(product) {
                 return product.image || null;
             }
 
-            // [FEATURE] Humanize internal status enum → display label.
-            // Renders `awaiting_payment` as "Awaiting Payment" instead of raw snake_case.
             function humanizeStatus(status) {
                 const map = {
                     'pending': 'Pending',
@@ -2467,8 +2465,6 @@
                 return map[status] || status;
             }
 
-            // [FEATURE] Payment method badge markup. Falls back to "Online" if
-            // the backend didn't set the column (pre-migration rows).
             function paymentBadgeHtml(paymentMethod) {
                 const method = (paymentMethod || 'online').toLowerCase();
                 if (method === 'offline') {
@@ -2478,7 +2474,7 @@
             }
 
             // ═══════════════════════════════════════════════════════
-            // BOOT (called after auth succeeds)
+            // BOOT
             // ═══════════════════════════════════════════════════════
             let adminBooted = false;
             function bootAdmin() {
@@ -2492,7 +2488,6 @@
                 });
             }
 
-            // ─── LOAD ALL ───
             async function loadAllData(forceTopProducts = false) {
                 try {
                     await Promise.all([
@@ -2684,12 +2679,6 @@
                 });
             }
 
-            // [FEATURE] renderOrders now:
-            //   * shows a Payment column (Online / Pay at counter)
-            //   * uses humanizeStatus() for readable status labels
-            //   * renders a "Mark Paid" button for offline awaiting_payment orders
-            //   * renders a "Complete" button for confirmed orders
-            //   * calls the correct backend endpoint per status
             function renderOrders() {
                 const search = orderSearch.value.toLowerCase().trim();
                 const dateFilter = orderDateFilter.value;
@@ -2709,7 +2698,6 @@
                     });
                 }
                 if (filtered.length === 0) {
-                    // [FEATURE] colspan 8 → 9 for the new Payment column
                     ordersBody.innerHTML =
                         `<tr><td colspan="9" class="empty-state"><i class="fa-regular fa-receipt"></i> No orders found</td></tr>`;
                     return;
@@ -2725,11 +2713,6 @@
                     const reason = o.cancellation_reason || '';
                     const reasonHtml = reason ? `<span class="cancellation-reason" title="${reason}">📝 ${reason}</span>` : '';
 
-                    // [FEATURE] Action buttons differ by status:
-                    //   awaiting_payment → "Mark Paid" (offline counter payment collected)
-                    //   pending/paid     → "Confirm"   (move to kitchen)
-                    //   confirmed        → "Complete"  (handed over)
-                    //   any active       → "Cancel"
                     let actionButtons = '';
                     if (!isCancelled && !isCompleted) {
                         if (isAwaitingPayment) {
@@ -2779,12 +2762,6 @@
                 });
             }
 
-            // [FEATURE] confirmOrder now picks the correct backend endpoint
-            // based on the current status:
-            //   awaiting_payment → POST /confirm-offline (moves to confirmed)
-            //   pending or paid  → PATCH /status → confirmed
-            // The old version always used /confirm-offline, which returns 400
-            // for orders already in 'paid' status.
             async function confirmOrder(id) {
                 const order = orders.find(o => o.id == id);
                 if (!order) return;
@@ -2824,7 +2801,6 @@
                 }
             }
 
-            // [FEATURE] Mark a confirmed order as completed
             async function completeOrder(id) {
                 if (!confirm('Mark this order as completed? Customer has received their order.')) return;
                 const btn = document.querySelector(`.complete-order[data-id="${id}"]`);
@@ -3111,9 +3087,6 @@
             // ═══════════════════════════════════════════════════════
             // ORDERS VIEW
             // ═══════════════════════════════════════════════════════
-            // [FEATURE] viewOrder now shows Payment Method and, for offline
-            // orders awaiting payment, a clear banner telling the cashier
-            // how much to collect.
             async function viewOrder(id) {
                 try {
                     const data = await fetchJSON(`${API.orders}/${id}`);
@@ -3131,8 +3104,6 @@
                     const paymentMethod = (data.payment_method || 'online').toLowerCase();
                     const paymentLabel = paymentMethod === 'offline' ? '💵 Pay at counter' : '💳 Online (Monnify)';
 
-                    // [FEATURE] Prominent banner for offline orders that still
-                    // need to be paid — the amount to collect is the grand total.
                     let offlineNotice = '';
                     if (paymentMethod === 'offline' && data.status === 'awaiting_payment') {
                         offlineNotice = `
@@ -3191,11 +3162,8 @@
                 }
             }
 
-            // ─── ORDER POLLING ───
-            // [FEATURE] Also toast for offline orders (awaiting_payment). Backend
-            // filters out `pending` by default, but `awaiting_payment` comes through.
             async function pollOrders() {
-                if (!currentStaff) return; // not logged in
+                if (!currentStaff) return;
                 try {
                     const url = `${API.orders}?since=${encodeURIComponent(lastPollTimestamp)}`;
                     const response = await apiFetch(url);
@@ -4243,11 +4211,30 @@
                 document.querySelectorAll('.reactivate-staff').forEach(btn => btn.addEventListener('click', () => reactivateStaff(btn.dataset.id)));
             }
 
+            // [FIX] Generate a friendly, high-entropy password. Excludes
+            // visually ambiguous characters (I/l/1, O/0) so it can be read
+            // aloud over WhatsApp without confusion.
+            function generateRandomPassword(length) {
+                length = length || 12;
+                const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%';
+                let out = '';
+                if (window.crypto && window.crypto.getRandomValues) {
+                    const buf = new Uint32Array(length);
+                    window.crypto.getRandomValues(buf);
+                    for (let i = 0; i < length; i++) out += chars[buf[i] % chars.length];
+                } else {
+                    for (let i = 0; i < length; i++) out += chars[Math.floor(Math.random() * chars.length)];
+                }
+                return out;
+            }
+
+            // [FIX] openStaffModal now hides the password field when editing
+            // an existing member (only creates need a preset password), and
+            // shows it when creating.
             function openStaffModal(staffId = null) {
                 const modal = document.getElementById('staff-modal');
                 const form = document.getElementById('staff-form');
                 form.reset();
-                const emailGroup = document.getElementById('staff-email-group');
                 const emailInput = document.getElementById('s-email');
                 const saveBtn = document.getElementById('staff-modal-save');
 
@@ -4258,14 +4245,21 @@
                     document.getElementById('staff-id').value = s.id;
                     document.getElementById('s-fullname').value = s.full_name || '';
                     emailInput.value = s.email || '';
-                    emailInput.disabled = true; // email can't be changed here
+                    emailInput.disabled = true;
                     document.getElementById('s-role').value = s.role;
+                    // Hide password field — email and password can't be changed here.
+                    staffPasswordGroup.style.display = 'none';
+                    staffPasswordInput.required = false;
+                    staffPasswordInput.value = '';
                     saveBtn.innerHTML = '<i class="fa-solid fa-check"></i> Update';
                 } else {
-                    document.getElementById('staff-modal-title').textContent = 'Invite Staff Member';
+                    document.getElementById('staff-modal-title').textContent = 'Create Staff Member';
                     document.getElementById('staff-id').value = '';
                     emailInput.disabled = false;
-                    saveBtn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Send Invite';
+                    // Show password field — required for creation.
+                    staffPasswordGroup.style.display = 'block';
+                    staffPasswordInput.required = true;
+                    saveBtn.innerHTML = '<i class="fa-solid fa-user-plus"></i> Create Staff';
                 }
                 modal.classList.add('open');
             }
@@ -4273,22 +4267,36 @@
                 document.getElementById('staff-modal').classList.remove('open');
                 document.getElementById('staff-form').reset();
                 document.getElementById('s-email').disabled = false;
+                staffPasswordGroup.style.display = 'block';
+                staffPasswordInput.required = true;
             }
 
+            // [FIX] saveStaff now sends the password when creating. The PATCH
+            // path for editing remains unchanged.
             async function saveStaff(e) {
                 e.preventDefault();
                 const id = document.getElementById('staff-id').value;
                 const fullName = document.getElementById('s-fullname').value.trim();
                 const email = document.getElementById('s-email').value.trim();
                 const role = document.getElementById('s-role').value;
+                const password = staffPasswordInput.value;
                 const saveBtn = document.getElementById('staff-modal-save');
                 const originalHtml = saveBtn.innerHTML;
+
+                if (!id) {
+                    if (!password || password.length < 6) {
+                        showToast('Password must be at least 6 characters.', 'fa-solid fa-exclamation-circle');
+                        staffPasswordInput.focus();
+                        return;
+                    }
+                }
+
                 saveBtn.disabled = true;
                 saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
 
                 try {
                     if (id) {
-                        // Update existing staff
+                        // Update existing staff (no password change here)
                         const data = { full_name: fullName, role };
                         const response = await apiFetch(`${API.staff}/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
                         if (!response.ok) {
@@ -4297,14 +4305,14 @@
                         }
                         showToast('Staff member updated!');
                     } else {
-                        // Invite new staff
-                        const data = { email, full_name: fullName, role };
+                        // Create new staff with preset password
+                        const data = { email, full_name: fullName, role, password };
                         const response = await apiFetch(API.staff, { method: 'POST', body: JSON.stringify(data) });
                         if (!response.ok) {
                             const err = await response.json().catch(() => ({}));
-                            throw new Error(err.detail || 'Invite failed');
+                            throw new Error(err.detail || 'Create failed');
                         }
-                        showToast('✅ Invite sent to ' + email);
+                        showToast('✅ Staff member created. Share the password securely.', 'fa-solid fa-check-circle');
                     }
                     closeStaffModal();
                     await loadStaff();
@@ -4427,7 +4435,6 @@
                 if (tab === 'audit') loadAuditLog(true);
             }
 
-            // ─── DEBOUNCED SEARCHES ───
             let searchDebounceTimer = null;
             productSearch.addEventListener('input', () => {
                 clearTimeout(searchDebounceTimer);
@@ -4448,31 +4455,26 @@
             // ═══════════════════════════════════════════════════════
             tabs.forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
 
-            // Product modal
             document.getElementById('add-product-btn').addEventListener('click', () => openProductModal(null));
             document.getElementById('product-modal-close').addEventListener('click', closeProductModal);
             document.getElementById('product-modal-cancel').addEventListener('click', closeProductModal);
             productForm.addEventListener('submit', saveProduct);
             productModal.addEventListener('click', (e) => { if (e.target === productModal) closeProductModal(); });
 
-            // Category modal
             document.getElementById('add-category-btn').addEventListener('click', () => openCategoryModal(null));
             document.getElementById('category-modal-close').addEventListener('click', closeCategoryModal);
             document.getElementById('category-modal-cancel').addEventListener('click', closeCategoryModal);
             categoryForm.addEventListener('submit', saveCategory);
             categoryModal.addEventListener('click', (e) => { if (e.target === categoryModal) closeCategoryModal(); });
 
-            // Order modal
             document.getElementById('order-modal-close').addEventListener('click', closeOrderModal);
             orderModal.addEventListener('click', (e) => { if (e.target === orderModal) closeOrderModal(); });
 
-            // Cancel modal
             document.getElementById('cancel-modal-close').addEventListener('click', closeCancelModal);
             document.getElementById('cancel-modal-cancel').addEventListener('click', closeCancelModal);
             cancelForm.addEventListener('submit', submitCancel);
             cancelModal.addEventListener('click', (e) => { if (e.target === cancelModal) closeCancelModal(); });
 
-            // Refresh
             refreshBtn.addEventListener('click', async function() {
                 const originalHtml = this.innerHTML;
                 this.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Refreshing...';
@@ -4492,7 +4494,6 @@
                 }
             });
 
-            // Inventory view toggle
             document.querySelectorAll('#inventory-view-toggle button').forEach(btn => {
                 btn.addEventListener('click', function() {
                     document.querySelectorAll('#inventory-view-toggle button').forEach(b => b.classList.remove('active'));
@@ -4501,7 +4502,6 @@
                 });
             });
 
-            // Banner view toggle
             document.querySelectorAll('#banner-view-toggle button').forEach(btn => {
                 btn.addEventListener('click', function() {
                     document.querySelectorAll('#banner-view-toggle button').forEach(b => b.classList.remove('active'));
@@ -4512,7 +4512,6 @@
                 });
             });
 
-            // Banner buttons
             document.getElementById('add-banner-btn').addEventListener('click', () => openBannerModal(null));
             document.getElementById('banner-modal-close').addEventListener('click', closeBannerModal);
             document.getElementById('banner-modal-cancel').addEventListener('click', closeBannerModal);
@@ -4535,7 +4534,6 @@
             document.getElementById('prev-page').addEventListener('click', () => { if (currentPage > 1) { currentPage--; loadBanners(); } });
             document.getElementById('next-page').addEventListener('click', () => { if (currentPage < totalPages) { currentPage++; loadBanners(); } });
 
-            // Areas
             document.getElementById('add-area-btn').addEventListener('click', () => openAreaModal(null));
             document.getElementById('refresh-areas-btn').addEventListener('click', () => { loadDeliveryAreas(); showToast('Areas refreshed!'); });
             document.getElementById('area-modal-close').addEventListener('click', closeAreaModal);
@@ -4543,7 +4541,6 @@
             areaForm.addEventListener('submit', saveArea);
             areaModal.addEventListener('click', (e) => { if (e.target === areaModal) closeAreaModal(); });
 
-            // Autocomplete
             locationSearch.addEventListener('input', function() {
                 clearTimeout(autocompleteTimeout);
                 const query = this.value.trim();
@@ -4557,7 +4554,6 @@
                 setTimeout(() => autocompleteDropdown.classList.remove('show'), 200);
             });
 
-            // Rules
             document.querySelectorAll('#rules-sub-tabs button').forEach(btn => {
                 btn.addEventListener('click', () => switchSubTab(btn.dataset.subtab));
             });
@@ -4591,8 +4587,14 @@
             document.getElementById('staff-modal').addEventListener('click', (e) => {
                 if (e.target === document.getElementById('staff-modal')) closeStaffModal();
             });
+            // [FIX] "Generate" button for initial password
+            document.getElementById('s-generate-password').addEventListener('click', function() {
+                staffPasswordInput.value = generateRandomPassword(12);
+                // Select the text so the admin can copy it immediately
+                staffPasswordInput.focus();
+                staffPasswordInput.select();
+            });
 
-            // Audit
             document.getElementById('refresh-audit-btn').addEventListener('click', () => loadAuditLog(true));
             auditResourceFilter.addEventListener('change', () => loadAuditLog(true));
             document.getElementById('audit-prev').addEventListener('click', () => {
@@ -4603,11 +4605,9 @@
                 loadAuditLog();
             });
 
-            // Order filter buttons
             orderFilterBtn.addEventListener('click', renderOrders);
             orderClearFilter.addEventListener('click', () => { orderDateFilter.value = ''; renderOrders(); });
 
-            // Keyboard
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
                     if (productModal.classList.contains('open')) closeProductModal();
@@ -4631,12 +4631,6 @@
             // ═══════════════════════════════════════════════════════
             async function initAuth() {
                 try {
-                    // ─── STEP 1: Detect invite / recovery in the URL ───
-                    // Supabase redirects invite links to our site with a hash like:
-                    //   #access_token=...&refresh_token=...&type=invite
-                    // We turned detectSessionInUrl OFF, so bootstrapSessionFromUrl()
-                    // above already handed the tokens to Supabase. We just read the
-                    // `type` here to know which UI to show.
                     let urlType = null;
                     try {
                         const hash = window.location.hash || '';
@@ -4648,25 +4642,24 @@
 
                     const { data: { session } } = await supabaseClient.auth.getSession();
 
-                    // ─── STEP 2: If this is an invite/recovery, force password set ───
+                    // Invite/recovery handling: still supported for backwards
+                    // compatibility, though new staff no longer flow through
+                    // the invite email path.
                     if (urlType === 'invite' || urlType === 'recovery') {
                         if (session && session.user) {
                             showSetPasswordCard(session.user.email, urlType);
                         } else {
-                            // Link was already used or expired
                             window.history.replaceState({}, document.title, window.location.pathname);
-                            showLoginScreen('That invite link is invalid or already used. Ask an owner to send a new one.');
+                            showLoginScreen('That link is invalid or already used. Ask an admin to help you reset your password.');
                         }
                         return;
                     }
 
-                    // ─── STEP 3: Normal boot path (no invite in URL) ───
                     if (!session) {
                         showLoginScreen();
                         return;
                     }
 
-                    // Validate against backend (checks staff table)
                     const meRes = await apiFetch('/api/auth/me');
                     if (meRes.status === 401 || meRes.status === 403) {
                         await supabaseClient.auth.signOut();
@@ -4685,17 +4678,14 @@
                 }
             }
 
-            // Listen for auth state changes (e.g. token refresh, sign-out elsewhere)
             supabaseClient.auth.onAuthStateChange((event, session) => {
                 if (event === 'SIGNED_OUT' && currentStaff) {
                     showLoginScreen('You have been signed out.');
                 }
             });
 
-            // Multi-tab logout sync
             window.addEventListener('storage', (e) => {
                 if (e.key && e.key.startsWith('hotportion-admin-auth') && !e.newValue) {
-                    // Another tab signed out
                     if (currentStaff) showLoginScreen('Signed out in another tab.');
                 }
             });
@@ -4704,9 +4694,7 @@
                 try { stopPolling(); } catch (e) {}
             });
 
-            // Wait for hash bootstrap to complete before checking auth state
             (async () => {
-                // Give the bootstrap IIFE a chance to finish
                 let attempts = 0;
                 while (attempts < 20) {
                     const rawHash = (window.location.hash || '').replace(/^#/, '');
@@ -4725,6 +4713,7 @@
             console.log('🔐 Auth gate active — sign in to access admin');
             console.log('👥 Staff management & audit log available to owner/manager');
             console.log('💵 Offline payment support active');
+            console.log('🔑 Staff creation now uses preset passwords (no invite email)');
 
         })();
     </script>
