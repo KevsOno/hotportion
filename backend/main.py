@@ -5,6 +5,7 @@ import hmac
 import hashlib
 import base64
 import logging
+import math
 import time
 import re
 import secrets
@@ -72,6 +73,22 @@ def convert_datetime_to_iso(obj):
         return obj
 
 
+# [FIX] Haversine distance in meters between two lat/lng pairs. Used to
+# verify that client-supplied delivery coordinates are plausibly the same
+# place as the address the customer actually typed.
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    R = 6371000.0
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lng2 - lng1)
+    a = (
+        math.sin(dphi / 2.0) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2.0) ** 2
+    )
+    return 2.0 * R * math.asin(math.sqrt(a))
+
+
 # ---------- CONFIGURATION ----------
 class Settings(BaseSettings):
     SUPABASE_URL: str = Field(..., min_length=1)
@@ -86,6 +103,10 @@ class Settings(BaseSettings):
     MONNIFY_SECRET_KEY: str = Field(..., min_length=1)
     MONNIFY_CONTRACT_CODE: str = Field(..., min_length=1)
     MONNIFY_BASE_URL: str = "https://sandbox.monnify.com"
+    # [FIX] Monnify redirect/webhook URLs are now config-driven so staging,
+    # preview environments, and domain changes don't silently post to prod.
+    MONNIFY_REDIRECT_URL: str = "https://hotportion.netlify.app/?status=success"
+    MONNIFY_WEBHOOK_URL: str = "https://hotportion.onrender.com/api/v1/webhooks/monnify"
     GROQ_API_KEY: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
@@ -122,6 +143,10 @@ class Settings(BaseSettings):
     # Geocode cache (address -> lat/lng). In-memory, per-process.
     GEOCODE_CACHE_TTL_SECONDS: int = 86400       # 24h
     GEOCODE_CACHE_MAX_ENTRIES: int = 5000
+    # [FIX] Max allowed distance between client-supplied delivery coordinates
+    # and the coordinates the server obtains by geocoding the typed address.
+    # Beyond this, the server-side geocode wins. Prevents zone-fee gaming.
+    CLIENT_COORD_MAX_DISCREPANCY_M: float = 1000.0
     SENTRY_DSN: Optional[str] = None
     # Where invite and password-reset links should redirect after verification
     INVITE_REDIRECT_URL: str = "https://hotportion.netlify.app/admin"
@@ -503,9 +528,14 @@ class OrderCreate(BaseModel):
     delivery_fee: Optional[int] = 0
     delivery_breakdown: Optional[Dict[str, Any]] = None
     # Client-resolved coordinates (from AWS Places autocomplete). When present,
-    # the server trusts these and skips geocoding entirely.
+    # the server VERIFIES them against the typed address before trusting them.
     lat: Optional[float] = None
     lng: Optional[float] = None
+    # [FIX] Idempotency key. Clients should generate one UUID per checkout
+    # attempt and send it on every retry of that attempt. The server stores it
+    # on the order row; a repeat POST with the same key returns the existing
+    # order instead of creating a duplicate + a second Monnify transaction.
+    idempotency_key: Optional[str] = None
 
 class OrderStatusUpdate(BaseModel):
     status: str
@@ -1013,8 +1043,9 @@ class MonnifyIntegration:
             "contractCode": self.contract_code,
             "currencyCode": "NGN",
             "paymentMethods": ["CARD", "ACCOUNT_TRANSFER"],
-            "redirectUrl": "https://hotportion.netlify.app/?status=success",
-            "webhookUrl": "https://hotportion.onrender.com/api/v1/webhooks/monnify",
+            # [FIX] URLs are config-driven (staging/preview no longer route to prod).
+            "redirectUrl": settings.MONNIFY_REDIRECT_URL,
+            "webhookUrl": settings.MONNIFY_WEBHOOK_URL,
         }
         sess = await self._get_session()
         try:
@@ -1278,6 +1309,53 @@ async def geocode_address(address: str) -> Optional[Tuple[float, float]]:
         logger.warning(f"AWS geocode failed for '{address[:80]}' and Nominatim fallback is disabled")
 
     return None
+
+
+# [FIX] Verify client-supplied coordinates against the typed address.
+# Policy:
+#   * Server always geocodes the address (unless the caller already has cached coords).
+#   * If client coords agree with the server geocode within CLIENT_COORD_MAX_DISCREPANCY_M,
+#     trust the client (their coords come from a picked autocomplete result, usually
+#     more precise than a string geocode).
+#   * If they disagree by more than the threshold, use the server coords and log
+#     at WARNING — this is the "customer is spoofing coordinates to land in a cheaper
+#     delivery zone" case.
+#   * If only one side resolves, use whatever we have.
+#   * If neither resolves, return None — callers MUST fail closed.
+async def _resolve_delivery_coords(
+    address: Optional[str],
+    client_lat: Optional[float],
+    client_lng: Optional[float],
+    customer_email: Optional[str] = None,
+) -> Optional[Tuple[float, float]]:
+    if not address or not address.strip():
+        return None
+
+    client_coords: Optional[Tuple[float, float]] = None
+    if client_lat is not None and client_lng is not None:
+        try:
+            client_coords = (float(client_lat), float(client_lng))
+        except (TypeError, ValueError):
+            client_coords = None
+
+    server_coords = await geocode_address(address)
+
+    if server_coords and client_coords:
+        dist_m = _haversine_m(server_coords[0], server_coords[1], client_coords[0], client_coords[1])
+        if dist_m <= settings.CLIENT_COORD_MAX_DISCREPANCY_M:
+            return client_coords
+        logger.warning(
+            f"Delivery coords mismatch for '{address[:80]}' "
+            f"(customer={customer_email or 'unknown'}): "
+            f"client=({client_coords[0]:.4f},{client_coords[1]:.4f}) "
+            f"server=({server_coords[0]:.4f},{server_coords[1]:.4f}) "
+            f"distance={dist_m:.0f}m > {settings.CLIENT_COORD_MAX_DISCREPANCY_M:.0f}m — "
+            f"using server coords."
+        )
+        return server_coords
+
+    return server_coords or client_coords
+
 
 # ---------- SINGLETONS ----------
 _brevo = None
@@ -2280,24 +2358,108 @@ async def get_top_products(limit: int = 20):
         })
     return result
 
+# [FIX] Order lookup by reference now requires customer email.
+# Rationale: a leaked reference (email footer, screenshot, browser history) is
+# enough to fetch full customer PII — name, phone, address, items, total. Forcing
+# an email match means an attacker needs both pieces, and the email is not
+# derivable from the reference.
+#
+# NOTE: the customer frontend currently calls this endpoint without email and
+# MUST be updated in the same deployment window. See deployment note at bottom.
 @app.get("/api/orders/by-reference/{ref}")
-async def get_order_by_reference(ref: str, email: Optional[str] = Query(None)):
+async def get_order_by_reference(
+    ref: str,
+    email: str = Query(..., min_length=3, max_length=320, description="Customer email — must match the order"),
+):
     if not ref or len(ref) > 128:
         raise HTTPException(400, "Invalid reference")
+    email_norm = email.strip().lower()
+    if not email_norm or "@" not in email_norm:
+        raise HTTPException(400, "Invalid email")
     db = get_supabase()
-    query = db.table("orders").select("*").eq("payment_reference", ref)
-    if email:
-        query = query.eq("customer_email", email.strip().lower())
+    query = db.table("orders").select("*").eq("payment_reference", ref).eq("customer_email", email_norm)
     r = await execute_db(query.limit(1))
     if r.data:
         return r.data[0]
-    query = db.table("orders").select("*").eq("monnify_transaction_ref", ref)
-    if email:
-        query = query.eq("customer_email", email.strip().lower())
+    query = db.table("orders").select("*").eq("monnify_transaction_ref", ref).eq("customer_email", email_norm)
     r = await execute_db(query.limit(1))
     if r.data:
         return r.data[0]
     raise HTTPException(404, "Order not found")
+
+
+# [FIX] Serve an order that already exists for this idempotency key.
+# Called from create_order when either the pre-check or the post-insert
+# unique-violation handler detects an existing row for the incoming key.
+async def _serve_existing_order(row: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    If the existing row already has a checkout_url, return it — the customer
+    is retrying the same intent and should land on the same Monnify page.
+
+    If the row exists but checkout_url is NULL, a previous attempt died
+    between our DB insert and Monnify init. Re-initialize Monnify with the
+    same payment reference (Monnify treats this as idempotent) and store the
+    resulting URL.
+    """
+    if row.get("checkout_url"):
+        logger.info(
+            f"Idempotent replay: returning existing order {row.get('id')} "
+            f"(ref={row.get('payment_reference')})"
+        )
+        return {
+            "status": "pending_payment",
+            "order_id": row.get("id"),
+            "payment_reference": row.get("payment_reference"),
+            "checkout_url": row.get("checkout_url"),
+            "idempotent_replay": True,
+        }
+
+    if row.get("status") != "pending":
+        # The order moved past pending (paid/cancelled/confirmed). Client is
+        # likely retrying a completed flow — send them to check their orders.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"An order with this request already exists (status: "
+                f"{row.get('status')}). Please check your order history."
+            ),
+        )
+
+    logger.warning(
+        f"Idempotent replay without checkout_url: re-initializing Monnify for "
+        f"order {row.get('id')} (ref={row.get('payment_reference')})"
+    )
+    monnify = get_monnify()
+    monnify_result = await monnify.initialize_transaction(
+        amount=int(row.get("total") or 0),
+        customer_name=row.get("customer_name") or "",
+        customer_email=row.get("customer_email") or "",
+        customer_phone=row.get("customer_phone") or "",
+        payment_reference=row.get("payment_reference") or "",
+        payment_description="Hot Portion Grill Order",
+    )
+    if not monnify_result.get("success"):
+        raise HTTPException(
+            502,
+            f"Payment initialization failed: {monnify_result.get('error', 'Unknown error')}",
+        )
+
+    await execute_db(
+        get_supabase().table("orders")
+        .update({
+            "monnify_transaction_ref": monnify_result["transaction_reference"],
+            "checkout_url": monnify_result["checkout_url"],
+        })
+        .eq("id", row.get("id"))
+    )
+    return {
+        "status": "pending_payment",
+        "order_id": row.get("id"),
+        "payment_reference": row.get("payment_reference"),
+        "checkout_url": monnify_result["checkout_url"],
+        "idempotent_replay": True,
+    }
+
 
 @app.post("/api/orders", status_code=201)
 async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks):
@@ -2307,6 +2469,31 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
     product_ids = [item.product_id for item in order.items]
     if any(not pid for pid in product_ids):
         raise HTTPException(400, "All order items must have a product_id")
+
+    # [FIX] Idempotency key handling.
+    # We only look up an existing order when the client supplied a key. If
+    # they didn't, we generate one internally for record-keeping — but the
+    # dedupe path is disabled for that request, preserving backward compat.
+    idem_key_in = (order.idempotency_key or "").strip()
+    if idem_key_in and len(idem_key_in) > 200:
+        raise HTTPException(400, "idempotency_key too long (max 200 chars)")
+    if idem_key_in:
+        try:
+            existing = await execute_db(
+                get_supabase().table("orders")
+                .select("id, payment_reference, monnify_transaction_ref, checkout_url, total, status, "
+                        "customer_name, customer_email, customer_phone")
+                .eq("idempotency_key", idem_key_in)
+                .limit(1)
+            )
+        except Exception as e:
+            logger.warning(f"Idempotency pre-check failed, proceeding: {e}")
+            existing = None
+        if existing and existing.data:
+            return await _serve_existing_order(existing.data[0])
+
+    stored_idem_key = idem_key_in or f"auto-{secrets.token_urlsafe(16)}"
+
     try:
         prod_result = await execute_db(
             get_supabase().table("products").select("id, name, price").in_("id", product_ids)
@@ -2330,51 +2517,73 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
             "name": product["name"], "qty": item.qty,
             "price": server_price, "product_id": item.product_id,
         })
+
+    # [FIX] FAIL-CLOSED delivery fee.
+    # The server must compute the delivery fee itself, from the address and
+    # its own pricing rules. If we cannot (geocoding failed, address outside
+    # all zones, pricing service degraded), we REJECT the order with a clear
+    # message — we never fall back to a client-supplied fee. The customer can
+    # choose Pickup / Dine-in, or retry in a moment.
     computed_delivery_fee = 0
-    if order.delivery_method == "delivery" and order.delivery_address:
+    if order.delivery_method == "delivery":
+        if not order.delivery_address or not order.delivery_address.strip():
+            raise HTTPException(400, "Delivery address is required for delivery orders")
         try:
-            # Prefer client-resolved coordinates (from AWS Places autocomplete).
-            # Only geocode server-side if the frontend didn't send them.
-            if order.lat is not None and order.lng is not None:
-                lat = float(order.lat)
-                lng = float(order.lng)
-                logger.info(
-                    f"Order {order.customer_email}: using client-provided coords "
-                    f"lat={lat}, lng={lng} for '{order.delivery_address}'"
+            coords = await _resolve_delivery_coords(
+                order.delivery_address,
+                order.lat,
+                order.lng,
+                customer_email=order.customer_email,
+            )
+            if not coords:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "We couldn't locate that delivery address. "
+                        "Please check the address, or choose Pickup / Dine-in."
+                    ),
                 )
-            else:
-                coords = await geocode_address(order.delivery_address)
-                if coords:
-                    lat, lng = coords
-                    logger.info(
-                        f"Order {order.customer_email}: server-geocoded "
-                        f"'{order.delivery_address}' → lat={lat}, lng={lng}"
-                    )
-                else:
-                    lat = lng = None
-                    logger.warning(
-                        f"Order {order.customer_email}: could not geocode "
-                        f"'{order.delivery_address}'; using client fee value"
-                    )
-            if lat is not None and lng is not None:
-                area_result = await execute_db(
-                    get_supabase().rpc("find_delivery_area", {"lat": lat, "lng": lng})
+            lat, lng = coords
+            area_result = await execute_db(
+                get_supabase().rpc("find_delivery_area", {"lat": lat, "lng": lng})
+            )
+            if not area_result.data:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "This address is outside our delivery area. "
+                        "Please choose Pickup / Dine-in."
+                    ),
                 )
-                if area_result.data:
-                    base_fee = area_result.data[0].get("fee", 0)
-                    calc = await calculate_intelligent_delivery_fee(
-                        base_fee=base_fee, order_value=computed_subtotal,
-                        items=order.items, order_time=datetime.now(),
-                        customer_email=order.customer_email,
-                    )
-                    computed_delivery_fee = calc["final_fee"]
-                    logger.info(
-                        f"Server-recomputed delivery fee for '{order.delivery_address}': "
-                        f"₦{computed_delivery_fee} (base {base_fee})"
-                    )
+            base_fee = area_result.data[0].get("fee", 0)
+            calc = await calculate_intelligent_delivery_fee(
+                base_fee=base_fee,
+                order_value=computed_subtotal,
+                items=order.items,
+                order_time=datetime.now(),
+                customer_email=order.customer_email,
+            )
+            computed_delivery_fee = int(calc["final_fee"])
+            logger.info(
+                f"Server-computed delivery fee for '{order.delivery_address}': "
+                f"₦{computed_delivery_fee} (base {base_fee})"
+            )
+        except HTTPException:
+            raise
         except Exception as e:
-            logger.warning(f"Server-side delivery fee computation failed, using client value: {e}")
-            computed_delivery_fee = order.delivery_fee or 0
+            logger.error(
+                f"Delivery fee computation failed for '{order.delivery_address}' "
+                f"(customer={order.customer_email}): {e}",
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "We couldn't calculate the delivery fee right now. "
+                    "Please choose Pickup / Dine-in, or try again in a moment."
+                ),
+            )
+
     server_payment_reference = f"HP-{secrets.token_urlsafe(16)}"
     computed_total = computed_subtotal + computed_delivery_fee
     data = {
@@ -2391,8 +2600,32 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
         "items": validated_items,
         "delivery_fee": computed_delivery_fee,
         "delivery_breakdown": order.delivery_breakdown,
+        "idempotency_key": stored_idem_key,
+        "checkout_url": None,
     }
-    result = await execute_db(get_supabase().table("orders").insert(data))
+    try:
+        result = await execute_db(get_supabase().table("orders").insert(data))
+    except Exception as e:
+        # [FIX] Race-safe idempotency: another request with the same key
+        # squeezed in between our SELECT and our INSERT. The unique index on
+        # idempotency_key caught it — serve the winning row.
+        err_str = str(e).lower()
+        if idem_key_in and ("duplicate" in err_str or "unique" in err_str or "23505" in err_str):
+            existing = await execute_db(
+                get_supabase().table("orders")
+                .select("id, payment_reference, monnify_transaction_ref, checkout_url, total, status, "
+                        "customer_name, customer_email, customer_phone")
+                .eq("idempotency_key", idem_key_in)
+                .limit(1)
+            )
+            if existing.data:
+                logger.info(
+                    f"Idempotency race won by concurrent request for key {idem_key_in}; "
+                    f"serving winning order {existing.data[0].get('id')}"
+                )
+                return await _serve_existing_order(existing.data[0])
+        raise
+
     if not result.data:
         raise HTTPException(400, "Failed to create order")
     order_data = result.data[0]
@@ -2406,11 +2639,20 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
         payment_description="Hot Portion Grill Order"
     )
     if not monnify_result["success"]:
-        await execute_db(get_supabase().table("orders").delete().eq("id", order_data["id"]))
+        # Delete the row so a fresh attempt with the same key starts clean.
+        try:
+            await execute_db(get_supabase().table("orders").delete().eq("id", order_data["id"]))
+        except Exception as del_err:
+            logger.warning(f"Could not delete orphan order {order_data['id']}: {del_err}")
         raise HTTPException(400, f"Payment initialization failed: {monnify_result.get('error', 'Unknown error')}")
+    # [FIX] Persist checkout_url alongside the Monnify transaction reference so
+    # an idempotent replay can hand the customer back the same payment page.
     await execute_db(
         get_supabase().table("orders")
-        .update({"monnify_transaction_ref": monnify_result["transaction_reference"]})
+        .update({
+            "monnify_transaction_ref": monnify_result["transaction_reference"],
+            "checkout_url": monnify_result["checkout_url"],
+        })
         .eq("id", order_data["id"])
     )
     bg.add_task(get_brevo().send_order_confirmation, order_data)
@@ -2425,19 +2667,21 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
 async def get_delivery_fee(request: DeliveryFeeRequest, http_request: Request):
     await enforce_rate_limit(http_request, "delivery", settings.RATE_LIMIT_DELIVERY_PER_MINUTE)
     try:
-        if request.lat is not None and request.lng is not None:
-            lat = float(request.lat)
-            lng = float(request.lng)
-            logger.info(f"Using client-provided coords: lat={lat}, lng={lng} for '{request.address}'")
-        else:
-            coords = await geocode_address(request.address)
-            if not coords:
-                return DeliveryFeeResponse(
-                    covered=False,
-                    message="Address not found. Please check the address and try again."
-                )
-            lat, lng = coords
-            logger.info(f"Geocoded '{request.address}' to lat={lat}, lng={lng}")
+        # [FIX] Same verification policy as order creation. Client coords are
+        # only trusted if they match the server geocode of the typed address.
+        coords = await _resolve_delivery_coords(
+            request.address,
+            request.lat,
+            request.lng,
+            customer_email=request.customer_email,
+        )
+        if not coords:
+            return DeliveryFeeResponse(
+                covered=False,
+                message="Address not found. Please check the address and try again."
+            )
+        lat, lng = coords
+        logger.info(f"Delivery fee for '{request.address}' resolved to lat={lat}, lng={lng}")
         db = get_supabase()
         result = await execute_db(db.rpc("find_delivery_area", {"lat": lat, "lng": lng}))
         if not result.data or len(result.data) == 0:
@@ -2862,14 +3106,21 @@ async def delete_category(
 
 # ---------- ORDERS (RBAC) ----------
 
+# [FIX] Pagination on the orders list. Backward-compatible: default limit is
+# 200 (higher than any realistic single-page admin load today), and the
+# response shape is still a plain list. Existing admin frontend keeps working;
+# a future paginated UI can pass `limit` and `offset` explicitly.
 @app.get("/api/orders", response_model=List[Dict])
 async def get_orders(
     since: Optional[str] = Query(None),
+    limit: int = Query(200, ge=1, le=1000, description="Max rows to return (default 200, max 1000)"),
+    offset: int = Query(0, ge=0, description="Rows to skip for pagination"),
     staff: Dict[str, Any] = Depends(require_permission("orders:read")),
 ):
     query = get_supabase().table("orders").select("*").order("created_at", desc=True)
     if since:
         query = query.gt("created_at", since)
+    query = query.range(offset, offset + limit - 1)
     r = await execute_db(query)
     for o in r.data:
         o["itemCount"] = len(o.get("items", []))
