@@ -2767,6 +2767,7 @@
     </div>
 
     <!-- ─── TRACK ORDER MODAL ─── -->
+    <!-- [CHANGE] Added email input; the backend now requires it to identify the order. -->
     <div class="track-overlay" id="track-overlay">
         <div class="track-modal" id="track-modal">
             <div class="track-header">
@@ -2774,10 +2775,11 @@
                 <button class="track-close-btn" id="track-close" aria-label="Close">&times;</button>
             </div>
             <div class="track-body">
-                <p class="help">Enter the order reference from your confirmation (e.g. <strong>HP-...</strong>) to see its current status.</p>
-                <div class="track-input-wrap">
-                    <input type="text" id="track-ref-input" placeholder="HP-xxxxxxxxxxxx" autocomplete="off">
-                    <button id="track-submit"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Track</button>
+                <p class="help">Enter your order reference (e.g. <strong>HP-...</strong>) and the email address you used at checkout.</p>
+                <div class="track-input-wrap" style="flex-direction:column;align-items:stretch;gap:8px;">
+                    <input type="text" id="track-ref-input" placeholder="HP-xxxxxxxxxxxx" autocomplete="off" style="flex:none;">
+                    <input type="email" id="track-email-input" placeholder="Email used at checkout" autocomplete="email" style="flex:none;">
+                    <button id="track-submit" style="justify-content:center;"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Track</button>
                 </div>
                 <div class="track-result" id="track-result"></div>
             </div>
@@ -2922,6 +2924,13 @@
             let lastOrderData = null;
             let isDataLoaded = false;
 
+            // [CHANGE] Checkout idempotency key. Generated on the first click of
+            // "Proceed to Payment", reused on any retry of that same attempt,
+            // and cleared when the receipt is closed. Sending the same key twice
+            // makes the backend return the same order instead of creating a
+            // duplicate + a second Monnify transaction.
+            let checkoutIdempotencyKey = null;
+
             // ─── Delivery Coverage State ───
             let isDeliveryCovered = false;
             let isDeliveryAvailable = true;   // false = pricing API unreachable
@@ -3012,6 +3021,8 @@
             const trackOverlay = document.getElementById('track-overlay');
             const trackCloseBtn = document.getElementById('track-close');
             const trackRefInput = document.getElementById('track-ref-input');
+            // [CHANGE] New email field in the track-order modal
+            const trackEmailInput = document.getElementById('track-email-input');
             const trackSubmit = document.getElementById('track-submit');
             const trackResult = document.getElementById('track-result');
             const footerTrack = document.getElementById('footer-track');
@@ -3098,6 +3109,27 @@
                     localStorage.removeItem(PERSIST_KEY);
                     console.log('🧹 Persisted state cleared');
                 } catch (e) { /* ignore */ }
+            }
+
+            // [CHANGE] Customer email persistence, separate from cart state.
+            // Used by:
+            //   * handlePaymentRedirect() — to identify the order on return
+            //     from Monnify when we don't have the pending_order in sessionStorage.
+            //   * The track-order modal — to prefill the email field.
+            const CUSTOMER_EMAIL_KEY = 'hp_customer_email';
+
+            function saveCustomerEmail(email) {
+                try {
+                    if (email && String(email).trim()) {
+                        localStorage.setItem(CUSTOMER_EMAIL_KEY, String(email).trim().toLowerCase());
+                    }
+                } catch (e) { /* ignore */ }
+            }
+
+            function getSavedCustomerEmail() {
+                try {
+                    return localStorage.getItem(CUSTOMER_EMAIL_KEY) || '';
+                } catch (e) { return ''; }
             }
 
             // Restore immediately (DOM refs exist by this point)
@@ -4268,6 +4300,11 @@
                 isDeliveryCovered = false;
                 deliveryFee = 0;
                 lastBreakdown = null;
+                // [CHANGE] Clear the checkout idempotency key so the next order
+                // starts with a fresh key. This is what guarantees that the
+                // NEXT checkout (a new intent) is never deduped against the
+                // one we just completed.
+                checkoutIdempotencyKey = null;
                 resetDeliveryStatus();
                 updateDeliveryFeeUI(0);
                 deliveryFeeRow.style.display = 'none';
@@ -4279,11 +4316,15 @@
             receiptClose.addEventListener('click', closeReceipt);
             receiptOverlay.addEventListener('click', function(e) { if (e.target === this) closeReceipt(); });
 
-            // ─── FETCH ORDER BY REFERENCE (fixed: uses dedicated lookup endpoint) ───
-            async function fetchOrderByReference(ref) {
-                if (!ref) return null;
+            // ─── FETCH ORDER BY REFERENCE ───
+            // [CHANGE] Now requires an email. The backend endpoint
+            // /api/orders/by-reference/{ref} requires ?email=<customer_email>
+            // to prevent reference-only PII leaks.
+            async function fetchOrderByReference(ref, email) {
+                if (!ref || !email) return null;
                 try {
-                    const response = await fetch(`${API_BASE}/api/orders/by-reference/${encodeURIComponent(ref)}`);
+                    const url = `${API_BASE}/api/orders/by-reference/${encodeURIComponent(ref)}?email=${encodeURIComponent(email)}`;
+                    const response = await fetch(url);
                     if (response.status === 404) return null;
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     return await response.json();
@@ -4318,7 +4359,16 @@
                     const paymentOk = normalizedStatus === 'PAID' || normalizedStatus === 'SUCCESS';
 
                     if (!orderData) {
-                        fetchOrderByReference(transactionRef)
+                        // [CHANGE] Backend now requires the customer email on
+                        // this lookup. Pull it from localStorage (it's saved
+                        // when the customer hits checkout).
+                        const savedEmail = getSavedCustomerEmail();
+                        if (!savedEmail) {
+                            showToast('Please open your order confirmation email for details.', 'fa-solid fa-exclamation-circle');
+                            sessionStorage.removeItem('pending_order');
+                            return;
+                        }
+                        fetchOrderByReference(transactionRef, savedEmail)
                             .then(data => {
                                 if (data) {
                                     if (paymentOk) {
@@ -4374,6 +4424,21 @@
                     }
                 }
 
+                // [CHANGE] Generate the idempotency key once per checkout attempt.
+                // Retries (network hiccup, user clicks twice) reuse the same key,
+                // so the backend returns the existing order instead of creating
+                // a duplicate + a second Monnify transaction.
+                if (!checkoutIdempotencyKey) {
+                    checkoutIdempotencyKey = (window.crypto && typeof window.crypto.randomUUID === 'function')
+                        ? window.crypto.randomUUID()
+                        : ('idem-' + Date.now() + '-' + Math.random().toString(36).slice(2, 12));
+                }
+
+                // [CHANGE] Persist the customer's email so the track-order modal
+                // can prefill it and the payment-redirect handler can identify
+                // the order if sessionStorage is gone.
+                saveCustomerEmail(email);
+
                 const subtotal = cartTotalPrice;
                 const finalDeliveryFee = (deliveryMethod === 'delivery' && isDeliveryCovered) ? deliveryFee : 0;
                 const total = subtotal + finalDeliveryFee;
@@ -4389,7 +4454,9 @@
                     preferred_time: preferredTime.value || '',
                     order_notes: orderNotes.value || '',
                     delivery_fee: finalDeliveryFee,
-                    items: items.map(i => ({ name: i.name, qty: i.qty, price: i.price, product_id: i.id }))
+                    items: items.map(i => ({ name: i.name, qty: i.qty, price: i.price, product_id: i.id })),
+                    // [CHANGE] Idempotency key sent to backend
+                    idempotency_key: checkoutIdempotencyKey,
                 };
 
                 if (lastBreakdown && deliveryMethod === 'delivery') {
@@ -4416,7 +4483,9 @@
                     const result = await response.json();
                     console.log('✅ Order created, redirecting to Monnify:', result);
 
-                    sessionStorage.setItem('pending_order', JSON.stringify(result));
+                    // Stash the customer_email alongside the pending order so a
+                    // returning tab can identify the order without re-asking.
+                    sessionStorage.setItem('pending_order', JSON.stringify({ ...result, customer_email: email }));
 
                     if (result.checkout_url) {
                         window.location.href = result.checkout_url;
@@ -4431,6 +4500,10 @@
                     showToast('Error: ' + err.message, 'fa-solid fa-exclamation-circle');
                     btn.innerHTML = originalText;
                     btn.disabled = false;
+                    // NOTE: intentionally NOT clearing checkoutIdempotencyKey here.
+                    // If the underlying POST actually succeeded server-side (network
+                    // dropped the response), the next click reuses the key and gets
+                    // the same order back instead of creating a duplicate.
                 }
             }
 
@@ -4829,7 +4902,20 @@
                 trackOverlay.classList.add('open');
                 document.body.style.overflow = 'hidden';
                 if (prefillRef) trackRefInput.value = prefillRef;
-                setTimeout(function() { trackRefInput.focus(); }, 200);
+                // [CHANGE] Prefill the email field from localStorage (saved at checkout).
+                if (trackEmailInput && !trackEmailInput.value) {
+                    const savedEmail = getSavedCustomerEmail();
+                    if (savedEmail) trackEmailInput.value = savedEmail;
+                }
+                setTimeout(function() {
+                    if (!trackRefInput.value) {
+                        trackRefInput.focus();
+                    } else if (trackEmailInput && !trackEmailInput.value) {
+                        trackEmailInput.focus();
+                    } else {
+                        trackSubmit.focus();
+                    }
+                }, 200);
             }
 
             function closeTrackModal() {
@@ -4838,9 +4924,12 @@
                 document.body.style.overflow = '';
             }
 
-            async function lookupOrder(ref) {
+            // [CHANGE] Now requires the customer email as a query parameter,
+            // matching the backend contract on /api/orders/by-reference/{ref}.
+            async function lookupOrder(ref, email) {
                 try {
-                    const response = await fetch(`${API_BASE}/api/orders/by-reference/${encodeURIComponent(ref)}`);
+                    const url = `${API_BASE}/api/orders/by-reference/${encodeURIComponent(ref)}?email=${encodeURIComponent(email)}`;
+                    const response = await fetch(url);
                     if (response.status === 404) return { notFound: true };
                     if (!response.ok) {
                         const errText = await response.text().catch(function() { return ''; });
@@ -4897,25 +4986,37 @@
 
             async function handleTrackSubmit() {
                 const ref = (trackRefInput.value || '').trim();
+                // [CHANGE] Now also require + send the email.
+                const email = (trackEmailInput ? (trackEmailInput.value || '') : '').trim();
                 if (!ref) {
                     trackResult.className = 'track-result error';
                     trackResult.textContent = 'Please enter an order reference.';
+                    trackRefInput.focus();
                     return;
                 }
+                if (!email) {
+                    trackResult.className = 'track-result error';
+                    trackResult.textContent = 'Please enter the email you used at checkout.';
+                    if (trackEmailInput) trackEmailInput.focus();
+                    return;
+                }
+                // Persist for next time
+                saveCustomerEmail(email);
+
                 trackSubmit.disabled = true;
                 const originalHtml = trackSubmit.innerHTML;
                 trackSubmit.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Searching...';
                 trackResult.className = 'track-result loading';
                 trackResult.textContent = 'Looking up your order...';
 
-                const result = await lookupOrder(ref);
+                const result = await lookupOrder(ref, email);
 
                 trackSubmit.disabled = false;
                 trackSubmit.innerHTML = originalHtml;
 
                 if (result && result.notFound) {
                     trackResult.className = 'track-result error';
-                    trackResult.textContent = 'No order found for that reference. Please check and try again.';
+                    trackResult.textContent = 'No order found for that reference and email. Please check and try again.';
                     return;
                 }
                 if (result && result.error) {
@@ -4932,6 +5033,10 @@
             });
             if (trackSubmit) trackSubmit.addEventListener('click', handleTrackSubmit);
             if (trackRefInput) trackRefInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') { e.preventDefault(); handleTrackSubmit(); }
+            });
+            // [CHANGE] Enter on the email field also triggers lookup
+            if (trackEmailInput) trackEmailInput.addEventListener('keypress', function(e) {
                 if (e.key === 'Enter') { e.preventDefault(); handleTrackSubmit(); }
             });
             if (footerTrack) footerTrack.addEventListener('click', function(e) {
