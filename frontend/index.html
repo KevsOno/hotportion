@@ -2897,6 +2897,23 @@
         (function() {
             'use strict';
 
+            // ═══════════════════════════════════════════════════════
+            // HTML ESCAPING HELPER
+            // ═══════════════════════════════════════════════════════
+            // Converts HTML special characters to entities so that
+            // user-controlled strings are rendered as literal text
+            // instead of being parsed as markup. This is the primary
+            // defense against stored/reflected XSS at interpolation sites.
+            function escapeHtml(v) {
+                if (v === null || v === undefined) return '';
+                return String(v)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
+
             // ─── AMAZON LOCATION SERVICE via backend proxy ───
             async function amazonPlacesFetch(endpoint, body) {
                 const response = await fetch(`${API_BASE}/api/places/${endpoint}`, {
@@ -5075,7 +5092,7 @@
                 const statusLabel = statusLabels[status] || status.toUpperCase();
                 const itemsHtml = (order.items || []).map(function(item) {
                     return '<div class="item-row">' +
-                        '<span class="name">' + (item.name || 'Item') + ' <small>×' + (item.qty || 0) + '</small></span>' +
+                        '<span class="name">' + escapeHtml(item.name || 'Item') + ' <small>×' + (item.qty || 0) + '</small></span>' +
                         '<span class="price">₦' + Number((item.price || 0) * (item.qty || 0)).toLocaleString() + '</span>' +
                         '</div>';
                 }).join('');
@@ -5083,7 +5100,7 @@
                 const created = order.created_at ? new Date(order.created_at).toLocaleString() : 'N/A';
                 const ref = order.payment_reference || '—';
                 const deliveryHtml = (order.delivery_method === 'delivery' && order.delivery_address) ?
-                    '<div class="row"><span class="label">Delivery to</span><span class="value">' + order.delivery_address + '</span></div>' +
+                    '<div class="row"><span class="label">Delivery to</span><span class="value">' + escapeHtml(order.delivery_address) + '</span></div>' +
                     '<div class="row"><span class="label">Delivery Fee</span><span class="value">₦' + Number(order.delivery_fee || 0).toLocaleString() + '</span></div>'
                     : '';
 
@@ -5091,7 +5108,7 @@
                 trackResult.innerHTML =
                     '<div class="order-status-card">' +
                     '<span class="order-status-badge ' + status + '">' + statusLabel + '</span>' +
-                    '<div class="row"><span class="label">Reference</span><span class="value" style="font-family:monospace;font-size:0.78rem;">' + ref + '</span></div>' +
+                    '<div class="row"><span class="label">Reference</span><span class="value" style="font-family:monospace;font-size:0.78rem;">' + escapeHtml(ref) + '</span></div>' +
                     '<div class="row"><span class="label">Placed</span><span class="value">' + created + '</span></div>' +
                     '<div class="row"><span class="label">Method</span><span class="value">' + dm + '</span></div>' +
                     deliveryHtml +
