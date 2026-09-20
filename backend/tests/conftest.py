@@ -25,6 +25,7 @@ os.environ.setdefault("MONNIFY_CONTRACT_CODE", "test-contract-code")
 os.environ.setdefault("RECONCILIATION_ENABLED", "false")
 os.environ.setdefault("NOMINATIM_FALLBACK_ENABLED", "false")
 os.environ.setdefault("SENTRY_DSN", "")  # disable Sentry's background worker
+os.environ.setdefault("SENTRY_DISABLED", "1")
 
 # Make the project root importable
 ROOT = Path(__file__).resolve().parent.parent
@@ -306,6 +307,8 @@ def client(fake_db, monkeypatch, mock_monnify):
       - replaces main._executor with a fresh pool. main.py's lifespan shuts
         down the module-level executor on teardown, which would otherwise
         kill every subsequent test with 'cannot schedule new futures after shutdown'.
+      - replaces main.setup_database with a no-op so the lifespan doesn't try
+        to build a real Supabase client with the dummy service key.
       - clears the in-process rate limiter so the 10-request limit doesn't
         accumulate across tests.
     """
@@ -315,17 +318,17 @@ def client(fake_db, monkeypatch, mock_monnify):
     monkeypatch.setattr(main.BrevoIntegration, "initialize", noop)
     monkeypatch.setattr(main.MonnifyIntegration, "initialize", noop)
 
-    # Fresh executor per test
+    # 1. Fresh executor per test.
     fresh_executor = ThreadPoolExecutor(max_workers=4)
     monkeypatch.setattr(main, "_executor", fresh_executor, raising=False)
 
-    # Neutralise setup_database so it doesn't touch a real Supabase client
+    # 2. Neutralise setup_database so it never touches a real client.
     if hasattr(main, "setup_database"):
         async def _noop_setup():
             return None
         monkeypatch.setattr(main, "setup_database", _noop_setup, raising=False)
 
-    # Reset the rate limiter state if present
+    # 3. Reset the rate limiter state if present.
     for attr in ("_rate_limit_store", "_rate_buckets", "_requests"):
         store = getattr(main, attr, None)
         if isinstance(store, dict):
@@ -334,4 +337,7 @@ def client(fake_db, monkeypatch, mock_monnify):
     with TestClient(main.app) as c:
         yield c
 
-    fresh_executor.shutdown(wait=False)
+    try:
+        fresh_executor.shutdown(wait=False)
+    except Exception:
+        pass
