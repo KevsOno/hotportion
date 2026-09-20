@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="manifest.json" />
+    <link rel="apple-touch-icon" href="/.netlify/images?url=https%3A%2F%2Fajmauddonufaryjbiavh.supabase.co%2Fstorage%2Fv1%2Fobject%2Fpublic%2Fbucket%2Ffastfood%2Fimages%2Ficon-192.png&w=192&format=webp" />
+    <title>Hot Portion Grill – Nigerian Meals</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <script src="/js/seo.js" defer></script>
+</head>
+<body>
+
+    <!-- ─── TOAST ─── -->
+    <div id="toast" class="toast"><i class="fa-solid fa-check-circle"></i> <span id="toast-msg">Added to cart!</span></div>
+
+    <!-- ─── HEADER ─── -->
+    <header class="header" id="main-header">
+        <div class="container header-inner">
+            <a href="#" class="brand" id="brand-link">
+                <div class="brand-icon">
+                    <img src="/fastfood/images/logo.webp" alt="Hot Portion Grill" data-fallback-html="<i class='fa-solid fa-utensils'></i>">
+                </div>
+                <div>
+                    <div class="brand-name">Hot<span>Portion</span></div>
+                    <span class="brand-tagline">Grill &bull; Order Online</span>
+                </div>
+            </a>
+            <div class="header-actions">
+                <button class="btn-primary" id="order-now-btn" aria-label="Order Now">
+                    <i class="fa-solid fa-bag-shopping"></i> <span>Order Now</span>
+                </button>
+                <button class="cart-toggle" id="cart-toggle" aria-label="Open cart">
+                    <i class="fa-solid fa-cart-shopping"></i>
+                    <span class="cart-badge" id="cart-badge">0</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- ─── STICKY TOP BAR ─── -->
+    <div class="sticky-top-bar" id="sticky-top-bar">
+        <div class="bar-inner">
+            <div class="search-compact">
+                <div class="search-input-wrap">
+                    <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+                    <input type="text" id="search-input" placeholder="Search meals..." autocomplete="off" aria-label="Search meals">
+                    <span class="search-clear" id="search-clear" aria-label="Clear search"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i></span>
+                </div>
+                <button class="search-btn" id="search-btn" aria-label="Search">
+                    <i class="fa-solid fa-search" aria-hidden="true"></i>
+                </button>
+            </div>
+            <div class="categories-pills" id="categories-pills"></div>
+        </div>
+    </div>
+
+    <!-- ─── MAIN ─── -->
+    <main id="dynamic-main" class="container">
+
+        <!-- ─── HERO SLIDER ─── -->
+        <section class="hero" aria-label="Promotional banner">
+            <div class="hero-slider" id="hero-slider">
+                <button class="hero-arrow prev" id="hero-prev" aria-label="Previous slide">
+                    <i class="fa-solid fa-chevron-left" aria-hidden="true"></i>
+                </button>
+                <button class="hero-arrow next" id="hero-next" aria-label="Next slide">
+                    <i class="fa-solid fa-chevron-right" aria-hidden="true"></i>
+                </button>
+                <div class="hero-slider-controls" id="hero-dots" role="tablist" aria-label="Slide indicators"></div>
+            </div>
+
+            <div class="hero-cta">
+                <button class="btn-primary" id="hero-order-btn" aria-label="Order Now"><i class="fa-solid fa-bag-shopping" aria-hidden="true"></i> Order Now</button>
+                <button class="btn-outline" id="hero-menu-btn" aria-label="Browse Menu">Browse Menu</button>
+            </div>
+            <div class="hero-contact">
+                <span class="phone"><i class="fa-solid fa-phone" aria-hidden="true"></i><a href="tel:07041006669">0704 100 6669</a></span>
+                <span class="phone"><i class="fa-solid fa-phone" aria-hidden="true"></i><a href="tel:07041006665">0704 100 6665</a></span>
+                <span class="phone"><i class="fa-solid fa-phone" aria-hidden="true"></i><a href="tel:07041006663">0704 100 6663</a></span>
+                <span class="phone" style="font-weight:400;color:var(--text-muted);font-size:0.8rem;">
+                    <i class="fa-regular fa-envelope" aria-hidden="true"></i>
+                    <a href="mailto:Hotportionfoods@gmail.com" style="font-weight:400;">hotportionfoods@gmail.com</a>
+                </span>
+            </div>
+        </section>
+
+        <!-- ─── FEATURED CAROUSEL ─── -->
+        <section id="featured-section">
+            <h2 class="section-title">🔥 Today's Picks</h2>
+            <p class="section-sub">Our most popular meals – freshly prepared just for you.</p>
+            <div id="featured-grid" class="featured-carousel"></div>
+        </section>
+
+        <!-- ─── MENU ─── -->
+        <section id="menu-section">
+            <h2 class="section-title">Our Menu</h2>
+            <p class="section-sub">Freshly prepared with love — order your favourites today.</p>
+            <div class="menu-grid" id="menu-grid">
+                <div class="shimmer-wrapper" id="shimmer-wrapper">
+                    <div class="shimmer-card"></div>
+                    <div class="shimmer-card"></div>
+                    <div class="shimmer-card"></div>
+                    <div class="shimmer-card"></div>
+                    <div class="shimmer-card"></div>
+                    <div class="shimmer-card"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── CONTACT ─── -->
+        <section class="contact-section">
+            <div class="info-group">
+                <h4><i class="fa-regular fa-clock" aria-hidden="true"></i> Hours &amp; Location</h4>
+                <p><span class="icon-circle"><i class="fa-regular fa-clock" aria-hidden="true"></i></span> Mon–Sun: 10:00 AM – 10:00 PM</p>
+                <p><span class="icon-circle"><i class="fa-solid fa-location-dot" aria-hidden="true"></i></span> Ojo Road Aiyenero Junction, Ajegunle Apapa</p>
+                <p style="margin-top:6px;font-size:0.85rem;color:var(--text-muted);">
+                    <i class="fa-solid fa-utensils" style="color:var(--primary);margin-right:6px;" aria-hidden="true"></i>
+                    Dine In &bull; Take Away &bull; Delivery
+                </p>
+            </div>
+            <div class="info-group">
+                <h4><i class="fa-regular fa-message" aria-hidden="true"></i> Contact &amp; Orders</h4>
+                <div class="phone-list">
+                    <a href="tel:07041006669"><span class="icon-circle"><i class="fa-solid fa-phone" aria-hidden="true"></i></span> 0704 100 6669</a>
+                    <a href="tel:07041006665"><span class="icon-circle"><i class="fa-solid fa-phone" aria-hidden="true"></i></span> 0704 100 6665</a>
+                    <a href="tel:07041006663"><span class="icon-circle"><i class="fa-solid fa-phone" aria-hidden="true"></i></span> 0704 100 6663</a>
+                </div>
+                <p style="margin-top:8px;">
+                    <span class="icon-circle"><i class="fa-regular fa-envelope" aria-hidden="true"></i></span>
+                    <a href="mailto:Hotportionfoods@gmail.com" style="color:var(--text-dark);">hotportionfoods@gmail.com</a>
+                </p>
+                <p style="margin-top:6px;font-size:0.85rem;color:var(--text-muted);">
+                    <i class="fa-regular fa-heart" style="color:var(--primary);margin-right:6px;" aria-hidden="true"></i>
+                    Book your table — call us!
+                </p>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ─── FOOTER ─── -->
+    <footer class="footer">
+        <div class="container footer-inner">
+            <div class="brand-small">Hot<span>Portion</span> Grill</div>
+            <div class="footer-links">
+                <a href="#menu-section">Menu</a>
+                <a href="#" id="footer-cart">Cart</a>
+                <a href="#" id="footer-track">Track Order</a>
+                <a href="mailto:Hotportionfoods@gmail.com">Email</a>
+            </div>
+            <div class="copy">&copy; 2026 Hot Portion. All rights reserved.</div>
+        </div>
+    </footer>
+
+    <!-- ─── CART OVERLAY ─── -->
+    <div class="cart-overlay" id="cart-overlay"></div>
+
+    <!-- ─── CART DRAWER ─── -->
+    <div class="cart-drawer" id="cart-drawer">
+        <div class="cart-header">
+            <h3><i class="fa-solid fa-cart-shopping" aria-hidden="true"></i> Your Order</h3>
+            <button class="cart-close" id="cart-close" aria-label="Close cart"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+        </div>
+        <div class="cart-scrollable">
+            <div class="cart-items" id="cart-items">
+                <div class="cart-empty">
+                    <i class="fa-regular fa-bag-shopping" aria-hidden="true"></i>
+                    <p>Your cart is empty.<br />Add some delicious items!</p>
+                </div>
+            </div>
+            <div class="checkout-form" id="checkout-form">
+                <div class="form-group">
+                    <label for="delivery-options-label">How would you like to receive your order?</label>
+                    <div class="delivery-options" id="delivery-options" role="group" aria-labelledby="delivery-options-label">
+                        <button class="active" data-method="pickup">🏃 Pickup</button>
+                        <button data-method="delivery">🛵 Delivery</button>
+                        <button data-method="dinein">🍽️ Dine-in</button>
+                    </div>
+                </div>
+
+                <div class="form-group" id="payment-method-group">
+                    <label id="payment-options-label">How would you like to pay?</label>
+                    <div class="payment-options" id="payment-options" role="group" aria-labelledby="payment-options-label">
+                        <button type="button" class="active" data-payment="online">💳 Pay Online</button>
+                        <button type="button" data-payment="offline">💵 Pay at Counter</button>
+                    </div>
+                    <div id="payment-method-hint" style="font-size:0.7rem;color:var(--text-muted);margin-top:6px;">
+                        Secure online payment with Monnify.
+                    </div>
+                </div>
+
+                <div class="form-group" id="address-group" style="display:none;">
+                    <label for="delivery-address">Delivery Address</label>
+                    <div class="address-input-wrap">
+                        <input type="text" id="delivery-address" placeholder="Start typing your address..." autocomplete="off">
+                        <button class="btn-gps" id="gps-btn" aria-label="Get current location">
+                            <i class="fa-solid fa-location-crosshairs" aria-hidden="true"></i> GPS
+                        </button>
+                        <div class="address-autocomplete-dropdown" id="address-autocomplete-dropdown">
+                            <div class="address-autocomplete-loading" style="display:none;">
+                                <i class="fa-solid fa-spinner fa-spin"></i> Searching...
+                            </div>
+                            <div class="address-autocomplete-empty" style="display:none;">
+                                No locations found
+                            </div>
+                        </div>
+                    </div>
+                    <div class="delivery-status" id="delivery-status"></div>
+                    <div class="delivery-fee-display" id="delivery-fee-display">
+                        Delivery fee: <span>₦0</span>
+                        <span class="fee-breakdown-toggle" id="fee-breakdown-toggle">Show breakdown</span>
+                    </div>
+                    <div class="delivery-breakdown" id="delivery-breakdown">
+                        <div class="breakdown-row">
+                            <span>Base Fee</span>
+                            <span class="value" id="breakdown-base">₦0</span>
+                        </div>
+                        <div class="breakdown-row">
+                            <span>Value Discount</span>
+                            <span class="value negative" id="breakdown-discount">-₦0</span>
+                        </div>
+                        <div class="breakdown-row">
+                            <span>Item Surcharge</span>
+                            <span class="value positive" id="breakdown-surcharge">+₦0</span>
+                        </div>
+                        <div class="breakdown-row">
+                            <span>Peak Surcharge</span>
+                            <span class="value positive" id="breakdown-peak">+₦0</span>
+                        </div>
+                        <div class="breakdown-row">
+                            <span>Loyalty Discount</span>
+                            <span class="value negative" id="breakdown-loyalty">-₦0</span>
+                        </div>
+                        <hr class="breakdown-divider">
+                        <div class="breakdown-row breakdown-total">
+                            <span>Total Fee</span>
+                            <span class="value" id="breakdown-total">₦0</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="customer-name">Full Name *</label>
+                    <input type="text" id="customer-name" placeholder="Your full name" autocomplete="off" required>
+                </div>
+                <div class="form-group">
+                    <label for="customer-email">Email Address *</label>
+                    <input type="email" id="customer-email" placeholder="Your email address" autocomplete="off" required>
+                </div>
+                <div class="form-group">
+                    <label for="customer-phone">Phone Number *</label>
+                    <input type="tel" id="customer-phone" placeholder="Phone number for order updates" autocomplete="off" required>
+                </div>
+                <div class="form-group">
+                    <label for="preferred-time">Preferred Time</label>
+                    <input type="time" id="preferred-time" value="">
+                </div>
+                <div class="form-group">
+                    <label for="order-notes">Order Notes (optional)</label>
+                    <textarea id="order-notes" placeholder="Any special requests?"></textarea>
+                </div>
+            </div>
+        </div>
+        <div class="cart-footer" id="cart-footer">
+            <div class="totals">
+                <span class="label">Subtotal</span>
+                <span class="amount" id="cart-subtotal">₦0</span>
+            </div>
+            <div class="totals" id="delivery-fee-row" style="display:none;">
+                <span class="label">Delivery Fee</span>
+                <span class="amount" id="cart-delivery-fee">₦0</span>
+            </div>
+            <div class="totals grand">
+                <span class="label">Total</span>
+                <span class="amount" id="cart-total">₦0</span>
+            </div>
+            <button class="btn-primary" id="checkout-btn" aria-label="Proceed to Payment">
+                <i class="fa-regular fa-credit-card" aria-hidden="true"></i> Proceed to Payment
+            </button>
+            <p id="cart-footer-note" style="font-size:0.7rem;color:var(--text-muted);text-align:center;margin-top:8px;">
+                🔒 Secure payment with Monnify
+            </p>
+        </div>
+    </div>
+
+    <!-- ─── RECEIPT MODAL ─── -->
+    <div class="receipt-overlay" id="receipt-overlay">
+        <div class="receipt-modal" id="receipt-modal">
+            <div class="receipt-header" id="receipt-header">
+                <button class="receipt-close" id="receipt-close" aria-label="Close receipt">&times;</button>
+                <div class="receipt-status">
+                    <i class="fa-regular fa-circle-check" id="receipt-status-icon" aria-hidden="true"></i>
+                    <div>
+                        <h2 id="receipt-status-title">Payment Successful!</h2>
+                        <p id="receipt-status-subtitle">Your order has been confirmed.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="receipt-body" id="receipt-body"></div>
+        </div>
+    </div>
+
+    <!-- ─── TRACK ORDER MODAL ─── -->
+    <div class="track-overlay" id="track-overlay">
+        <div class="track-modal" id="track-modal">
+            <div class="track-header">
+                <h3><i class="fa-solid fa-magnifying-glass-location" aria-hidden="true"></i> Track Your Order</h3>
+                <button class="track-close-btn" id="track-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="track-body">
+                <p class="help">Enter your order reference (e.g. <strong>HP-...</strong>) and the email address you used at checkout.</p>
+                <div class="track-input-wrap" style="flex-direction:column;align-items:stretch;gap:8px;">
+                    <input type="text" id="track-ref-input" placeholder="HP-xxxxxxxxxxxx" autocomplete="off" style="flex:none;">
+                    <input type="email" id="track-email-input" placeholder="Email used at checkout" autocomplete="email" style="flex:none;">
+                    <button id="track-submit" style="justify-content:center;"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Track</button>
+                </div>
+                <div class="track-result" id="track-result"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ─── CHAT LAUNCHER ─── -->
+    <div class="chat-launcher-wrapper" id="chat-launcher">
+        <span class="chat-launcher-label">Ask HotPortion</span>
+        <button id="chat-bubble" aria-label="Open AI assistant" class="floating-chat">
+            <i class="fa-regular fa-comment-dots" aria-hidden="true"></i>
+        </button>
+    </div>
+
+    <!-- ─── CHAT MODAL ─── -->
+    <div id="chat-modal" class="chat-modal" role="dialog" aria-label="Hot Portion AI Assistant">
+        <div class="chat-header">
+            <div class="chat-header-left">
+                <div class="chat-avatar">
+                    <img src="/images/logo.webp" alt="HotPortion AI" data-fallback-html="<i class='fa-regular fa-comment-dots'></i>">
+                </div>
+                <div class="chat-header-info">
+                    <div class="chat-title">HotPortion AI</div>
+                    <div class="chat-status"><span class="chat-online-dot"></span> Online</div>
+                </div>
+            </div>
+            <button class="chat-close-btn" id="close-chat-modal" aria-label="Close chat">&times;</button>
+        </div>
+        <div id="chat-messages" class="chat-messages"></div>
+        <div class="chat-quick-prompts" id="chat-quick-prompts">
+            <button class="chat-quick-prompt" data-chat-prompt="What's on the menu?">Menu</button>
+            <button class="chat-quick-prompt" data-chat-prompt="I want something filling under ₦5,000">Under ₦5k</button>
+            <button class="chat-quick-prompt" data-chat-prompt="I'm ordering for four people">Group order</button>
+        </div>
+        <div class="chat-compose">
+            <div class="chat-input-wrap">
+                <input id="chat-input" type="text" placeholder="Ask about food, recommendations..." autocomplete="off" aria-label="Message AI">
+                <button id="chat-send" aria-label="Send message" class="chat-send-btn"><i class="fa-solid fa-arrow-up" aria-hidden="true"></i></button>
+            </div>
+            <div class="chat-disclaimer">AI recommends items from our menu. Confirm orders via checkout.</div>
+        </div>
+    </div>
+
+    <!-- ─── BOTTOM NAV ─── -->
+    <nav class="bottom-nav" id="bottom-nav" aria-label="Main navigation">
+        <button class="nav-item active" id="nav-home" aria-label="Home">
+            <span class="nav-icon"><i class="fa-solid fa-house" aria-hidden="true"></i></span>
+            <span class="nav-label">Home</span>
+        </button>
+        <button class="nav-item" id="nav-menu" aria-label="Menu">
+            <span class="nav-icon"><i class="fa-solid fa-utensils" aria-hidden="true"></i></span>
+            <span class="nav-label">Menu</span>
+        </button>
+        <button class="nav-item" id="nav-chat" aria-label="Chat">
+            <span class="nav-icon"><i class="fa-regular fa-comment-dots" aria-hidden="true"></i></span>
+            <span class="nav-label">Chat</span>
+        </button>
+        <button class="nav-item" id="nav-cart-bottom" aria-label="Cart">
+            <span class="nav-icon nav-badge">
+                <i class="fa-solid fa-cart-shopping" aria-hidden="true"></i>
+                <span class="badge-dot" id="nav-cart-badge">0</span>
+            </span>
+            <span class="nav-label">Cart</span>
+        </button>
+    </nav>
+
+    <!-- ─── SCRIPTS ─── -->
+    <script src="/js/sw-register.js"></script>
+    <script src="/js/capacitor-updater.js"></script>
+    <script type="module" src="/js/main.js"></script>
+</body>
+</html>
