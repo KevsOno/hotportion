@@ -4232,6 +4232,8 @@
             // [FEATURE] Handles both online (Monnify-paid) and offline
             // (pay-at-counter) orders. Header, total label, and footer text
             // are all driven by orderData.payment_method.
+            // [SECURITY] All customer-controlled fields are passed through
+            // escapeHtml() before being interpolated into the receipt markup.
             function showReceipt(orderData) {
                 lastOrderData = orderData;
                 const isOffline = (orderData.payment_method === 'offline');
@@ -4257,7 +4259,7 @@
 
                 let itemsHtml = items.map(item => `
                     <div class="receipt-item-row">
-                        <span class="item-name">${item.name} <span class="qty-badge">×${item.qty}</span></span>
+                        <span class="item-name">${escapeHtml(item.name)} <span class="qty-badge">×${item.qty}</span></span>
                         <span>${formatPrice(item.price * item.qty)}</span>
                     </div>
                 `).join('');
@@ -4271,7 +4273,7 @@
                         </div>
                         <div class="receipt-row">
                             <span class="label">Delivery Address</span>
-                            <span class="value" style="font-weight:400;max-width:60%;">${orderData.delivery_address || 'N/A'}</span>
+                            <span class="value" style="font-weight:400;max-width:60%;">${escapeHtml(orderData.delivery_address) || 'N/A'}</span>
                         </div>
                     `;
                 }
@@ -4282,21 +4284,21 @@
                 const footerHtml = isOffline
                     ? `<div class="receipt-footer">
                            <i class="fa-solid fa-money-bill-wave"></i> Show this reference at the counter and pay on arrival.<br>
-                           <span style="font-size:0.65rem;">Order Reference: ${orderData.payment_reference}</span>
+                           <span style="font-size:0.65rem;">Order Reference: ${escapeHtml(orderData.payment_reference)}</span>
                        </div>`
                     : `<div class="receipt-footer">
                            <i class="fa-regular fa-envelope"></i> A receipt has been sent to your email.<br>
-                           <span style="font-size:0.65rem;">Payment via Monnify | Transaction ID: ${orderData.payment_reference}</span>
+                           <span style="font-size:0.65rem;">Payment via Monnify | Transaction ID: ${escapeHtml(orderData.payment_reference)}</span>
                        </div>`;
 
                 receiptBody.innerHTML = `
-                    <div class="receipt-row"><span class="label">Receipt #</span><span class="value" style="font-family:monospace;">${orderData.payment_reference}</span></div>
-                    <div class="receipt-row"><span class="label">Customer</span><span class="value">${orderData.customer_name}</span></div>
-                    <div class="receipt-row"><span class="label">Email</span><span class="value">${orderData.customer_email}</span></div>
-                    <div class="receipt-row"><span class="label">Phone</span><span class="value">${orderData.customer_phone}</span></div>
+                    <div class="receipt-row"><span class="label">Receipt #</span><span class="value" style="font-family:monospace;">${escapeHtml(orderData.payment_reference)}</span></div>
+                    <div class="receipt-row"><span class="label">Customer</span><span class="value">${escapeHtml(orderData.customer_name)}</span></div>
+                    <div class="receipt-row"><span class="label">Email</span><span class="value">${escapeHtml(orderData.customer_email)}</span></div>
+                    <div class="receipt-row"><span class="label">Phone</span><span class="value">${escapeHtml(orderData.customer_phone)}</span></div>
                     <div class="receipt-row"><span class="label">Date</span><span class="value">${new Date().toLocaleString()}</span></div>
                     <div class="receipt-row"><span class="label">Delivery</span><span class="value">${deliveryMethodLabel}</span></div>
-                    ${orderData.preferred_time ? `<div class="receipt-row"><span class="label">Preferred Time</span><span class="value">${orderData.preferred_time}</span></div>` : ''}
+                    ${orderData.preferred_time ? `<div class="receipt-row"><span class="label">Preferred Time</span><span class="value">${escapeHtml(orderData.preferred_time)}</span></div>` : ''}
                     <hr class="receipt-divider">
                     <div class="receipt-items">${itemsHtml}</div>
                     ${deliveryHtml}
