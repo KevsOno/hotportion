@@ -9,6 +9,7 @@ Sets dummy env vars before importing main, then exposes:
 """
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,7 @@ os.environ.setdefault("MONNIFY_SECRET_KEY", "test-monnify-secret-key")
 os.environ.setdefault("MONNIFY_CONTRACT_CODE", "test-contract-code")
 os.environ.setdefault("RECONCILIATION_ENABLED", "false")
 os.environ.setdefault("NOMINATIM_FALLBACK_ENABLED", "false")
+os.environ.setdefault("SENTRY_DSN", "")  # disable Sentry's background worker
 
 # Make the project root importable
 ROOT = Path(__file__).resolve().parent.parent
@@ -35,9 +37,7 @@ import main  # noqa: E402
 
 
 # ────────────────────────────────────────────────────────────────────
-# Fake Supabase — minimal in-memory implementation covering the fluent
-# query API used in main.py: select/insert/update/delete + eq/neq/in_/gt/lt
-# + order/limit/range + count="exact", plus a couple of RPCs.
+# Fake Supabase
 # ────────────────────────────────────────────────────────────────────
 class _FakeResult:
     def __init__(self, data=None, count=None):
@@ -77,7 +77,6 @@ class _FakeRpc:
                     break
             return _FakeResult([{"ok": True}])
 
-        # Unknown RPC (exec_sql, etc.) — succeed silently
         return _FakeResult([])
 
 
@@ -93,8 +92,9 @@ class _FakeTable:
         self._limit = None
         self._range = None
         self._count_exact = False
+        self._single = False
+        self._maybe_single = False
 
-    # ── fluent API ──
     def select(self, *cols, count=None):
         self._mode = "select"
         if count == "exact":
@@ -148,7 +148,14 @@ class _FakeTable:
         self._range = (start, end)
         return self
 
-    # ── internal ──
+    def single(self):
+        self._single = True
+        return self
+
+    def maybe_single(self):
+        self._maybe_single = True
+        return self
+
     def _match(self, row):
         for col, op, val in self._filters:
             rv = row.get(col)
@@ -177,11 +184,24 @@ class _FakeTable:
                 matched = matched[s:e + 1]
             if self._limit is not None:
                 matched = matched[:self._limit]
+
+            if self._single:
+                if len(matched) != 1:
+                    raise Exception(
+                        f"JSON object requested, multiple (or no) rows returned (got {len(matched)})"
+                    )
+                return _FakeResult(matched[0])
+            if self._maybe_single:
+                if len(matched) == 0:
+                    return _FakeResult(None)
+                if len(matched) > 1:
+                    raise Exception("multiple rows returned for maybe_single")
+                return _FakeResult(matched[0])
+
             return _FakeResult(matched, count=count if self._count_exact else None)
 
         if self._mode == "insert":
             payload = self._payload if isinstance(self._payload, list) else [self._payload]
-            # Simulate unique constraint on orders.idempotency_key
             if self.name == "orders":
                 for row in payload:
                     key = row.get("idempotency_key")
@@ -230,20 +250,13 @@ class _FakeSupabase:
 @pytest.fixture
 def fake_db(monkeypatch):
     fake = _FakeSupabase()
-    # Seed baseline data
     fake.store["products"] = [
-        {
-            "id": 1, "name": "Burger", "price": 4500, "stock": 10,
-            "is_main_item": True, "weight_kg": 0.5, "is_bulky": False,
-        },
-        {
-            "id": 2, "name": "Zobo", "price": 800, "stock": 20,
-            "is_main_item": False, "weight_kg": 0.3, "is_bulky": False,
-        },
+        {"id": 1, "name": "Burger", "price": 4500, "stock": 10,
+         "is_main_item": True, "weight_kg": 0.5, "is_bulky": False},
+        {"id": 2, "name": "Zobo", "price": 800, "stock": 20,
+         "is_main_item": False, "weight_kg": 0.3, "is_bulky": False},
     ]
-    fake.store["delivery_areas"] = [
-        {"id": 1, "name": "Central", "fee": 1000},
-    ]
+    fake.store["delivery_areas"] = [{"id": 1, "name": "Central", "fee": 1000}]
     fake.store["orders"] = []
     monkeypatch.setattr(main, "get_supabase", lambda: fake)
     return fake
@@ -251,7 +264,6 @@ def fake_db(monkeypatch):
 
 @pytest.fixture
 def mock_monnify(monkeypatch):
-    """Replace the outbound Monnify call with a deterministic fake."""
     calls = []
 
     async def fake_init(self, amount, customer_name, customer_email,
@@ -274,22 +286,52 @@ def mock_monnify(monkeypatch):
 
 @pytest.fixture
 def mock_geocode(monkeypatch):
-    """Return fixed coords for any address, unless the address starts with FAIL."""
     async def fake_geocode(address):
         if not address or address.upper().startswith("FAIL"):
             return None
-        return (6.5244, 3.3792)  # Lagos
+        return (6.5244, 3.3792)
 
     monkeypatch.setattr(main, "geocode_address", fake_geocode)
     return fake_geocode
 
 
 @pytest.fixture
-def client(monkeypatch, mock_monnify):
-    """FastAPI TestClient with external service init stubbed."""
+def client(fake_db, monkeypatch, mock_monnify):
+    """
+    TestClient with external services stubbed.
+
+    Important:
+      - depends on fake_db so get_supabase is patched BEFORE the lifespan
+        fires setup_database().
+      - replaces main._executor with a fresh pool. main.py's lifespan shuts
+        down the module-level executor on teardown, which would otherwise
+        kill every subsequent test with 'cannot schedule new futures after shutdown'.
+      - clears the in-process rate limiter so the 10-request limit doesn't
+        accumulate across tests.
+    """
     async def noop(self):
         return None
+
     monkeypatch.setattr(main.BrevoIntegration, "initialize", noop)
     monkeypatch.setattr(main.MonnifyIntegration, "initialize", noop)
+
+    # Fresh executor per test
+    fresh_executor = ThreadPoolExecutor(max_workers=4)
+    monkeypatch.setattr(main, "_executor", fresh_executor, raising=False)
+
+    # Neutralise setup_database so it doesn't touch a real Supabase client
+    if hasattr(main, "setup_database"):
+        async def _noop_setup():
+            return None
+        monkeypatch.setattr(main, "setup_database", _noop_setup, raising=False)
+
+    # Reset the rate limiter state if present
+    for attr in ("_rate_limit_store", "_rate_buckets", "_requests"):
+        store = getattr(main, attr, None)
+        if isinstance(store, dict):
+            store.clear()
+
     with TestClient(main.app) as c:
         yield c
+
+    fresh_executor.shutdown(wait=False)
