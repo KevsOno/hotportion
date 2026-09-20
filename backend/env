@@ -1,0 +1,3 @@
+MONNIFY_REDIRECT_URL=https://hotportion.netlify.app/?status=success
+MONNIFY_WEBHOOK_URL=https://hotportion.onrender.com/api/v1/webhooks/monnify
+CLIENT_COORD_MAX_DISCREPANCY_M=1000
