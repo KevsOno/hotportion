@@ -2542,34 +2542,6 @@
         <!-- ─── HERO SLIDER ─── -->
         <section class="hero" aria-label="Promotional banner">
             <div class="hero-slider" id="hero-slider">
-                <div class="hero-slide active" data-index="0">
-                    <span class="hero-badge">🎉 WEEKEND SPECIAL</span>
-                    <h1><span class="highlight">10% OFF</span><br /><span class="highlight2">All Items</span></h1>
-                    <p>Order now and enjoy great savings on your favourite meals.</p>
-                    <div class="hero-offer">
-                        <span class="percent">10%</span>
-                        <span class="label">OFF ALL ITEMS<small>Order now – limited time!</small></span>
-                    </div>
-                </div>
-                <div class="hero-slide" data-index="1">
-                    <span class="hero-badge">👨‍👩‍👧‍👦 FAMILY FEAST</span>
-                    <h1><span class="highlight">Buy 2</span><br /><span class="highlight2">Get 1 FREE</span></h1>
-                    <p>Perfect for sharing – order any two combos and get a third free!</p>
-                    <div class="hero-offer">
-                        <span class="percent">B2G1</span>
-                        <span class="label">FREE COMBO MEAL<small>On all combo meals – share the love!</small></span>
-                    </div>
-                </div>
-                <div class="hero-slide" data-index="2">
-                    <span class="hero-badge">🎓 STUDENT DEAL</span>
-                    <h1><span class="highlight">15% OFF</span><br /><span class="highlight2">With Valid ID</span></h1>
-                    <p>Students get 15% off every order. Show your student ID and save!</p>
-                    <div class="hero-offer">
-                        <span class="percent">15%</span>
-                        <span class="label">OFF WITH ID<small>Show your student ID and save!</small></span>
-                    </div>
-                </div>
-
                 <button class="hero-arrow prev" id="hero-prev" aria-label="Previous slide">
                     <i class="fa-solid fa-chevron-left" aria-hidden="true"></i>
                 </button>
@@ -2982,8 +2954,13 @@
             // "Proceed to Payment", reused on any retry of that same attempt,
             // and cleared when the receipt is closed. Sending the same key twice
             // makes the backend return the same order instead of creating a
-            // duplicate + a second Monnify transaction.
+            // duplicate + a second Monnify transaction. Persisted to sessionStorage
+            // so a reload mid-checkout does not create a duplicate order.
+            const CHECKOUT_IDEMPOTENCY_KEY = 'hp_checkout_idempotency';
             let checkoutIdempotencyKey = null;
+            try {
+                checkoutIdempotencyKey = sessionStorage.getItem(CHECKOUT_IDEMPOTENCY_KEY) || null;
+            } catch (e) { /* ignore */ }
 
             // ─── Delivery Coverage State ───
             let isDeliveryCovered = false;
@@ -3614,71 +3591,13 @@
                         console.log('📦 Categories:', categories);
                         return true;
                     } else {
-                        console.warn('⚠️ No products from API — falling back to hardcoded');
+                        console.warn('⚠️ No products available from database');
                         return false;
                     }
                 } catch (err) {
-                    console.warn('⚠️ API fetch failed, using fallback data:', err);
+                    console.warn('⚠️ API fetch failed:', err);
                     return false;
                 }
-            }
-
-            // ─── FALLBACK: hardcoded products ───
-            function getFallbackProducts() {
-                return [
-                    { id: 1, name: 'Burger', description: 'Classic beef burger with lettuce, tomato, cheese & sauce.',
-                        price: 4500, emoji: '🍔', tag: 'Burgers', tagColor: 'primary',
-                        image: netlifyImageUrl('burger.webp', 400) },
-                    { id: 2, name: 'Shawarma', description: 'Spiced meat wrapped in flatbread with veggies & garlic sauce.',
-                        price: 4500, emoji: '🌯', tag: 'Burgers', tagColor: 'primary',
-                        image: netlifyImageUrl('shawarma.webp', 400) },
-                    { id: 3, name: 'Hot Dog', description: 'Grilled sausage in a bun with ketchup, mustard & onions.',
-                        price: 2500, emoji: '🌭', tag: 'Burgers', tagColor: 'primary',
-                        image: netlifyImageUrl('hot-dog.webp', 400) },
-                    { id: 4, name: 'Jollof Rice + Chicken', description: 'Classic tomato rice with grilled chicken.',
-                        price: 5500, emoji: '🍛', tag: 'Rice Dishes', tagColor: 'primary',
-                        image: netlifyImageUrl('jollof-rice-chicken.webp', 400) },
-                    { id: 5, name: 'Jollof Rice + Beef', description: 'Classic tomato rice with tender beef.',
-                        price: 4500, emoji: '🍛', tag: 'Rice Dishes', tagColor: 'primary',
-                        image: netlifyImageUrl('jollof-rice-beef.webp', 400) },
-                    { id: 6, name: 'Jollof Rice + Turkey', description: 'Classic tomato rice with succulent turkey.',
-                        price: 7500, emoji: '🍛', tag: 'Rice Dishes', tagColor: 'primary',
-                        image: netlifyImageUrl('jollof-rice-turkey.webp', 400) },
-                    { id: 7, name: 'Pounded Yam + Egusi', description: 'Smooth pounded yam with melon seed soup & meat.',
-                        price: 6000, emoji: '🍲', tag: 'Swallow & Soups', tagColor: 'primary',
-                        image: netlifyImageUrl('pounded-yam-egusi.webp', 400) },
-                    { id: 8, name: 'Eba + Egusi Soup', description: 'Eba with melon seed soup and assorted meat.',
-                        price: 5000, emoji: '🍲', tag: 'Swallow & Soups', tagColor: 'primary',
-                        image: netlifyImageUrl('eba-egusi.webp', 400) },
-                    { id: 9, name: 'Nkwobi', description: 'Traditional Igbo cow leg delicacy in rich palm oil sauce.',
-                        price: 5500, emoji: '🍖', tag: 'Specialties', tagColor: 'orange',
-                        image: netlifyImageUrl('nkwobi.webp', 400) },
-                    { id: 10, name: 'Isi Ewu', description: 'Spicy goat head delicacy with palm oil and herbs.',
-                        price: 6500, emoji: '🍖', tag: 'Specialties', tagColor: 'orange',
-                        image: netlifyImageUrl('isi-ewu.webp', 400) },
-                    { id: 11, name: 'Suya (Beef) – 5 sticks',
-                        description: 'Spicy grilled beef skewers with onions & pepper.', price: 3500, emoji: '🥩',
-                        tag: 'Grilled & Roast', tagColor: 'orange', image: netlifyImageUrl('beef-suya.webp', 400) },
-                    { id: 12, name: 'Kilishi (Beef Jerky)', description: 'Dried spicy beef strips – perfect snack.',
-                        price: 4500, emoji: '🥩', tag: 'Grilled & Roast', tagColor: 'orange',
-                        image: netlifyImageUrl('kilishi.webp', 400) },
-                    { id: 13, name: 'Beans Porridge', description: 'Rich bean porridge with spices and palm oil.',
-                        price: 4000, emoji: '🍛', tag: 'Beans, Yam & Plantain', tagColor: 'primary',
-                        image: netlifyImageUrl('beans-porridge.webp', 400) },
-                    { id: 14, name: 'Beans + Plantain', description: 'Beans porridge served with fried plantain.',
-                        price: 4500, emoji: '🍛', tag: 'Beans, Yam & Plantain', tagColor: 'primary',
-                        image: netlifyImageUrl('beans-plantain.webp', 400) },
-                    { id: 15, name: 'Moi Moi', description: 'Steamed bean pudding with fish and eggs.', price: 2500,
-                        emoji: '🍮', tag: 'Snacks', tagColor: 'orange', image: netlifyImageUrl('moi-moi.webp', 400) },
-                    { id: 16, name: 'Akara (Fried Bean Cake)', description: 'Crispy fried bean cakes.', price: 2000,
-                        emoji: '🍘', tag: 'Snacks', tagColor: 'orange', image: netlifyImageUrl('akara.webp', 400) },
-                    { id: 17, name: 'Zobo Drink – 500ml', description: 'Hibiscus drink with ginger and pineapple.',
-                        price: 800, emoji: '🍹', tag: 'Beverages', tagColor: 'primary',
-                        image: netlifyImageUrl('zobo-drink.webp', 400) },
-                    { id: 18, name: 'Fresh Coconut Water', description: 'Pure coconut water, chilled.', price: 700,
-                        emoji: '🥥', tag: 'Beverages', tagColor: 'primary',
-                        image: netlifyImageUrl('coconut-water.webp', 400) },
-                ];
             }
 
             // ─── LOAD BANNERS ───
@@ -3693,11 +3612,11 @@
                         renderHeroSlides();
                         return true;
                     } else {
-                        console.warn('⚠️ No active banners from API — keeping static fallback');
+                        console.warn('⚠️ No active banners in database');
                         return false;
                     }
                 } catch (err) {
-                    console.warn('⚠️ Banner API fetch failed, using static fallback:', err);
+                    console.warn('⚠️ Banner API fetch failed:', err);
                     return false;
                 }
             }
@@ -3708,9 +3627,7 @@
                 if (!slider) return;
 
                 if (!banners || banners.length === 0) {
-                    console.log('Using static hero fallback');
-                    initHeroDots();
-                    startHeroAutoplay();
+                    console.log('No active banners to display');
                     return;
                 }
 
@@ -3787,11 +3704,7 @@
 
             // ─── PRODUCT REFRESH ───
             async function refreshProducts() {
-                const loaded = await loadProductsFromAPI();
-                if (!loaded || products.length === 0) {
-                    products = getFallbackProducts();
-                    categories = [...new Set(products.map(p => p.tag))].sort();
-                }
+                await loadProductsFromAPI();
                 renderCategoriesPills();
                 renderMenu();
                 renderFeatured();
@@ -3802,12 +3715,8 @@
             async function initData() {
                 if (shimmerWrapper) shimmerWrapper.style.display = 'grid';
 
-                const loaded = await loadProductsFromAPI();
-                if (!loaded || products.length === 0) {
-                    products = getFallbackProducts();
-                    categories = [...new Set(products.map(p => p.tag))].sort();
-                    isDataLoaded = true;
-                }
+                await loadProductsFromAPI();
+                isDataLoaded = true;
 
                 if (window.__injectProductSchemas && products.length) {
                     window.__injectProductSchemas(products);
@@ -4457,6 +4366,7 @@
                 // NEXT checkout (a new intent) is never deduped against the
                 // one we just completed.
                 checkoutIdempotencyKey = null;
+                try { sessionStorage.removeItem(CHECKOUT_IDEMPOTENCY_KEY); } catch (e) { /* ignore */ }
                 resetDeliveryStatus();
                 updateDeliveryFeeUI(0);
                 deliveryFeeRow.style.display = 'none';
@@ -4582,11 +4492,13 @@
                 // [CHANGE] Generate the idempotency key once per checkout attempt.
                 // Retries (network hiccup, user clicks twice) reuse the same key,
                 // so the backend returns the existing order instead of creating
-                // a duplicate + a second Monnify transaction.
+                // a duplicate + a second Monnify transaction. Persisted to
+                // sessionStorage so a page reload during checkout also reuses it.
                 if (!checkoutIdempotencyKey) {
                     checkoutIdempotencyKey = (window.crypto && typeof window.crypto.randomUUID === 'function')
                         ? window.crypto.randomUUID()
                         : ('idem-' + Date.now() + '-' + Math.random().toString(36).slice(2, 12));
+                    try { sessionStorage.setItem(CHECKOUT_IDEMPOTENCY_KEY, checkoutIdempotencyKey); } catch (e) { /* ignore */ }
                 }
 
                 // [CHANGE] Persist the customer's email so the track-order modal
@@ -4832,6 +4744,7 @@
 
             function goToHeroSlide(index) {
                 const slides = document.querySelectorAll('.hero-slide');
+                if (slides.length === 0) return;
                 if (isHeroTransitioning || index === heroCurrentIndex || index >= slides.length) return;
                 isHeroTransitioning = true;
 
@@ -4851,12 +4764,14 @@
 
             function nextHeroSlide() {
                 const slides = document.querySelectorAll('.hero-slide');
+                if (slides.length === 0) return;
                 const next = (heroCurrentIndex + 1) % slides.length;
                 goToHeroSlide(next);
             }
 
             function prevHeroSlide() {
                 const slides = document.querySelectorAll('.hero-slide');
+                if (slides.length === 0) return;
                 const prev = (heroCurrentIndex - 1 + slides.length) % slides.length;
                 goToHeroSlide(prev);
             }
