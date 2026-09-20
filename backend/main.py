@@ -1589,7 +1589,8 @@ async def calculate_intelligent_delivery_fee(
         if prod:
             is_main = prod.get("is_main_item")
             if is_main is None:
-                is_main = True            if is_main:
+                is_main = True            
+            if is_main:
                 main_count += item.qty
             weight = prod.get("weight_kg")
             if weight is None:
