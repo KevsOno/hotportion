@@ -153,3 +153,53 @@ FROM PUBLIC, anon, authenticated;
 
 GRANT EXECUTE ON FUNCTION transition_order_and_stock(INTEGER, TEXT, TEXT, TEXT)
 TO service_role;
+
+
+-- Harden legacy stock helper RPCs. They are not used to decide whether an
+-- order may be accepted; they only mutate inventory when explicitly called.
+-- Reject non-positive quantities so malformed calls cannot increase/decrease
+-- stock in the wrong direction.
+
+CREATE OR REPLACE FUNCTION public.decrement_product_stock(
+    p_product_id INTEGER,
+    p_qty INTEGER
+)
+RETURNS void AS $$
+BEGIN
+    IF p_qty IS NULL OR p_qty <= 0 THEN
+        RAISE EXCEPTION 'Stock decrement quantity must be positive';
+    END IF;
+
+    UPDATE products
+    SET stock = GREATEST(0, stock - p_qty)
+    WHERE id = p_product_id;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION public.increment_product_stock(
+    p_product_id INTEGER,
+    p_qty INTEGER
+)
+RETURNS void AS $$
+BEGIN
+    IF p_qty IS NULL OR p_qty <= 0 THEN
+        RAISE EXCEPTION 'Stock increment quantity must be positive';
+    END IF;
+
+    UPDATE products
+    SET stock = stock + p_qty
+    WHERE id = p_product_id;
+END;
+$$ LANGUAGE plpgsql;
+
+REVOKE EXECUTE ON FUNCTION public.decrement_product_stock(INTEGER, INTEGER)
+FROM PUBLIC, anon, authenticated;
+
+REVOKE EXECUTE ON FUNCTION public.increment_product_stock(INTEGER, INTEGER)
+FROM PUBLIC, anon, authenticated;
+
+GRANT EXECUTE ON FUNCTION public.decrement_product_stock(INTEGER, INTEGER)
+TO service_role;
+
+GRANT EXECUTE ON FUNCTION public.increment_product_stock(INTEGER, INTEGER)
+TO service_role;
