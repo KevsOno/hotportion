@@ -3165,7 +3165,7 @@ async def ai_health(ai_service: AIService = Depends(get_ai_service)):
 
 @app.get("/api/auth/me")
 async def whoami(staff: Dict[str, Any] = Depends(get_current_staff)):
-    """Return the currently-authenticated staff member's profile + permissions."""
+    # Return the currently-authenticated staff member's profile and permissions.
     role = staff.get("role")
     perms = sorted(list(PERMISSIONS.get(role, set())))
     return {
