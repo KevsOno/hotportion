@@ -1823,7 +1823,6 @@ async def setup_database():
                 updated_at TIMESTAMPTZ DEFAULT NOW()
             );
             """,
-            """
         ]
         for sql in create_tables:
             try:
