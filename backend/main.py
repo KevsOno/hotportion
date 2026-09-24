@@ -11,6 +11,7 @@ import re
 import secrets
 import contextvars
 from datetime import datetime, timedelta, date, timezone
+from decimal import Decimal, InvalidOperation
 from typing import List, Optional, Dict, Any, Set, Tuple
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
@@ -456,7 +457,7 @@ class StaffCreate(BaseModel):
     # [FIX] Admin-set initial password. Replaces the Supabase invite flow,
     # which was unreliable due to URL-hash fragility. Users can change their
     # password later via the "Forgot password" flow on the login screen.
-    password: str = Field(..., min_length=6, max_length=128)
+    password: str = Field(..., min_length=12, max_length=128)
 
 class StaffUpdate(BaseModel):
     full_name: Optional[str] = None
@@ -497,13 +498,30 @@ def validate_order_transition(current: Optional[str], target: str) -> None:
         return
     allowed = _ALLOWED_ORDER_TRANSITIONS.get(current_lc)
     if allowed is None:
-        logger.warning(f"Unknown current order status '{current}', allowing transition to '{target}'")
-        return
+        logger.error(
+            f"Unknown current order status '{current}'. Refusing transition to '{target}'."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Unknown current order status: {current}",
+        )
     if target_lc not in allowed:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid status transition: {current} → {target}"
         )
+
+
+def payment_amount_matches(expected_amount: Any, paid_amount: Any) -> bool:
+    """Return True only when the provider paid at least the order total."""
+    try:
+        expected = Decimal(str(expected_amount))
+        paid = Decimal(str(paid_amount))
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+    if expected < 0 or paid < 0:
+        return False
+    return paid >= expected
 
 # ---------- PYDANTIC MODELS ----------
 class ProductBase(BaseModel):
@@ -1809,6 +1827,8 @@ async def setup_database():
             # counter). Default "online" keeps existing rows and any clients
             # that don't send the field on the historical behavior.
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'online';",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS idempotency_key TEXT;",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_idempotency_key ON orders (idempotency_key) WHERE idempotency_key IS NOT NULL;",
             "CREATE INDEX IF NOT EXISTS idx_orders_payment_reference ON orders (payment_reference);",
             "CREATE INDEX IF NOT EXISTS idx_orders_monnify_transaction_ref ON orders (monnify_transaction_ref);",
             # Reconciliation loop queries: pending orders by age
@@ -1884,11 +1904,85 @@ async def setup_database():
             """,
             """
             CREATE OR REPLACE FUNCTION increment_product_stock(p_product_id INTEGER, p_qty INTEGER)
-            RETURNS VOID AS $$
+            RETURNS VOID AS $
             BEGIN
                 UPDATE products SET stock = stock + p_qty WHERE id = p_product_id;
             END;
-            $$ LANGUAGE plpgsql;
+            $ LANGUAGE plpgsql;
+            """,
+            """
+            CREATE OR REPLACE FUNCTION transition_order_and_stock(
+                p_order_id BIGINT,
+                p_from_status TEXT,
+                p_to_status TEXT,
+                p_cancellation_reason TEXT DEFAULT NULL
+            )
+            RETURNS SETOF orders AS $
+            DECLARE
+                v_order orders%ROWTYPE;
+                v_item JSONB;
+                v_product_id INTEGER;
+                v_qty INTEGER;
+            BEGIN
+                SELECT * INTO v_order
+                FROM orders
+                WHERE id = p_order_id
+                  AND status = p_from_status
+                FOR UPDATE;
+
+                IF NOT FOUND THEN
+                    RETURN;
+                END IF;
+
+                IF p_to_status IN ('paid', 'confirmed')
+                   AND p_from_status NOT IN ('paid', 'confirmed') THEN
+                    FOR v_item IN
+                        SELECT value
+                        FROM jsonb_array_elements(COALESCE(v_order.items, '[]'::jsonb))
+                    LOOP
+                        v_product_id := NULLIF(v_item->>'product_id', '')::INTEGER;
+                        v_qty := NULLIF(v_item->>'qty', '')::INTEGER;
+                        IF v_product_id IS NOT NULL AND v_qty IS NOT NULL AND v_qty > 0 THEN
+                            UPDATE products
+                            SET stock = GREATEST(0, stock - v_qty)
+                            WHERE id = v_product_id;
+                        END IF;
+                    END LOOP;
+                ELSIF p_to_status = 'cancelled'
+                      AND p_from_status IN ('paid', 'confirmed') THEN
+                    FOR v_item IN
+                        SELECT value
+                        FROM jsonb_array_elements(COALESCE(v_order.items, '[]'::jsonb))
+                    LOOP
+                        v_product_id := NULLIF(v_item->>'product_id', '')::INTEGER;
+                        v_qty := NULLIF(v_item->>'qty', '')::INTEGER;
+                        IF v_product_id IS NOT NULL AND v_qty IS NOT NULL AND v_qty > 0 THEN
+                            UPDATE products
+                            SET stock = stock + v_qty
+                            WHERE id = v_product_id;
+                        END IF;
+                    END LOOP;
+                END IF;
+
+                UPDATE orders
+                SET status = p_to_status,
+                    cancellation_reason = CASE
+                        WHEN p_cancellation_reason IS NOT NULL
+                        THEN p_cancellation_reason
+                        ELSE cancellation_reason
+                    END
+                WHERE id = p_order_id
+                  AND status = p_from_status
+                RETURNING * INTO v_order;
+
+                IF NOT FOUND THEN
+                    RETURN;
+                END IF;
+
+                RETURN NEXT v_order;
+                RETURN;
+            END;
+            $ LANGUAGE plpgsql;
             """
         ]
         for sql in create_tables:
@@ -2061,25 +2155,32 @@ async def _reconcile_once() -> None:
         amount_paid = body.get("amountPaid") or body.get("amount") or 0
 
         if payment_status in ("PAID", "OVERPAID"):
-            # Atomic claim: only transition if still pending (matches webhook)
+            if not payment_amount_matches(order.get("total"), amount_paid):
+                errors += 1
+                logger.error(
+                    f"Reconciliation: payment amount mismatch for order {order['id']} "
+                    f"(expected=₦{order.get('total')}, paid=₦{amount_paid}, "
+                    f"status={payment_status})"
+                )
+                continue
+
             claim = await execute_db(
-                db.table("orders")
-                .update({"status": "paid"})
-                .eq("id", order["id"])
-                .eq("status", "pending")
+                db.rpc("transition_order_and_stock", {
+                    "p_order_id": order["id"],
+                    "p_from_status": "pending",
+                    "p_to_status": "paid",
+                })
             )
             if not claim.data:
                 logger.info(f"Reconciliation: order {order['id']} already claimed — skipping")
                 continue
-            # Re-fetch to get full items list for stock decrement
-            full = await execute_db(db.table("orders").select("*").eq("id", order["id"]))
-            if full.data:
-                await reduce_order_stock(full.data[0])
-                # [FIX] Send the confirmation email for reconciled paid orders.
-                # The webhook was missed (that's why reconciliation is here), so
-                # this is the only notification the customer will receive.
-                await get_brevo().send_order_confirmation(full.data[0])
-            logger.info(f"✅ Reconciliation: order {order['id']} marked PAID (₦{amount_paid})")
+
+            paid_order = claim.data[0]
+            await get_brevo().send_order_confirmation(paid_order)
+            logger.info(
+                f"✅ Reconciliation: order {order['id']} marked PAID "
+                f"(₦{amount_paid}, expected ₦{order.get('total')})"
+            )
             resolved_paid += 1
 
         elif payment_status in ("FAILED", "CANCELLED", "EXPIRED", "REVERSED", "ABANDONED"):
@@ -3163,18 +3264,46 @@ async def monnify_webhook(
     if order.get("status") == "paid":
         logger.info(f"Webhook duplicate for order {order['id']} (already paid) — ignoring")
         return {"status": "already_processed"}
+
+    paid_amount = data.get("amountPaid") or data.get("amount")
+    if paid_amount is None or not payment_amount_matches(order.get("total"), paid_amount):
+        logger.error(
+            f"Monnify webhook amount mismatch for order {order['id']}: "
+            f"expected=₦{order.get('total')}, paid=₦{paid_amount}"
+        )
+        return {"status": "amount_mismatch"}
+
+    if order.get("status") != "pending":
+        logger.warning(
+            f"Monnify webhook ignored for order {order['id']} in state "
+            f"'{order.get('status')}'"
+        )
+        return {"status": "ignored", "reason": "order_not_pending"}
+
+    if (
+        trans_ref
+        and order.get("monnify_transaction_ref")
+        and order.get("monnify_transaction_ref") != trans_ref
+    ):
+        logger.error(
+            f"Monnify transaction reference mismatch for order {order['id']}: "
+            f"stored={order.get('monnify_transaction_ref')} webhook={trans_ref}"
+        )
+        return {"status": "transaction_reference_mismatch"}
+
     claim_result = await execute_db(
-        get_supabase().table("orders")
-        .update({"status": "paid"}).eq("id", order["id"]).neq("status", "paid")
+        get_supabase().rpc("transition_order_and_stock", {
+            "p_order_id": order["id"],
+            "p_from_status": "pending",
+            "p_to_status": "paid",
+        })
     )
     if not claim_result.data:
         logger.info(f"Order {order['id']} already claimed by another worker — skipping stock decrement")
         return {"status": "already_processed"}
-    await reduce_order_stock(order)
-    # [FIX] Send the confirmation email only AFTER payment is confirmed.
-    # This path is reached only when the atomic claim above succeeded, so a
-    # retried webhook delivery cannot produce a duplicate email.
-    await get_brevo().send_order_confirmation(order)
+
+    paid_order = claim_result.data[0]
+    await get_brevo().send_order_confirmation(paid_order)
     return {"status": "received"}
 
 @app.post("/api/ai/chat", response_model=AIChatResponse)
@@ -3560,14 +3689,32 @@ async def update_order_status(
     # money yet) never had stock reduced, so a cancel from those states must
     # NOT inflate stock. Stock is reduced when an order enters 'paid' or
     # 'confirmed', so those are the only states we reverse from.
-    if upd.status == "cancelled" and current_status in ("paid", "confirmed"):
-        await restore_order_stock(order)
-        logger.info(f"Stock restored for cancelled order {oid} (from {current_status})")
-    if upd.status in ("confirmed", "paid") and current_status not in ("confirmed", "paid"):
-        await reduce_order_stock(order)
-    result = await execute_db(get_supabase().table("orders").update(update_data).eq("id", oid))
+    stock_affecting = (
+        (upd.status in ("paid", "confirmed") and current_status not in ("paid", "confirmed"))
+        or (upd.status == "cancelled" and current_status in ("paid", "confirmed"))
+    )
+    if stock_affecting:
+        result = await execute_db(
+            get_supabase().rpc("transition_order_and_stock", {
+                "p_order_id": oid,
+                "p_from_status": current_status,
+                "p_to_status": upd.status,
+                "p_cancellation_reason": upd.reason,
+            })
+        )
+    else:
+        result = await execute_db(
+            get_supabase().table("orders")
+            .update(update_data)
+            .eq("id", oid)
+            .eq("status", current_status)
+        )
+
     if not result.data:
-        raise HTTPException(404, "Order not found")
+        raise HTTPException(
+            status_code=409,
+            detail="Order status changed by another request. Refresh and try again.",
+        )
     invalidate_stats_cache()
     await audit_log(staff, "status_change", "order", oid, update_data, request)
     return result.data[0]
@@ -3585,8 +3732,18 @@ async def confirm_order_offline(
     if order.get("status") in ("confirmed", "paid"):
         raise HTTPException(400, "Order already confirmed")
     validate_order_transition(order.get("status"), "confirmed")
-    await reduce_order_stock(order)
-    await execute_db(get_supabase().table("orders").update({"status": "confirmed"}).eq("id", oid))
+    result = await execute_db(
+        get_supabase().rpc("transition_order_and_stock", {
+            "p_order_id": oid,
+            "p_from_status": order.get("status"),
+            "p_to_status": "confirmed",
+        })
+    )
+    if not result.data:
+        raise HTTPException(
+            status_code=409,
+            detail="Order was changed by another request. Refresh and try again.",
+        )
     invalidate_stats_cache()
     await audit_log(staff, "confirm_offline", "order", oid, None, request)
     return {"message": "Order confirmed offline", "status": "confirmed"}
