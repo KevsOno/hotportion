@@ -99,6 +99,18 @@ def test_transition_paid_to_confirmed_is_valid():
     validate_order_transition("paid", "confirmed")
 
 
+def test_transition_awaiting_payment_to_confirmed_is_valid():
+    validate_order_transition("awaiting_payment", "confirmed")
+
+
+def test_transition_awaiting_payment_to_completed_is_valid():
+    validate_order_transition("awaiting_payment", "completed")
+
+
+def test_transition_paid_to_completed_is_valid():
+    validate_order_transition("paid", "completed")
+
+
 def test_transition_confirmed_to_completed_is_valid():
     validate_order_transition("confirmed", "completed")
 
