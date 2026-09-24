@@ -166,13 +166,13 @@ class Settings(BaseSettings):
     # [FIX] A pending order whose Monnify transaction is still PENDING after
     # this many minutes is treated as abandoned and cancelled.
     ABANDONED_CHECKOUT_GRACE_MINUTES: int = 30
-    # [FIX] A pending order older than this is cancelled unconditionally —
+    # [FIX] A pending order older than this is cancelled unconditionally -
     # backstop for orders where Monnify queries kept failing during the
     # in-window sweep. Monnify auto-expires unpaid checkouts long before this.
     STALE_CHECKOUT_HOURS: int = 6
     # [FEATURE] Offline orders (pickup/dine-in paid at counter) that sit in
     # `awaiting_payment` for this long are flagged as no-shows. We do NOT
-    # auto-cancel them — a human should decide — but we log a warning so
+    # auto-cancel them - a human should decide - but we log a warning so
     # staff know to chase.
     OFFLINE_NO_SHOW_WARNING_HOURS: int = 8
 
@@ -233,7 +233,7 @@ async def execute_db(query):
 
 # ---------- RATE LIMITER ----------
 # NOTE: In-memory. Safe for a single Uvicorn worker. Multi-worker deployments
-# must swap this for a shared store (e.g. Redis) — otherwise each worker enforces
+# must swap this for a shared store (e.g. Redis) - otherwise each worker enforces
 # its own quota and effective limits scale with worker count.
 _rate_limit_store: Dict[str, List[float]] = {}
 _rate_limit_lock = asyncio.Lock()
@@ -433,7 +433,7 @@ async def audit_log(
     payload: Optional[Dict[str, Any]] = None,
     request: Optional[Request] = None,
 ) -> None:
-    """Record an admin mutation. Never raises — a failed audit must not break the operation."""
+    """Record an admin mutation. Never raises - a failed audit must not break the operation."""
     try:
         await execute_db(get_supabase().table("staff_audit_log").insert({
             "staff_id": staff.get("id"),
@@ -478,7 +478,7 @@ class StaffMember(BaseModel):
 # dine-in that will be paid at the counter on arrival). It is distinct from
 # `pending`, which continues to mean "customer is at Monnify checkout".
 # Keeping them separate is essential: the reconciliation loop auto-cancels
-# stale `pending` rows, but must never touch `awaiting_payment` — those are
+# stale `pending` rows, but must never touch `awaiting_payment` - those are
 # legitimately waiting for a human.
 _ALLOWED_ORDER_TRANSITIONS: Dict[str, Set[str]] = {
     "pending":           {"paid", "confirmed", "cancelled"},
@@ -561,7 +561,7 @@ class OrderCreate(BaseModel):
     total: Optional[int] = None
     status: Optional[str] = "pending"
     delivery_method: Optional[str] = "pickup"
-    # [FEATURE] Payment method — "online" (through Monnify) or "offline"
+    # [FEATURE] Payment method - "online" (through Monnify) or "offline"
     # (pay at the counter on arrival). Only valid for pickup and dine-in.
     # Delivery orders must be "online". Default "online" preserves the
     # previous behaviour for clients that don't send this field.
@@ -1000,7 +1000,7 @@ class BrevoIntegration:
                 for i in data.get("items", [])
             )
             # [FEATURE] Offline orders get a "pay at counter" note. Online orders
-            # keep the original wording (no payment note — the customer just paid).
+            # keep the original wording (no payment note - the customer just paid).
             payment_html = ""
             if data.get("payment_method") == "offline":
                 payment_html = (
@@ -1179,7 +1179,7 @@ class MonnifyIntegration:
 # Wraps the AWS Location Service v2 Geocoding / Reverse-Geocoding APIs. The
 # same API key that powers the frontend Places autocomplete can be used here,
 # but a separate AWS_GEOCODING_API_KEY is honoured if configured (AWS allows
-# scoping keys per API — a good practice).
+# scoping keys per API - a good practice).
 class AWSService:
     def __init__(self):
         self.region = settings.AWS_LOCATION_REGION
@@ -1329,7 +1329,7 @@ async def geocode_address(address: str) -> Optional[Tuple[float, float]]:
     Strategy (in order):
       1. Cache hit (normalized address key).
       2. AWS Location Service geocode.
-      3. Nominatim (only if enabled) — logged at WARNING so operators see when
+      3. Nominatim (only if enabled) - logged at WARNING so operators see when
          the fallback is being exercised.
 
     Returns None if no provider could resolve the address.
@@ -1352,7 +1352,7 @@ async def geocode_address(address: str) -> Optional[Tuple[float, float]]:
     # 2. Nominatim fallback
     if settings.NOMINATIM_FALLBACK_ENABLED:
         logger.warning(
-            f"AWS geocode failed for '{address[:80]}' — falling back to Nominatim "
+            f"AWS geocode failed for '{address[:80]}' - falling back to Nominatim "
             f"(this path violates OSM usage policy if used frequently; investigate "
             f"AWS geocoding failures)."
         )
@@ -1373,10 +1373,10 @@ async def geocode_address(address: str) -> Optional[Tuple[float, float]]:
 #     trust the client (their coords come from a picked autocomplete result, usually
 #     more precise than a string geocode).
 #   * If they disagree by more than the threshold, use the server coords and log
-#     at WARNING — this is the "customer is spoofing coordinates to land in a cheaper
+#     at WARNING - this is the "customer is spoofing coordinates to land in a cheaper
 #     delivery zone" case.
 #   * If only one side resolves, use whatever we have.
-#   * If neither resolves, return None — callers MUST fail closed.
+#   * If neither resolves, return None - callers MUST fail closed.
 async def _resolve_delivery_coords(
     address: Optional[str],
     client_lat: Optional[float],
@@ -1404,7 +1404,7 @@ async def _resolve_delivery_coords(
             f"(customer={customer_email or 'unknown'}): "
             f"client=({client_coords[0]:.4f},{client_coords[1]:.4f}) "
             f"server=({server_coords[0]:.4f},{server_coords[1]:.4f}) "
-            f"distance={dist_m:.0f}m > {settings.CLIENT_COORD_MAX_DISCREPANCY_M:.0f}m — "
+            f"distance={dist_m:.0f}m > {settings.CLIENT_COORD_MAX_DISCREPANCY_M:.0f}m - "
             f"using server coords."
         )
         return server_coords
@@ -1453,13 +1453,13 @@ async def get_cached_stats():
     products, categories, orders, revenue = await asyncio.gather(
         execute_db(db.table("products").select("id", count="exact")),
         execute_db(db.table("categories").select("id", count="exact")),
-        # [FIX] Exclude checkout-in-progress rows — they are not orders.
-        # NOTE: `awaiting_payment` (offline orders) IS counted — those are real
+        # [FIX] Exclude checkout-in-progress rows - they are not orders.
+        # NOTE: `awaiting_payment` (offline orders) IS counted - those are real
         # orders that staff are preparing, they just haven't been paid yet.
         execute_db(db.table("orders").select("id", count="exact").neq("status", "pending")),
         # [FIX] Revenue only counts money that actually landed. An abandoned
         # checkout never paid, so its total should not appear in revenue.
-        # Offline orders in `awaiting_payment` also don't count — money hasn't
+        # Offline orders in `awaiting_payment` also don't count - money hasn't
         # changed hands yet. They join revenue when staff marks them paid.
         execute_db(
             db.table("orders")
@@ -1863,7 +1863,7 @@ async def setup_database():
 # as the webhook. FAILED/CANCELLED/EXPIRED/REVERSED orders get cancelled.
 #
 # [FEATURE] Reconciliation ONLY touches `pending` (online, at Monnify) orders.
-# Offline orders in `awaiting_payment` are intentionally out of scope — those
+# Offline orders in `awaiting_payment` are intentionally out of scope - those
 # are legitimate orders waiting for a human to take payment at the counter.
 _reconciliation_lock = asyncio.Lock()
 _reconciliation_task: Optional[asyncio.Task] = None
@@ -1924,7 +1924,7 @@ async def _reconcile_once() -> None:
 
     # [FEATURE] Warning-only sweep for offline orders that have been sitting in
     # `awaiting_payment` for a long time (likely no-shows). We do NOT auto-cancel
-    # — a human should decide. But we log so staff know to chase.
+    # - a human should decide. But we log so staff know to chase.
     try:
         warn_cutoff = (now - timedelta(hours=settings.OFFLINE_NO_SHOW_WARNING_HOURS)).isoformat()
         warn_result = await execute_db(
@@ -1939,7 +1939,7 @@ async def _reconcile_once() -> None:
             logger.warning(
                 f"⚠️  Offline order {warn['id']} (ref={warn.get('payment_reference')}) "
                 f"has been awaiting counter payment for over "
-                f"{settings.OFFLINE_NO_SHOW_WARNING_HOURS}h — "
+                f"{settings.OFFLINE_NO_SHOW_WARNING_HOURS}h - "
                 f"customer={warn.get('customer_name')} phone={warn.get('customer_phone')}. "
                 f"Consider following up or cancelling manually."
             )
@@ -2012,7 +2012,7 @@ async def _reconcile_once() -> None:
                 })
             )
             if not claim.data:
-                logger.info(f"Reconciliation: order {order['id']} already claimed — skipping")
+                logger.info(f"Reconciliation: order {order['id']} already claimed - skipping")
                 continue
 
             paid_order = claim.data[0]
@@ -2040,7 +2040,7 @@ async def _reconcile_once() -> None:
         else:
             # [FIX] Monnify reports PENDING or an unrecognised status. If the
             # order has been in this state past the abandoned-checkout grace
-            # period, cancel it — the customer has clearly walked away.
+            # period, cancel it - the customer has clearly walked away.
             age_minutes = 0.0
             created_at_str = order.get("created_at")
             if created_at_str:
@@ -2085,7 +2085,7 @@ async def _reconcile_once() -> None:
 
     if checked or stale_cancelled:
         logger.info(
-            f"Reconciliation: done — checked={checked} "
+            f"Reconciliation: done - checked={checked} "
             f"paid={resolved_paid} cancelled={resolved_cancelled} "
             f"(stale={stale_cancelled}) errors={errors}"
         )
@@ -2144,12 +2144,12 @@ async def lifespan(app: FastAPI):
             "Set it from Supabase → Settings → API → JWT Secret."
         )
 
-    # Warn if server-side geocoding isn't configured — deliveries will fall
+    # Warn if server-side geocoding isn't configured - deliveries will fall
     # back to Nominatim (or fail if the fallback is disabled).
     if not get_aws().geocoding_configured:
         logger.warning(
             "⚠️  AWS geocoding is NOT configured (AWS_LOCATION_API_KEY / AWS_GEOCODING_API_KEY). "
-            "Server-side geocoding will rely on Nominatim — set AWS_LOCATION_API_KEY to fix."
+            "Server-side geocoding will rely on Nominatim - set AWS_LOCATION_API_KEY to fix."
         )
 
     # Surface the multi-worker hazard explicitly. The rate limiter and stats
@@ -2162,7 +2162,7 @@ async def lifespan(app: FastAPI):
     if web_concurrency > 1:
         logger.warning(
             f"⚠️  WEB_CONCURRENCY={web_concurrency}. The rate limiter and stats cache are "
-            f"in-memory (per-process) — effective rate limits and cache TTLs will be N× higher. "
+            f"in-memory (per-process) - effective rate limits and cache TTLs will be N× higher. "
             f"Run a single worker, or move both to Redis for multi-worker deployments."
         )
 
@@ -2256,11 +2256,11 @@ app.add_middleware(
 # of what Netlify does.
 #
 # Notes:
-#   * X-Content-Type-Options: nosniff — stops MIME-type sniffing.
-#   * X-Frame-Options: DENY        — blocks framing (clickjacking).
-#   * Referrer-Policy              — limits cross-origin referrer leakage.
-#   * Permissions-Policy           — denies geolocation / camera / mic.
-#   * X-Robots-Tag on /docs, /redoc, /openapi.json — belt-and-braces so
+#   * X-Content-Type-Options: nosniff - stops MIME-type sniffing.
+#   * X-Frame-Options: DENY        - blocks framing (clickjacking).
+#   * Referrer-Policy              - limits cross-origin referrer leakage.
+#   * Permissions-Policy           - denies geolocation / camera / mic.
+#   * X-Robots-Tag on /docs, /redoc, /openapi.json - belt-and-braces so
 #     that even if docs are briefly enabled, search engines won't index them.
 #
 # We deliberately do NOT set a Content-Security-Policy here. Swagger UI needs
@@ -2432,7 +2432,7 @@ class BannerService:
 # [FIX] Split health check into public + authenticated.
 #
 # Public /health is a minimal liveness probe. It returns only enough to tell
-# an uptime monitor whether the process is up — no version info, no schema
+# an uptime monitor whether the process is up - no version info, no schema
 # state, no external-service configuration flags, no reconciliation counters.
 # Those details are free reconnaissance for an attacker.
 #
@@ -2441,7 +2441,7 @@ class BannerService:
 # they need to debug migrations, geocoding, or reconciliation.
 @app.get("/health")
 async def health():
-    """Public liveness probe. Minimal payload — no operational detail."""
+    """Public liveness probe. Minimal payload - no operational detail."""
     return {"status": "ok"}
 
 
@@ -2450,7 +2450,7 @@ async def health_detail(staff: Dict[str, Any] = Depends(get_current_staff)):
     """
     Authenticated readiness probe. Full operational detail for operators.
 
-    Reports 'degraded' if schema migrations failed — wire this into internal
+    Reports 'degraded' if schema migrations failed - wire this into internal
     alerting so silent schema drift doesn't go unnoticed.
     """
     return {
@@ -2525,7 +2525,7 @@ async def get_top_products(limit: int = 20):
 
 # [FIX] Order lookup by reference now requires customer email.
 # Rationale: a leaked reference (email footer, screenshot, browser history) is
-# enough to fetch full customer PII — name, phone, address, items, total. Forcing
+# enough to fetch full customer PII - name, phone, address, items, total. Forcing
 # an email match means an attacker needs both pieces, and the email is not
 # derivable from the reference.
 #
@@ -2534,7 +2534,7 @@ async def get_top_products(limit: int = 20):
 @app.get("/api/orders/by-reference/{ref}")
 async def get_order_by_reference(
     ref: str,
-    email: str = Query(..., min_length=3, max_length=320, description="Customer email — must match the order"),
+    email: str = Query(..., min_length=3, max_length=320, description="Customer email - must match the order"),
 ):
     if not ref or len(ref) > 128:
         raise HTTPException(400, "Invalid reference")
@@ -2562,7 +2562,7 @@ async def get_order_by_reference(
 # checkout URL that was never created.
 async def _serve_existing_order(row: Dict[str, Any]) -> Dict[str, Any]:
     """
-    If the existing row already has a checkout_url, return it — the customer
+    If the existing row already has a checkout_url, return it - the customer
     is retrying the same intent and should land on the same Monnify page.
 
     If the row exists but checkout_url is NULL, a previous attempt died
@@ -2603,7 +2603,7 @@ async def _serve_existing_order(row: Dict[str, Any]) -> Dict[str, Any]:
 
     if row.get("status") != "pending":
         # The order moved past pending (paid/cancelled/confirmed). Client is
-        # likely retrying a completed flow — send them to check their orders.
+        # likely retrying a completed flow - send them to check their orders.
         raise HTTPException(
             status_code=409,
             detail=(
@@ -2681,7 +2681,7 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
 
     # [FIX] Idempotency key handling.
     # We only look up an existing order when the client supplied a key. If
-    # they didn't, we generate one internally for record-keeping — but the
+    # they didn't, we generate one internally for record-keeping - but the
     # dedupe path is disabled for that request, preserving backward compat.
     idem_key_in = (order.idempotency_key or "").strip()
     if idem_key_in and len(idem_key_in) > 200:
@@ -2732,7 +2732,7 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
     # The server must compute the delivery fee itself, from the address and
     # its own pricing rules. If we cannot (geocoding failed, address outside
     # all zones, pricing service degraded), we REJECT the order with a clear
-    # message — we never fall back to a client-supplied fee. The customer can
+    # message - we never fall back to a client-supplied fee. The customer can
     # choose Pickup / Dine-in, or retry in a moment.
     computed_delivery_fee = 0
     if delivery_method == "delivery":
@@ -2798,7 +2798,7 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
     computed_total = computed_subtotal + computed_delivery_fee
 
     # ------------------------------------------------------------------
-    # [FEATURE] OFFLINE PATH — pickup or dine-in paid at the counter.
+    # [FEATURE] OFFLINE PATH - pickup or dine-in paid at the counter.
     # No Monnify. Order goes straight to `awaiting_payment`, which means
     # "customer is coming in to pay". The reconciliation loop never touches
     # this status; only a human (staff) can move it forward.
@@ -2854,7 +2854,7 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
         logger.info(
             f"Offline order {order_data['id']} created "
             f"(customer={order.customer_email}, method={delivery_method}, "
-            f"total=₦{computed_total}) — awaiting counter payment"
+            f"total=₦{computed_total}) - awaiting counter payment"
         )
         return {
             "status": "awaiting_payment",
@@ -2866,7 +2866,7 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
         }
 
     # ------------------------------------------------------------------
-    # ONLINE PATH — existing behavior. Create order with `pending`, send
+    # ONLINE PATH - existing behavior. Create order with `pending`, send
     # the customer to Monnify, and let the webhook / reconciliation move
     # it to `paid`.
     # ------------------------------------------------------------------
@@ -2893,7 +2893,7 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
     except Exception as e:
         # [FIX] Race-safe idempotency: another request with the same key
         # squeezed in between our SELECT and our INSERT. The unique index on
-        # idempotency_key caught it — serve the winning row.
+        # idempotency_key caught it - serve the winning row.
         err_str = str(e).lower()
         if idem_key_in and ("duplicate" in err_str or "unique" in err_str or "23505" in err_str):
             existing = await execute_db(
@@ -2942,7 +2942,7 @@ async def create_order(order: OrderCreate, request: Request, bg: BackgroundTasks
         .eq("id", order_data["id"])
     )
     # [FIX] Confirmation email is deliberately NOT sent here. At this point the
-    # customer has only been given a Monnify checkout URL — they have not paid.
+    # customer has only been given a Monnify checkout URL - they have not paid.
     # The email is triggered from the webhook handler and the reconciliation
     # loop, in both cases *after* the order has been atomically marked paid.
     # This prevents abandoned checkouts from generating false "Payment
@@ -3034,7 +3034,7 @@ async def get_area_by_point(lat: float, lng: float):
         logger.error(f"Error checking point: {str(e)}", exc_info=True)
         raise HTTPException(500, "Error checking delivery area coverage")
 
-# Note: `reverse-geocode` removed — the server never reverse-geocodes, and the
+# Note: `reverse-geocode` removed - the server never reverse-geocodes, and the
 # frontend shouldn't need it either. Keeping the surface small.
 ALLOWED_PLACES_ENDPOINTS = {"autocomplete", "geocode","reverse-geocode"}
 
@@ -3102,7 +3102,7 @@ async def monnify_webhook(
         return {"status": "ignored"}
     order = order_result.data[0]
     if order.get("status") == "paid":
-        logger.info(f"Webhook duplicate for order {order['id']} (already paid) — ignoring")
+        logger.info(f"Webhook duplicate for order {order['id']} (already paid) - ignoring")
         return {"status": "already_processed"}
 
     paid_amount = data.get("amountPaid") or data.get("amount")
@@ -3139,7 +3139,7 @@ async def monnify_webhook(
         })
     )
     if not claim_result.data:
-        logger.info(f"Order {order['id']} already claimed by another worker — skipping stock decrement")
+        logger.info(f"Order {order['id']} already claimed by another worker - skipping stock decrement")
         return {"status": "already_processed"}
 
     paid_order = claim_result.data[0]
@@ -3465,7 +3465,7 @@ async def delete_category(
 # Pass `include_pending=true` only for debugging.
 #
 # [FEATURE] `awaiting_payment` (offline, at-counter) orders ARE shown by
-# default — those need staff attention to collect payment.
+# default - those need staff attention to collect payment.
 @app.get("/api/orders", response_model=List[Dict])
 async def get_orders(
     since: Optional[str] = Query(None),
@@ -3475,7 +3475,7 @@ async def get_orders(
         False,
         description=(
             "Include checkout-in-progress rows (status='pending'). Default "
-            "false — those are customers currently at the payment gateway, "
+            "false - those are customers currently at the payment gateway, "
             "not orders staff should act on. Set true only for debugging."
         ),
     ),
@@ -3490,7 +3490,7 @@ async def get_orders(
         # hasn't yet cleaned up, and any pending row still inside the grace window.
         # Staff should only see orders that need action.
         #
-        # `awaiting_payment` (offline) is NOT filtered out — those need attention.
+        # `awaiting_payment` (offline) is NOT filtered out - those need attention.
         query = query.neq("status", "pending")
     query = query.range(offset, offset + limit - 1)
     r = await execute_db(query)
