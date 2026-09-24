@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import pytest
 from fastapi import HTTPException
 
-from main import (
+import main\n\nfrom main import (
     AIService,
     LOCAL_TZ,
     _ALLOWED_ORDER_TRANSITIONS,
@@ -236,3 +236,119 @@ def test_terminal_order_statuses_remain_terminal():
             else:
                 with pytest.raises(HTTPException):
                     validate_order_transition(current, target)
+
+# =============================================================
+# PAYMENT / ORDER LIFECYCLE INTEGRATION GUARDS
+# =============================================================
+
+def _successful_webhook(monkeypatch, payment_ref, transaction_ref, amount):
+    async def fake_handle(self, raw_body, signature):
+        return {
+            "valid": True,
+            "event": "SUCCESSFUL_TRANSACTION",
+            "payload": {"data": {
+                "transactionReference": transaction_ref,
+                "paymentReference": payment_ref,
+                "amountPaid": amount,
+            }},
+        }
+    monkeypatch.setattr(main.MonnifyIntegration, "handle_webhook", fake_handle)
+
+    class _Brevo:
+        async def send_order_confirmation(self, order):
+            return None
+
+    monkeypatch.setattr(main, "get_brevo", lambda: _Brevo())
+
+
+def test_webhook_success_decrements_stock_and_marks_paid(client, fake_db, monkeypatch):
+    _successful_webhook(monkeypatch, "HP-TEST-1", "TXN-1", 4500)
+    fake_db.store["orders"] = [{"id": 1, "payment_reference": "HP-TEST-1",
+        "monnify_transaction_ref": "TXN-1", "total": 4500, "status": "pending",
+        "items": [{"product_id": 1, "qty": 3, "price": 4500}]}]
+    response = client.post("/api/v1/webhooks/monnify", json={})
+    assert response.status_code == 200
+    assert response.json()["status"] == "received"
+    assert fake_db.store["orders"][0]["status"] == "paid"
+    assert fake_db.store["products"][0]["stock"] == 7
+
+
+def test_webhook_allows_overorder_but_never_negative_stock(client, fake_db, monkeypatch):
+    _successful_webhook(monkeypatch, "HP-TEST-2", "TXN-2", 4500)
+    fake_db.store["orders"] = [{"id": 2, "payment_reference": "HP-TEST-2",
+        "monnify_transaction_ref": "TXN-2", "total": 4500, "status": "pending",
+        "items": [{"product_id": 1, "qty": 50, "price": 4500}]}]
+    response = client.post("/api/v1/webhooks/monnify", json={})
+    assert response.status_code == 200
+    assert response.json()["status"] == "received"
+    assert fake_db.store["products"][0]["stock"] == 0
+
+
+def test_webhook_rejects_underpayment(client, fake_db, monkeypatch):
+    _successful_webhook(monkeypatch, "HP-TEST-3", "TXN-3", 4499)
+    fake_db.store["orders"] = [{"id": 3, "payment_reference": "HP-TEST-3",
+        "monnify_transaction_ref": "TXN-3", "total": 4500, "status": "pending",
+        "items": [{"product_id": 1, "qty": 1, "price": 4500}]}]
+    response = client.post("/api/v1/webhooks/monnify", json={})
+    assert response.json()["status"] == "amount_mismatch"
+    assert fake_db.store["orders"][0]["status"] == "pending"
+    assert fake_db.store["products"][0]["stock"] == 10
+
+
+def test_webhook_rejects_wrong_transaction_reference(client, fake_db, monkeypatch):
+    _successful_webhook(monkeypatch, "HP-TEST-4", "TXN-WRONG", 4500)
+    fake_db.store["orders"] = [{"id": 4, "payment_reference": "HP-TEST-4",
+        "monnify_transaction_ref": "TXN-CORRECT", "total": 4500, "status": "pending",
+        "items": [{"product_id": 1, "qty": 1, "price": 4500}]}]
+    response = client.post("/api/v1/webhooks/monnify", json={})
+    assert response.json()["status"] == "transaction_reference_mismatch"
+    assert fake_db.store["orders"][0]["status"] == "pending"
+
+
+def test_webhook_does_not_revive_cancelled_order(client, fake_db, monkeypatch):
+    _successful_webhook(monkeypatch, "HP-TEST-5", "TXN-5", 4500)
+    fake_db.store["orders"] = [{"id": 5, "payment_reference": "HP-TEST-5",
+        "monnify_transaction_ref": "TXN-5", "total": 4500, "status": "cancelled",
+        "items": [{"product_id": 1, "qty": 1, "price": 4500}]}]
+    response = client.post("/api/v1/webhooks/monnify", json={})
+    assert response.json()["reason"] == "order_not_pending"
+    assert fake_db.store["orders"][0]["status"] == "cancelled"
+
+
+def test_duplicate_webhook_is_idempotent(client, fake_db, monkeypatch):
+    _successful_webhook(monkeypatch, "HP-TEST-6", "TXN-6", 4500)
+    fake_db.store["orders"] = [{"id": 6, "payment_reference": "HP-TEST-6",
+        "monnify_transaction_ref": "TXN-6", "total": 4500, "status": "pending",
+        "items": [{"product_id": 1, "qty": 2, "price": 4500}]}]
+    first = client.post("/api/v1/webhooks/monnify", json={})
+    second = client.post("/api/v1/webhooks/monnify", json={})
+    assert first.json()["status"] == "received"
+    assert second.json()["status"] == "already_processed"
+    assert fake_db.store["products"][0]["stock"] == 8
+
+
+def test_paid_order_cancellation_restores_stock(fake_db):
+    fake_db.store["orders"] = [{"id": 7, "status": "paid",
+        "items": [{"product_id": 1, "qty": 4, "price": 4500}]}]
+    rpc = main.get_supabase().rpc("transition_order_and_stock", {
+        "p_order_id": 7, "p_from_status": "paid", "p_to_status": "cancelled",
+        "p_cancellation_reason": "customer requested",
+    }).execute()
+    assert rpc.data[0]["status"] == "cancelled"
+    assert fake_db.store["products"][0]["stock"] == 14
+
+
+def test_create_order_idempotency_returns_same_order(client, fake_db):
+    payload = {
+        "customer_name": "Test Customer", "customer_email": "test@example.com",
+        "customer_phone": "08000000000", "delivery_method": "pickup",
+        "payment_method": "online", "items": [{"product_id": 1, "qty": 1}],
+        "idempotency_key": "idem-test-1",
+    }
+    first = client.post("/api/orders", json=payload)
+    second = client.post("/api/orders", json=payload)
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["order_id"] == second.json()["order_id"]
+    assert len(fake_db.store["orders"]) == 1
+
