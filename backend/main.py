@@ -3190,13 +3190,9 @@ async def create_staff(
     staff: Dict[str, Any] = Depends(require_permission("staff:write")),
     request: Request = None,
 ):
-    """Create a new staff member via Supabase Auth Admin API with a preset password.
-
-    [FIX] Replaces the invite-email flow. The admin chooses the initial
-    password, shares it out-of-band (WhatsApp, in person, etc.), and the
-    staff member can sign in immediately. Password changes later go through
-    the "Forgot password" flow on the login screen.
-    """
+    # Create a new staff member via Supabase Auth Admin API with a preset password.
+    # The admin sets the initial password and shares it out-of-band.
+    # Staff can change it later through the password-reset flow.
     email = payload.email.strip().lower()
     role = payload.role.strip().lower()
     if role not in ALLOWED_ROLES:
