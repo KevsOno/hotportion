@@ -162,3 +162,10 @@ ON CONFLICT (name) DO NOTHING;
 -- ───────────────────────────────────────────────────────────────
 -- END MIGRATION
 -- ───────────────────────────────────────────────────────────────
+
+
+-- Idempotency key is unique per checkout attempt. NULL is allowed for
+-- legacy/manual rows and clients that do not send a key.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_idempotency_key
+    ON orders (idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
