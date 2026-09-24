@@ -33,8 +33,6 @@ ALTER TABLE orders
             'awaiting_payment',
             'paid',
             'confirmed',
-            'preparing',
-            'ready',
             'completed',
             'cancelled'
         )
@@ -75,12 +73,10 @@ BEGIN
     END IF;
 
     IF NOT (
-        (p_from_status = 'pending' AND p_to_status IN ('awaiting_payment', 'paid', 'cancelled'))
-        OR (p_from_status = 'awaiting_payment' AND p_to_status IN ('paid', 'cancelled'))
-        OR (p_from_status = 'paid' AND p_to_status IN ('confirmed', 'cancelled'))
-        OR (p_from_status = 'confirmed' AND p_to_status IN ('preparing', 'completed', 'cancelled'))
-        OR (p_from_status = 'preparing' AND p_to_status IN ('ready', 'cancelled'))
-        OR (p_from_status = 'ready' AND p_to_status IN ('completed', 'cancelled'))
+        (p_from_status = 'pending' AND p_to_status IN ('paid', 'confirmed', 'cancelled'))
+        OR (p_from_status = 'awaiting_payment' AND p_to_status IN ('paid', 'confirmed', 'completed', 'cancelled'))
+        OR (p_from_status = 'paid' AND p_to_status IN ('confirmed', 'completed', 'cancelled'))
+        OR (p_from_status = 'confirmed' AND p_to_status IN ('completed', 'cancelled'))
     ) THEN
         RAISE EXCEPTION 'Invalid order status transition: % -> %', p_from_status, p_to_status;
     END IF;
