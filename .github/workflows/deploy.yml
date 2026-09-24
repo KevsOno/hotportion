@@ -3,6 +3,8 @@ name: Deploy Hot Portion Grill Production
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 # Prevent two deploys from racing each other on main.
@@ -42,6 +44,15 @@ jobs:
         run: |
           cd backend
           pytest tests/ -v --strict-markers
+
+  # Pull requests run the same backend test gate but never deploy.
+  test-pr-safety:
+    needs: test-backend
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: PR test gate
+        run: echo "Backend test suite passed; production deployment is intentionally skipped."
 
   # ─── 2. DEPLOY BACKEND TO RENDER ───
   deploy-backend-render:
