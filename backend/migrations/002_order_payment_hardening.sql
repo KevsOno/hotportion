@@ -54,7 +54,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_status_created_at
     ON orders (status, created_at);
 
 CREATE OR REPLACE FUNCTION transition_order_and_stock(
-    p_order_id BIGINT,
+    p_order_id INTEGER,
     p_from_status TEXT,
     p_to_status TEXT,
     p_cancellation_reason TEXT DEFAULT NULL
@@ -66,6 +66,25 @@ DECLARE
     v_product_id INTEGER;
     v_qty INTEGER;
 BEGIN
+    IF p_from_status IS NULL OR p_to_status IS NULL THEN
+        RAISE EXCEPTION 'Order transition statuses are required';
+    END IF;
+
+    IF p_from_status = p_to_status THEN
+        RAISE EXCEPTION 'No-op order transition is not allowed';
+    END IF;
+
+    IF NOT (
+        (p_from_status = 'pending' AND p_to_status IN ('awaiting_payment', 'paid', 'cancelled'))
+        OR (p_from_status = 'awaiting_payment' AND p_to_status IN ('paid', 'cancelled'))
+        OR (p_from_status = 'paid' AND p_to_status IN ('confirmed', 'cancelled'))
+        OR (p_from_status = 'confirmed' AND p_to_status IN ('preparing', 'completed', 'cancelled'))
+        OR (p_from_status = 'preparing' AND p_to_status IN ('ready', 'cancelled'))
+        OR (p_from_status = 'ready' AND p_to_status IN ('completed', 'cancelled'))
+    ) THEN
+        RAISE EXCEPTION 'Invalid order status transition: % -> %', p_from_status, p_to_status;
+    END IF;
+
     SELECT * INTO v_order
     FROM orders
     WHERE id = p_order_id
@@ -127,4 +146,10 @@ BEGIN
     RETURN NEXT v_order;
     RETURN;
 END;
-$$ LANGUAGE plpgsql;
+$ LANGUAGE plpgsql;
+
+REVOKE ALL ON FUNCTION transition_order_and_stock(INTEGER, TEXT, TEXT, TEXT)
+FROM PUBLIC, anon, authenticated;
+
+GRANT EXECUTE ON FUNCTION transition_order_and_stock(INTEGER, TEXT, TEXT, TEXT)
+TO service_role;
