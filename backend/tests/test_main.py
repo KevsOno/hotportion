@@ -11,7 +11,9 @@ from datetime import datetime, timezone
 import pytest
 from fastapi import HTTPException
 
-import main\n\nfrom main import (
+import main
+
+from main import (
     AIService,
     LOCAL_TZ,
     _ALLOWED_ORDER_TRANSITIONS,
