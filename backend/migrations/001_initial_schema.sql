@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS orders (
     customer_email TEXT NOT NULL,
     customer_phone TEXT NOT NULL,
     total INTEGER NOT NULL,
-    status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'preparing', 'ready', 'completed', 'cancelled')),
+    status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'awaiting_payment', 'paid', 'confirmed', 'preparing', 'ready', 'completed', 'cancelled')),
     delivery_method TEXT DEFAULT 'pickup' CHECK (delivery_method IN ('pickup', 'delivery', 'dinein')),
     delivery_address TEXT,
     preferred_time TEXT,
