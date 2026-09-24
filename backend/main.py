@@ -1828,6 +1828,14 @@ async def setup_database():
             # that don't send the field on the historical behavior.
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'online';",
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS idempotency_key TEXT;",
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;",
+            "DO $ BEGIN
+                ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;
+                ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK (
+                    status IN ('pending','awaiting_payment','paid','confirmed','preparing','ready','completed','cancelled')
+                );
+            EXCEPTION WHEN duplicate_object THEN NULL;
+            END $;",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_idempotency_key ON orders (idempotency_key) WHERE idempotency_key IS NOT NULL;",
             "CREATE INDEX IF NOT EXISTS idx_orders_payment_reference ON orders (payment_reference);",
             "CREATE INDEX IF NOT EXISTS idx_orders_monnify_transaction_ref ON orders (monnify_transaction_ref);",
