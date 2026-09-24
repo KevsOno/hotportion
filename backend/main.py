@@ -2447,12 +2447,9 @@ async def health():
 
 @app.get("/health/detail")
 async def health_detail(staff: Dict[str, Any] = Depends(get_current_staff)):
-    """
-    Authenticated readiness probe. Full operational detail for operators.
-
-    Reports 'degraded' if schema migrations failed - wire this into internal
-    alerting so silent schema drift doesn't go unnoticed.
-    """
+    # Authenticated readiness probe. Full operational detail for operators.
+    # Reports "degraded" if schema migrations failed. Wire this into internal
+    # alerting so silent schema drift does not go unnoticed.
     return {
         "status": "healthy" if _schema_state["ready"] else "degraded",
         "schema_ready": _schema_state["ready"],
