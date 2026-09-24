@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS orders (
     preferred_time TEXT,
     order_notes TEXT,
     items JSONB NOT NULL DEFAULT '[]',
+    idempotency_key TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -169,3 +170,80 @@ ON CONFLICT (name) DO NOTHING;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_idempotency_key
     ON orders (idempotency_key)
     WHERE idempotency_key IS NOT NULL;
+
+-- Atomic payment/order state transition and stock ledger update.
+-- Stock intentionally bottoms out at zero. Orders are never rejected merely
+-- because current stock is insufficient.
+CREATE OR REPLACE FUNCTION transition_order_and_stock(
+    p_order_id BIGINT,
+    p_from_status TEXT,
+    p_to_status TEXT,
+    p_cancellation_reason TEXT DEFAULT NULL
+)
+RETURNS SETOF orders AS $$
+DECLARE
+    v_order orders%ROWTYPE;
+    v_item JSONB;
+    v_product_id INTEGER;
+    v_qty INTEGER;
+BEGIN
+    SELECT * INTO v_order
+    FROM orders
+    WHERE id = p_order_id
+      AND status = p_from_status
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    IF p_to_status IN ('paid', 'confirmed')
+       AND p_from_status NOT IN ('paid', 'confirmed') THEN
+        FOR v_item IN
+            SELECT value
+            FROM jsonb_array_elements(COALESCE(v_order.items, '[]'::jsonb))
+        LOOP
+            v_product_id := NULLIF(v_item->>'product_id', '')::INTEGER;
+            v_qty := NULLIF(v_item->>'qty', '')::INTEGER;
+            IF v_product_id IS NOT NULL AND v_qty IS NOT NULL AND v_qty > 0 THEN
+                UPDATE products
+                SET stock = GREATEST(0, stock - v_qty)
+                WHERE id = v_product_id;
+            END IF;
+        END LOOP;
+    ELSIF p_to_status = 'cancelled'
+          AND p_from_status IN ('paid', 'confirmed') THEN
+        FOR v_item IN
+            SELECT value
+            FROM jsonb_array_elements(COALESCE(v_order.items, '[]'::jsonb))
+        LOOP
+            v_product_id := NULLIF(v_item->>'product_id', '')::INTEGER;
+            v_qty := NULLIF(v_item->>'qty', '')::INTEGER;
+            IF v_product_id IS NOT NULL AND v_qty IS NOT NULL AND v_qty > 0 THEN
+                UPDATE products
+                SET stock = stock + v_qty
+                WHERE id = v_product_id;
+            END IF;
+        END LOOP;
+    END IF;
+
+    UPDATE orders
+    SET status = p_to_status,
+        cancellation_reason = CASE
+            WHEN p_cancellation_reason IS NOT NULL
+            THEN p_cancellation_reason
+            ELSE cancellation_reason
+        END
+    WHERE id = p_order_id
+      AND status = p_from_status
+    RETURNING * INTO v_order;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    RETURN NEXT v_order;
+    RETURN;
+END;
+$$ LANGUAGE plpgsql;
+
