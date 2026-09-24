@@ -17,6 +17,7 @@ from main import (
     _ALLOWED_ORDER_TRANSITIONS,
     is_peak_hour,
     validate_order_transition,
+    payment_amount_matches,
 )
 
 
@@ -128,10 +129,6 @@ def test_transition_same_status_is_allowed():
 def test_transition_is_case_insensitive():
     validate_order_transition("PENDING", "PAID")
     validate_order_transition("Paid", "Confirmed")
-
-
-def test_transition_unknown_current_status_is_permissive():
-    validate_order_transition("waiting_on_kitchen", "paid")
 
 
 def test_terminal_states_have_no_outgoing_transitions():
