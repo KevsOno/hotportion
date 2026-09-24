@@ -1746,64 +1746,6 @@ async def calculate_intelligent_delivery_fee(
         }
     }
 
-# =============================================
-# STOCK MANAGEMENT HELPERS
-# =============================================
-
-async def _decrement_stock_atomic(product_id: int, qty: int) -> bool:
-    try:
-        await execute_db(get_supabase().rpc("decrement_product_stock", {"p_product_id": product_id, "p_qty": qty}))
-        return True
-    except Exception as e:
-        logger.debug(f"Atomic decrement RPC unavailable, will fall back: {e}")
-        return False
-
-async def _increment_stock_atomic(product_id: int, qty: int) -> bool:
-    try:
-        await execute_db(get_supabase().rpc("increment_product_stock", {"p_product_id": product_id, "p_qty": qty}))
-        return True
-    except Exception as e:
-        logger.debug(f"Atomic increment RPC unavailable, will fall back: {e}")
-        return False
-
-async def reduce_order_stock(order: dict):
-    items = order.get("items", [])
-    for item in items:
-        product_id = item.get("product_id")
-        qty = item.get("qty", 0)
-        if not product_id or qty <= 0:
-            continue
-        used_atomic = await _decrement_stock_atomic(product_id, qty)
-        if not used_atomic:
-            prod_result = await execute_db(get_supabase().table("products").select("stock").eq("id", product_id))
-            if prod_result.data:
-                current_stock = prod_result.data[0].get("stock", 0)
-                new_stock = max(0, current_stock - qty)
-                await execute_db(
-                    get_supabase().table("products").update({"stock": new_stock}).eq("id", product_id)
-                )
-                logger.info(f"Stock updated for product {product_id}: {current_stock} → {new_stock}")
-    invalidate_stats_cache()
-
-async def restore_order_stock(order: dict):
-    items = order.get("items", [])
-    for item in items:
-        product_id = item.get("product_id")
-        qty = item.get("qty", 0)
-        if not product_id or qty <= 0:
-            continue
-        used_atomic = await _increment_stock_atomic(product_id, qty)
-        if not used_atomic:
-            prod_result = await execute_db(get_supabase().table("products").select("stock").eq("id", product_id))
-            if prod_result.data:
-                current_stock = prod_result.data[0].get("stock", 0)
-                new_stock = current_stock + qty
-                await execute_db(
-                    get_supabase().table("products").update({"stock": new_stock}).eq("id", product_id)
-                )
-                logger.info(f"Stock restored for product {product_id}: {current_stock} → {new_stock}")
-    invalidate_stats_cache()
-
 # ---------- DATABASE SETUP ----------
 # Migration health is tracked so the schema state is observable via /health.
 # Historically, failures here were swallowed with a warning, meaning the app
@@ -1820,28 +1762,6 @@ async def setup_database():
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS is_main_item BOOLEAN DEFAULT TRUE;",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS weight_kg DECIMAL(4,2) DEFAULT 0.5;",
             "ALTER TABLE products ADD COLUMN IF NOT EXISTS is_bulky BOOLEAN DEFAULT FALSE;",
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee INTEGER DEFAULT 0;",
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;",
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_breakdown JSONB;",
-            # [FEATURE] Payment method — "online" (Monnify) or "offline" (pay at
-            # counter). Default "online" keeps existing rows and any clients
-            # that don't send the field on the historical behavior.
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'online';",
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS idempotency_key TEXT;",
-            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;",
-            """DO $
-                BEGIN
-                    ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;
-                    ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK (
-                        status IN ('pending','awaiting_payment','paid','confirmed','preparing','ready','completed','cancelled')
-                    );
-                EXCEPTION WHEN duplicate_object THEN NULL;
-                END $;""",
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_idempotency_key ON orders (idempotency_key) WHERE idempotency_key IS NOT NULL;",
-            "CREATE INDEX IF NOT EXISTS idx_orders_payment_reference ON orders (payment_reference);",
-            "CREATE INDEX IF NOT EXISTS idx_orders_monnify_transaction_ref ON orders (monnify_transaction_ref);",
-            # Reconciliation loop queries: pending orders by age
-            "CREATE INDEX IF NOT EXISTS idx_orders_status_created_at ON orders (status, created_at);"
         ]
         for q in alter_queries:
             try:
@@ -1904,95 +1824,6 @@ async def setup_database():
             );
             """,
             """
-            CREATE OR REPLACE FUNCTION decrement_product_stock(p_product_id INTEGER, p_qty INTEGER)
-            RETURNS VOID AS $$
-            BEGIN
-                UPDATE products SET stock = GREATEST(0, stock - p_qty) WHERE id = p_product_id;
-            END;
-            $$ LANGUAGE plpgsql;
-            """,
-            """
-            CREATE OR REPLACE FUNCTION increment_product_stock(p_product_id INTEGER, p_qty INTEGER)
-            RETURNS VOID AS $
-            BEGIN
-                UPDATE products SET stock = stock + p_qty WHERE id = p_product_id;
-            END;
-            $ LANGUAGE plpgsql;
-            """,
-            """
-            CREATE OR REPLACE FUNCTION transition_order_and_stock(
-                p_order_id BIGINT,
-                p_from_status TEXT,
-                p_to_status TEXT,
-                p_cancellation_reason TEXT DEFAULT NULL
-            )
-            RETURNS SETOF orders AS $
-            DECLARE
-                v_order orders%ROWTYPE;
-                v_item JSONB;
-                v_product_id INTEGER;
-                v_qty INTEGER;
-            BEGIN
-                SELECT * INTO v_order
-                FROM orders
-                WHERE id = p_order_id
-                  AND status = p_from_status
-                FOR UPDATE;
-
-                IF NOT FOUND THEN
-                    RETURN;
-                END IF;
-
-                IF p_to_status IN ('paid', 'confirmed')
-                   AND p_from_status NOT IN ('paid', 'confirmed') THEN
-                    FOR v_item IN
-                        SELECT value
-                        FROM jsonb_array_elements(COALESCE(v_order.items, '[]'::jsonb))
-                    LOOP
-                        v_product_id := NULLIF(v_item->>'product_id', '')::INTEGER;
-                        v_qty := NULLIF(v_item->>'qty', '')::INTEGER;
-                        IF v_product_id IS NOT NULL AND v_qty IS NOT NULL AND v_qty > 0 THEN
-                            UPDATE products
-                            SET stock = GREATEST(0, stock - v_qty)
-                            WHERE id = v_product_id;
-                        END IF;
-                    END LOOP;
-                ELSIF p_to_status = 'cancelled'
-                      AND p_from_status IN ('paid', 'confirmed') THEN
-                    FOR v_item IN
-                        SELECT value
-                        FROM jsonb_array_elements(COALESCE(v_order.items, '[]'::jsonb))
-                    LOOP
-                        v_product_id := NULLIF(v_item->>'product_id', '')::INTEGER;
-                        v_qty := NULLIF(v_item->>'qty', '')::INTEGER;
-                        IF v_product_id IS NOT NULL AND v_qty IS NOT NULL AND v_qty > 0 THEN
-                            UPDATE products
-                            SET stock = stock + v_qty
-                            WHERE id = v_product_id;
-                        END IF;
-                    END LOOP;
-                END IF;
-
-                UPDATE orders
-                SET status = p_to_status,
-                    cancellation_reason = CASE
-                        WHEN p_cancellation_reason IS NOT NULL
-                        THEN p_cancellation_reason
-                        ELSE cancellation_reason
-                    END
-                WHERE id = p_order_id
-                  AND status = p_from_status
-                RETURNING * INTO v_order;
-
-                IF NOT FOUND THEN
-                    RETURN;
-                END IF;
-
-                RETURN NEXT v_order;
-                RETURN;
-            END;
-            $ LANGUAGE plpgsql;
-            """
         ]
         for sql in create_tables:
             try:
@@ -2015,7 +1846,7 @@ async def setup_database():
                 f"Application may misbehave. /health will report 'degraded'."
             )
         else:
-            logger.info("Database indexes, columns, tables, and RPC functions ensured.")
+            logger.info("Runtime support tables ensured; order/payment schema is managed by versioned migrations.")
 
     except Exception as e:
         _schema_state["ready"] = False
