@@ -80,6 +80,28 @@ class _FakeRpc:
             areas = self.store.get("delivery_areas", [])
             return _FakeResult([dict(areas[0])] if areas else [])
 
+        if name == "transition_order_and_stock":
+            oid = p.get("p_order_id")
+            from_status = p.get("p_from_status")
+            to_status = p.get("p_to_status")
+            order = next((o for o in self.store.get("orders", []) if o.get("id") == oid), None)
+            if not order or order.get("status") != from_status:
+                return _FakeResult([])
+            order["status"] = to_status
+            if p.get("p_cancellation_reason") is not None:
+                order["cancellation_reason"] = p.get("p_cancellation_reason")
+            if from_status in ("pending", "awaiting_payment") and to_status in ("paid", "confirmed"):
+                for item in order.get("items", []):
+                    for prod in self.store.get("products", []):
+                        if prod.get("id") == item.get("product_id"):
+                            prod["stock"] = max(0, int(prod.get("stock") or 0) - int(item.get("qty") or 0))
+            elif to_status == "cancelled" and from_status in ("paid", "confirmed"):
+                for item in order.get("items", []):
+                    for prod in self.store.get("products", []):
+                        if prod.get("id") == item.get("product_id"):
+                            prod["stock"] = int(prod.get("stock") or 0) + int(item.get("qty") or 0)
+            return _FakeResult([dict(order)])
+
         if name == "decrement_product_stock":
             pid = p.get("p_product_id")
             qty = int(p.get("p_qty") or 0)
