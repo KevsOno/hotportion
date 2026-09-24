@@ -200,3 +200,30 @@ def test_ai_guard_output_length_bounds():
     assert svc._guard_output("a") is False
     assert svc._guard_output("x" * 2001) is False
     assert svc._guard_output("Jollof rice is ₦5,500") is True
+
+
+def test_payment_amount_matches_accepts_exact_and_overpayment():
+    assert payment_amount_matches(10000, 10000) is True
+    assert payment_amount_matches(10000, 10500) is True
+
+
+def test_payment_amount_matches_rejects_underpayment_and_invalid_values():
+    assert payment_amount_matches(10000, 9999) is False
+    assert payment_amount_matches(10000, None) is False
+    assert payment_amount_matches("10000", "not-a-number") is False
+
+
+def test_unknown_order_status_fails_closed():
+    with pytest.raises(HTTPException) as exc:
+        validate_order_transition("waiting_on_kitchen", "paid")
+    assert exc.value.status_code == 409
+
+
+def test_terminal_order_statuses_remain_terminal():
+    for current in ("completed", "cancelled"):
+        for target in ("pending", "paid", "confirmed", "cancelled", "completed"):
+            if target == current:
+                validate_order_transition(current, target)
+            else:
+                with pytest.raises(HTTPException):
+                    validate_order_transition(current, target)
