@@ -344,7 +344,7 @@ def test_create_order_idempotency_returns_same_order(client, fake_db):
     payload = {
         "customer_name": "Test Customer", "customer_email": "test@example.com",
         "customer_phone": "08000000000", "delivery_method": "pickup",
-        "payment_method": "online", "items": [{"product_id": 1, "qty": 1}],
+        "payment_method": "online", "items": [{"product_id": 1, "qty": 1, "name": "Burger", "price": 4500}],
         "idempotency_key": "idem-test-1",
     }
     first = client.post("/api/orders", json=payload)
