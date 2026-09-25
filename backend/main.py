@@ -482,6 +482,7 @@ class StaffMember(BaseModel):
 _ALLOWED_ORDER_TRANSITIONS: Dict[str, Set[str]] = {
     "pending":           {"paid", "confirmed", "cancelled"},
     "awaiting_payment":  {"paid", "confirmed", "completed", "cancelled"},
+    "payment_mismatch":  {"paid", "cancelled"}, # <-- Add this line
     "paid":              {"confirmed", "completed", "cancelled"},
     "confirmed":         {"completed", "cancelled"},
     "cancelled":         set(),
@@ -2061,6 +2062,26 @@ async def _reconcile_once() -> None:
         amount_paid = body.get("amountPaid") or body.get("amount") or 0
 
         if payment_status in ("PAID", "OVERPAID"):
+            # --- NEW SECURITY CHECK ---
+            expected_amount = int(order.get("total", 0))
+            if int(amount_paid) < expected_amount:
+                logger.critical(
+                    f"Reconciliation SECURITY ALERT: Underpayment for order {order['id']}. "
+                    f"Expected: ₦{expected_amount}, Paid: ₦{amount_paid}"
+                )
+                await execute_db(
+                    db.table("orders")
+                    .update({
+                        "status": "payment_mismatch",
+                        "cancellation_reason": f"Underpaid (Reconciliation): expected ₦{expected_amount}, paid ₦{amount_paid}"
+                    })
+                    .eq("id", order["id"])
+                    .eq("status", "pending")
+                )
+                resolved_cancelled += 1
+                continue # Skip marking as paid, move to the next order
+            # --- END SECURITY CHECK ---
+
             # Atomic claim: only transition if still pending (matches webhook)
             claim = await execute_db(
                 db.table("orders")
@@ -3163,6 +3184,31 @@ async def monnify_webhook(
     if order.get("status") == "paid":
         logger.info(f"Webhook duplicate for order {order['id']} (already paid) — ignoring")
         return {"status": "already_processed"}
+    
+    # --- NEW SECURITY CHECK ---
+    amount_paid = data.get("amountPaid")
+    if amount_paid is None:
+        logger.error(f"Webhook missing amountPaid for order {order['id']}")
+        return {"status": "error", "detail": "Missing amount in webhook"}
+        
+    expected_amount = int(order.get("total", 0))
+    if int(amount_paid) < expected_amount:
+        logger.critical(
+            f"SECURITY ALERT: Underpayment for order {order['id']}. "
+            f"Expected: ₦{expected_amount}, Paid: ₦{amount_paid}"
+        )
+        # Mark the order as having a payment mismatch so staff can review it.
+        await execute_db(
+            get_supabase().table("orders")
+            .update({
+                "status": "payment_mismatch",
+                "cancellation_reason": f"Underpaid: expected ₦{expected_amount}, paid ₦{amount_paid}"
+            })
+            .eq("id", order["id"])
+        )
+        return {"status": "rejected", "reason": "Amount mismatch"}
+    # --- END SECURITY CHECK ---
+
     claim_result = await execute_db(
         get_supabase().table("orders")
         .update({"status": "paid"}).eq("id", order["id"]).neq("status", "paid")
