@@ -116,11 +116,14 @@ class Settings(BaseSettings):
     AI_PRIMARY: str = "groq"
     AI_FALLBACK: str = "gemini"
     ALLOWED_ORIGINS: List[str] = [
-        "https://hotportion.netlify.app",
-        "https://hotportion.onrender.com",
-        "http://localhost:3000",
-        "http://localhost:8000"
-    ]
+    "https://hotportion.netlify.app",
+    "https://hotportion.onrender.com",
+    "https://localhost",              # Android Capacitor WebView
+    "capacitor://localhost",          # iOS Capacitor WebView (legacy)
+    "http://localhost",
+    "http://localhost:3000",
+    "http://localhost:8000"
+]
     MAX_DB_THREADS: int = 25
     STATS_CACHE_TTL_SECONDS: int = 10
     DEBUG: bool = False
