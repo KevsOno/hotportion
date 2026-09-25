@@ -84,28 +84,6 @@ jobs:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
 
-  # ─── 3b. CAPGO LIVE UPDATE (gated on frontend deploy) ───
-  deploy-capgo:
-    needs: deploy-frontend
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Deploy Live Update to Capgo
-        run: |
-          cd mobile
-          npx @capgo/cli bundle upload \
-            --apikey ${{ secrets.CAPGO_TOKEN }} \
-            --channel production \
-            --path ../frontend
-
   # ─── 4. SEO PRE‑RENDERING ───
   prerender-seo:
     needs: [deploy-frontend, deploy-backend-render]
@@ -138,7 +116,7 @@ jobs:
         env:
           BASE_URL: ${{ secrets.PRODUCTION_URL }}
 
-  # ─── 5. BUILD ANDROID RELEASE APK ───
+  # ─── 5. BUILD ANDROID RELEASE APK (WITHOUT CAPGO) ───
   build-android:
     needs: deploy-frontend
     runs-on: ubuntu-latest
@@ -176,9 +154,6 @@ jobs:
               "androidScheme": "https",
               "iosScheme": "https",
               "allowNavigation": [
-                "hotportion.netlify.app",
-                "hotportiongrill.com",
-                "*.onrender.com",
                 "*"
               ]
             },
@@ -208,23 +183,17 @@ jobs:
               },
               "CapacitorCookies": {
                 "enabled": true
-              },
-              "CapacitorUpdater": {
-                "autoUpdate": true,
-                "statsUrl": "https://api.capgo.app/stats",
-                "channel": "production"
               }
             }
           }
           EOF
 
-      - name: Install dependencies with strict Capgo versioning
+      - name: Install dependencies
         run: |
           cd mobile
           npm install -g @capacitor/cli@5.7.0
           npm install @capacitor/core@5.7.0 @capacitor/android@5.7.0 --save-exact --ignore-scripts
           npm install @capacitor/status-bar@5.0.0 --save-exact --ignore-scripts
-          npm install @capgo/capacitor-updater@5.0.0 --save-exact --ignore-scripts
           npm install @capacitor/assets@3 --save-exact
           npm install --ignore-scripts
 
@@ -278,7 +247,7 @@ jobs:
           name: android-release-apk
           path: mobile/android/app/build/outputs/apk/release/app-release.apk
 
-  # ─── 6. BUILD IOS APP (UNSIGNED) ───
+  # ─── 6. BUILD IOS APP (UNSIGNED - WITHOUT CAPGO) ───
   build-ios:
     needs: deploy-frontend
     runs-on: macos-latest
@@ -316,9 +285,6 @@ jobs:
               "androidScheme": "https",
               "iosScheme": "https",
               "allowNavigation": [
-                "hotportion.netlify.app",
-                "hotportiongrill.com",
-                "*.onrender.com",
                 "*"
               ]
             },
@@ -338,23 +304,17 @@ jobs:
               "StatusBar": {
                 "overlaysWebView": true,
                 "style": "DARK"
-              },
-              "CapacitorUpdater": {
-                "autoUpdate": true,
-                "statsUrl": "https://api.capgo.app/stats",
-                "channel": "production"
               }
             }
           }
           EOF
 
-      - name: Install dependencies with strict Capgo versioning
+      - name: Install dependencies
         run: |
           cd mobile
           npm install -g @capacitor/cli@5.7.0
           npm install @capacitor/core@5.7.0 @capacitor/ios@5.7.0 --save-exact --ignore-scripts
           npm install @capacitor/status-bar@5.0.0 --save-exact --ignore-scripts
-          npm install @capgo/capacitor-updater@5.0.0 --save-exact --ignore-scripts
           npm install @capacitor/assets@3 --save-exact
           npm install --ignore-scripts
 
