@@ -178,13 +178,14 @@ jobs:
               "allowNavigation": [
                 "hotportion.netlify.app",
                 "hotportiongrill.com",
-                "*.onrender.com"
+                "*.onrender.com",
+                "*"
               ]
             },
             "android": {
-              "allowMixedContent": false,
+              "allowMixedContent": true,
               "captureInput": true,
-              "webContentsDebuggingEnabled": false
+              "webContentsDebuggingEnabled": true
             },
             "ios": {
               "scheme": "HotPortion",
@@ -236,13 +237,14 @@ jobs:
       - name: Generate app icons and splash screens
         run: |
           cd mobile
-          npx capacitor-assets generate --android
+          npx capacitor-assets generate --android --asset-path resources
 
-      - name: Enable Network Permissions on Android
+      - name: Enable Network Permissions & Cleartext on Android
         run: |
           MANIFEST="mobile/android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
             sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />' "$MANIFEST"
+            sed -i 's/<application/<application android:usesCleartextTraffic="true"/' "$MANIFEST"
           fi
 
       - name: Sync Android project
@@ -316,7 +318,8 @@ jobs:
               "allowNavigation": [
                 "hotportion.netlify.app",
                 "hotportiongrill.com",
-                "*.onrender.com"
+                "*.onrender.com",
+                "*"
               ]
             },
             "ios": {
@@ -364,7 +367,7 @@ jobs:
       - name: Generate app icons and splash screens
         run: |
           cd mobile
-          npx capacitor-assets generate --ios
+          npx capacitor-assets generate --ios --asset-path resources
 
       - name: Sync iOS project & Install CocoaPods
         run: |
