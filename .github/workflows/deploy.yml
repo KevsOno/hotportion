@@ -8,7 +8,7 @@ on:
 # Prevent two deploys from racing each other on main.
 concurrency:
   group: production-deploy-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
