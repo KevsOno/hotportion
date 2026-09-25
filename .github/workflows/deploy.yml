@@ -237,7 +237,7 @@ jobs:
       - name: Generate app icons and splash screens
         run: |
           cd mobile
-          npx capacitor-assets generate --android --asset-directory resources
+          npx capacitor-assets generate --android
 
       - name: Enable Network Permissions & Cleartext on Android
         run: |
@@ -367,7 +367,7 @@ jobs:
       - name: Generate app icons and splash screens
         run: |
           cd mobile
-          npx capacitor-assets generate --ios --asset-directory resources
+          npx capacitor-assets generate --ios
 
       - name: Sync iOS project & Install CocoaPods
         run: |
