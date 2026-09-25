@@ -5,7 +5,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Prevent two deploys from racing each other on main.
 concurrency:
   group: production-deploy-${{ github.ref }}
   cancel-in-progress: true
@@ -84,7 +83,7 @@ jobs:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
 
-  # ─── 3b. CAPGO LIVE UPDATE (gated on frontend deploy) ───
+  # ─── 3b. CAPGO LIVE UPDATE ───
   deploy-capgo:
     needs: deploy-frontend
     runs-on: ubuntu-latest
@@ -106,7 +105,7 @@ jobs:
             --channel production \
             --path ../frontend
 
-  # ─── 4. SEO PRE‑RENDERING ───
+  # ─── 4. SEO PRE-RENDERING ───
   prerender-seo:
     needs: [deploy-frontend, deploy-backend-render]
     runs-on: ubuntu-latest
@@ -177,9 +176,9 @@ jobs:
               "iosScheme": "https",
               "allowNavigation": [
                 "hotportion.netlify.app",
-                "hotportiongrill.com",
+                "hotportion.onrender.com",
                 "*.onrender.com",
-                "*"
+                "https://localhost"
               ]
             },
             "android": {
@@ -193,7 +192,13 @@ jobs:
               "backgroundColor": "#E53935",
               "allowsLinkPreview": false,
               "preferredContentMode": "mobile",
-              "limitsNavigationsToAppBoundDomains": false
+              "limitsNavigationsToAppBoundDomains": false,
+              "localizedStrings": {
+                "NSLocationWhenInUseUsageDescription": "Hot Portion needs your location to suggest nearby pickup options.",
+                "NSPhotoLibraryUsageDescription": "Hot Portion uses your photo library for profile pictures.",
+                "NSCameraUsageDescription": "Hot Portion uses your camera to take profile photos.",
+                "NSMicrophoneUsageDescription": "Hot Portion uses your microphone for voice search."
+              }
             },
             "plugins": {
               "SplashScreen": {
@@ -317,9 +322,9 @@ jobs:
               "iosScheme": "https",
               "allowNavigation": [
                 "hotportion.netlify.app",
-                "hotportiongrill.com",
+                "hotportion.onrender.com",
                 "*.onrender.com",
-                "*"
+                "https://localhost"
               ]
             },
             "ios": {
@@ -328,7 +333,13 @@ jobs:
               "backgroundColor": "#E53935",
               "allowsLinkPreview": false,
               "preferredContentMode": "mobile",
-              "limitsNavigationsToAppBoundDomains": false
+              "limitsNavigationsToAppBoundDomains": false,
+              "localizedStrings": {
+                "NSLocationWhenInUseUsageDescription": "Hot Portion needs your location to suggest nearby pickup options.",
+                "NSPhotoLibraryUsageDescription": "Hot Portion uses your photo library for profile pictures.",
+                "NSCameraUsageDescription": "Hot Portion uses your camera to take profile photos.",
+                "NSMicrophoneUsageDescription": "Hot Portion uses your microphone for voice search."
+              }
             },
             "plugins": {
               "SplashScreen": {
