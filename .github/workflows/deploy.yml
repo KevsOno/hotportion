@@ -200,6 +200,11 @@ jobs:
                 "backgroundColor": "#E53935",
                 "androidScaleType": "CENTER_CROP"
               },
+              "StatusBar": {
+                "overlaysWebView": true,
+                "style": "DARK",
+                "backgroundColor": "#ffffff"
+              },
               "CapacitorCookies": {
                 "enabled": true
               },
@@ -217,7 +222,9 @@ jobs:
           cd mobile
           npm install -g @capacitor/cli@5.7.0
           npm install @capacitor/core@5.7.0 @capacitor/android@5.7.0 --save-exact --ignore-scripts
+          npm install @capacitor/status-bar@5.0.0 --save-exact --ignore-scripts
           npm install @capgo/capacitor-updater@5.0.0 --save-exact --ignore-scripts
+          npm install @capacitor/assets@3 --save-exact --ignore-scripts
           npm install --ignore-scripts
 
       - name: Add Android platform
@@ -225,6 +232,11 @@ jobs:
           cd mobile
           rm -rf android
           npx cap add android
+
+      - name: Generate app icons and splash screens
+        run: |
+          cd mobile
+          npx capacitor-assets generate --android
 
       - name: Enable Network Permissions on Android
         run: |
@@ -320,6 +332,10 @@ jobs:
                 "launchShowDuration": 1500,
                 "backgroundColor": "#E53935"
               },
+              "StatusBar": {
+                "overlaysWebView": true,
+                "style": "DARK"
+              },
               "CapacitorUpdater": {
                 "autoUpdate": true,
                 "statsUrl": "https://api.capgo.app/stats",
@@ -334,7 +350,9 @@ jobs:
           cd mobile
           npm install -g @capacitor/cli@5.7.0
           npm install @capacitor/core@5.7.0 @capacitor/ios@5.7.0 --save-exact --ignore-scripts
+          npm install @capacitor/status-bar@5.0.0 --save-exact --ignore-scripts
           npm install @capgo/capacitor-updater@5.0.0 --save-exact --ignore-scripts
+          npm install @capacitor/assets@3 --save-exact --ignore-scripts
           npm install --ignore-scripts
 
       - name: Add iOS platform
@@ -342,6 +360,11 @@ jobs:
           cd mobile
           rm -rf ios
           npx cap add ios
+
+      - name: Generate app icons and splash screens
+        run: |
+          cd mobile
+          npx capacitor-assets generate --ios
 
       - name: Sync iOS project & Install CocoaPods
         run: |
