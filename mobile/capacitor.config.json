@@ -14,6 +14,8 @@
     ]
   },
   "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
     "webContentsDebuggingEnabled": true
   },
   "ios": {
@@ -22,10 +24,11 @@
     "backgroundColor": "#E53935",
     "allowsLinkPreview": false,
     "preferredContentMode": "mobile",
-    "limitsNavigationsToAppBoundDomains": true,
+    "limitsNavigationsToAppBoundDomains": false,
     "localizedStrings": {
       "NSLocationWhenInUseUsageDescription": "Hot Portion needs your location to suggest nearby pickup options.",
       "NSPhotoLibraryUsageDescription": "Hot Portion uses your photo library for profile pictures.",
+      "NSCameraUsageDescription": "Hot Portion uses your camera to take profile photos.",
       "NSMicrophoneUsageDescription": "Hot Portion uses your microphone for voice search."
     }
   },
@@ -39,6 +42,11 @@
         "backgroundColor": "#E53935",
         "launchStoryboard": "SplashScreen"
       }
+    },
+    "StatusBar": {
+      "overlaysWebView": true,
+      "style": "DARK",
+      "backgroundColor": "#ffffff"
     },
     "CapacitorCookies": {
       "enabled": true
