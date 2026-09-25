@@ -1,9 +1,21 @@
 // ─── API BASE: Capacitor native vs Web ───
 export function getApiBase() {
-    if (window.Capacitor && window.Capacitor.isNative) {
+    // Capacitor 5+: isNativePlatform() is a method, not a property.
+    // Also detect the WebView origin directly as a fallback, since
+    // window.Capacitor may not be injected before this module runs.
+    const cap = window.Capacitor;
+    const isNative = !!(cap && typeof cap.isNativePlatform === 'function' && cap.isNativePlatform());
+
+    const origin = window.location.origin || '';
+    const isLocalhostOrigin =
+        origin === 'https://localhost' ||
+        origin === 'capacitor://localhost' ||
+        origin === 'http://localhost';
+
+    if (isNative || isLocalhostOrigin) {
         return 'https://hotportion.onrender.com';
     }
-    return '';
+    return ''; // Web (Netlify) — use the proxy redirect
 }
 
 export const API_BASE = getApiBase();
