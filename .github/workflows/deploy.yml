@@ -224,7 +224,7 @@ jobs:
           npm install @capacitor/core@5.7.0 @capacitor/android@5.7.0 --save-exact --ignore-scripts
           npm install @capacitor/status-bar@5.0.0 --save-exact --ignore-scripts
           npm install @capgo/capacitor-updater@5.0.0 --save-exact --ignore-scripts
-          npm install @capacitor/assets@3 --save-exact --ignore-scripts
+          npm install @capacitor/assets@3 --save-exact
           npm install --ignore-scripts
 
       - name: Add Android platform
@@ -352,7 +352,7 @@ jobs:
           npm install @capacitor/core@5.7.0 @capacitor/ios@5.7.0 --save-exact --ignore-scripts
           npm install @capacitor/status-bar@5.0.0 --save-exact --ignore-scripts
           npm install @capgo/capacitor-updater@5.0.0 --save-exact --ignore-scripts
-          npm install @capacitor/assets@3 --save-exact --ignore-scripts
+          npm install @capacitor/assets@3 --save-exact
           npm install --ignore-scripts
 
       - name: Add iOS platform
