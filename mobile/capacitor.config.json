@@ -6,7 +6,12 @@
   "server": {
     "androidScheme": "https",
     "iosScheme": "https",
-    "allowNavigation": ["hotportion.netlify.app"]
+    "allowNavigation": [
+      "hotportion.netlify.app",
+      "hotportion.onrender.com",
+      "*.onrender.com",
+      "https://localhost"
+    ]
   },
   "ios": {
     "scheme": "HotPortion",
