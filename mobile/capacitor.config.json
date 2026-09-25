@@ -13,6 +13,9 @@
       "https://localhost"
     ]
   },
+  "android": {
+    "webContentsDebuggingEnabled": true
+  },
   "ios": {
     "scheme": "HotPortion",
     "contentInset": "automatic",
