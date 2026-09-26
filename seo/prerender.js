@@ -46,6 +46,8 @@ async function prerender() {
     const robots = `
 User-agent: *
 Allow: /
+Disallow: /admin.html
+
 Sitemap: https://hotportiongrill.com/sitemap.xml
     `.trim();
     fs.writeFileSync(path.join(OUTPUT_DIR, 'robots.txt'), robots);
@@ -60,7 +62,6 @@ function generateSitemap() {
     const now = new Date().toISOString().split('T')[0];
     const urls = [
         { loc: '/', priority: '1.0', changefreq: 'daily' },
-        { loc: '/admin.html', priority: '0.5', changefreq: 'monthly' },
         // Dynamic product URLs (if you have individual product pages)
         // { loc: '/product/1', priority: '0.8', changefreq: 'weekly' },
         // { loc: '/product/2', priority: '0.8', changefreq: 'weekly' },
